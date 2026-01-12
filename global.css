@@ -1,0 +1,243 @@
+/** @import must precede all other statements */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /**
+   * Tailwind CSS theme
+   * tailwind.config.ts expects the following color variables to be expressed as HSL values.
+   * A different format will require also updating the theme in tailwind.config.ts.
+  */
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 220 13% 18%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 13% 18%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 13% 18%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 217 91% 60%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 220 13% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    --accent: 217 91% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 90%;
+    --input: 220 13% 98%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 12 50% 10%;
+    --sidebar-foreground: 0 0% 100%;
+    --sidebar-primary: 16 100% 46%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 16 100% 46%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 12 30% 25%;
+    --sidebar-ring: 16 100% 46%;
+
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
+  }
+
+  .dark {
+    --background: 12 50% 8%;
+    --foreground: 0 0% 98%;
+
+    --card: 12 50% 12%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 12 50% 12%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 16 100% 46%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 216 90% 52%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 213 15% 30%;
+    --muted-foreground: 213 10% 65%;
+
+    --accent: 16 100% 46%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 100% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 12 30% 22%;
+    --input: 12 30% 18%;
+    --ring: 16 100% 46%;
+
+    --sidebar-background: 12 50% 10%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 16 100% 46%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 16 100% 46%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 12 30% 20%;
+    --sidebar-ring: 16 100% 46%;
+
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    /* Prevent horizontal scroll on mobile */
+    overflow-x: hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Smooth transitions for all interactive elements */
+  * {
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 200ms;
+  }
+
+  /* Exclude select dropdown from global transform transition to allow animations */
+  /* But allow opacity and transform for dropdown animation */
+  .select-dropdown-content,
+  .select-dropdown-content *,
+  [data-radix-select-content],
+  [data-radix-select-content] * {
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, filter, backdrop-filter, transform !important;
+  }
+
+  /* For select content specifically, allow transform for animation */
+  .select-dropdown-content {
+    transition-property: opacity, transform !important;
+  }
+
+  /* Enhanced card styling */
+  .card-smooth {
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .card-smooth:hover {
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    transform: translateY(-2px);
+  }
+
+  /* Smooth button animations */
+  button {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  button:active {
+    transform: scale(0.98);
+  }
+
+  /* Input focus animations */
+  input:focus, select:focus, textarea:focus {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  :where(p, span, li, h1, h2, h3, h4, h5, h6, a, button, label, td, th) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  /* Mobile-first responsive improvements */
+  @media (max-width: 640px) {
+    /* Ensure touch targets are at least 44px for mobile */
+    button, a, input, select, textarea {
+      min-height: 44px;
+    }
+  }
+
+  pre,
+  code {
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* Smooth dropdown animation - Modern and clean */
+  .select-dropdown-content,
+  [data-radix-select-content] {
+    animation-duration: 200ms;
+    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+    will-change: transform, opacity;
+  }
+
+  /* Enhanced shadow for dropdown depth - modern and subtle */
+  .select-dropdown-content,
+  [data-radix-select-content] {
+    box-shadow: 0 10px 38px -10px rgba(22, 23, 24, 0.35),
+                0 10px 20px -15px rgba(22, 23, 24, 0.2);
+    border: 1px solid hsl(var(--border) / 0.5);
+    backdrop-filter: blur(8px);
+  }
+
+  /* Smooth transitions for select items with hover effect */
+  [data-radix-select-item] {
+    transition: background-color 150ms cubic-bezier(0.4, 0, 0.2, 1),
+                color 150ms cubic-bezier(0.4, 0, 0.2, 1),
+                transform 100ms cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 0.375rem;
+  }
+
+  /* Hover effect for items */
+  [data-radix-select-item]:not([data-disabled]):hover {
+    background-color: hsl(var(--accent) / 0.8);
+    transform: translateX(2px);
+  }
+
+  /* Focus effect for items */
+  [data-radix-select-item]:not([data-disabled]):focus {
+    background-color: hsl(var(--accent));
+    outline: none;
+  }
+
+  /* Ensure proper positioning and smooth animations */
+  [data-radix-select-content] {
+    position: fixed !important;
+    transform-origin: var(--radix-select-content-transform-origin);
+  }
+
+  /* Smooth trigger icon rotation */
+  [data-radix-select-trigger] svg {
+    transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  [data-radix-select-trigger][data-state="open"] svg {
+    transform: rotate(180deg);
+  }
+
+  /* Better focus states with smooth ring */
+  [data-radix-select-trigger]:focus {
+    box-shadow: 0 0 0 2px hsl(var(--ring));
+    transition: box-shadow 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Smooth border transition on hover for trigger */
+  [data-radix-select-trigger]:hover:not([data-disabled]) {
+    border-color: hsl(var(--ring) / 0.5);
+    transition: border-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
