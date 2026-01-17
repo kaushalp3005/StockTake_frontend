@@ -278,7 +278,7 @@ export default function ResultsheetView() {
         sheetData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach((floor) => {
             const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
-            row.push(cellData.quantity > 0 ? cellData.quantity : "-");
+            row.push(cellData.quantity > 0 ? cellData.quantity.toString() : "-");
             row.push(cellData.weight > 0 ? cellData.weight.toFixed(2) : "-");
             itemTotalWeight += cellData.weight || 0;
           });
@@ -320,7 +320,7 @@ export default function ResultsheetView() {
             totalQuantity += cellData.quantity || 0;
             grandTotalWeight += cellData.weight || 0;
           });
-          totalRow.push(totalQuantity > 0 ? totalQuantity : "-");
+          totalRow.push(totalQuantity > 0 ? totalQuantity.toString() : "-");
           totalRow.push(totalWeight > 0 ? totalWeight.toFixed(2) : "-");
         });
       });
@@ -488,10 +488,11 @@ export default function ResultsheetView() {
                           </div>
                         </div>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                         <Button
                           onClick={() => handleViewSheet(entry)}
-                          className="bg-green-600 hover:bg-green-700 text-white"
+                          className="bg-green-600 hover:bg-green-700 text-white w-full sm:w-auto"
+                          size="sm"
                         >
                           <Eye className="w-4 h-4 mr-2" />
                           View Sheet
@@ -500,12 +501,13 @@ export default function ResultsheetView() {
                           onClick={() => handleDeleteEntry(entry)}
                           variant="destructive"
                           disabled={deleting === entry.date}
-                          className="bg-red-600 hover:bg-red-700 text-white"
+                          className="bg-red-600 hover:bg-red-700 text-white w-full sm:w-auto"
+                          size="sm"
                         >
                           {deleting === entry.date ? (
                             <>
                               <Loader className="w-4 h-4 mr-2 animate-spin" />
-                              Deleting...
+                              <span className="sm:inline">Deleting...</span>
                             </>
                           ) : (
                             <>
@@ -527,28 +529,29 @@ export default function ResultsheetView() {
       {/* Sheet Dialog */}
       <Dialog open={isSheetDialogOpen} onOpenChange={setIsSheetDialogOpen}>
         <DialogContent className="max-w-[95vw] h-[90vh] flex flex-col p-0 overflow-hidden">
-          <DialogHeader className="px-6 pt-6 pb-4 flex-shrink-0 border-b">
-            <div className="flex items-center justify-between pr-10">
-              <DialogTitle className="flex items-center gap-2">
-                <Calendar className="w-5 h-5" />
-                Resultsheet - {selectedDate && formatDate(selectedDate)}
+          <DialogHeader className="px-4 sm:px-6 pt-4 sm:pt-6 pb-4 flex-shrink-0 border-b">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4 pr-8 sm:pr-10">
+              <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
+                <Calendar className="w-4 h-4 sm:w-5 sm:h-5" />
+                <span className="break-words">Resultsheet - {selectedDate && formatDate(selectedDate)}</span>
               </DialogTitle>
               {sheetData && sheetData.items.length > 0 && (
                 <Button
                   onClick={handleExportToExcel}
-                  className="bg-green-600 hover:bg-green-700 text-white mr-2"
+                  className="bg-green-600 hover:bg-green-700 text-white w-full sm:w-auto"
                   disabled={exporting}
                   size="sm"
                 >
                   {exporting ? (
                     <>
                       <Loader className="w-4 h-4 mr-2 animate-spin" />
-                      Exporting...
+                      <span className="sm:inline">Exporting...</span>
                     </>
                   ) : (
                     <>
                       <Download className="w-4 h-4 mr-2" />
-                      Download Excel
+                      <span className="hidden sm:inline">Download Excel</span>
+                      <span className="sm:hidden">Export</span>
                     </>
                   )}
                 </Button>
@@ -562,9 +565,10 @@ export default function ResultsheetView() {
                 <Loader className="w-8 h-8 animate-spin text-primary" />
               </div>
             ) : sheetData && sheetData.items.length > 0 ? (
-              <div className="flex-1 overflow-auto px-6 pb-6">
-                <div className="border border-gray-300 inline-block min-w-full" style={{ maxHeight: 'calc(90vh - 200px)' }}>
-                  <Table className="border-collapse w-full">
+              <div className="flex-1 overflow-auto px-4 sm:px-6 pb-4 sm:pb-6">
+                <div className="overflow-x-auto -mx-4 sm:mx-0">
+                  <div className="border border-gray-300 inline-block min-w-full" style={{ maxHeight: 'calc(90vh - 200px)' }}>
+                    <Table className="border-collapse w-full min-w-[800px]">
                   <TableHeader>
                     {/* Row 1: Warehouse Names */}
                     <TableRow className="border-b-2 border-gray-400">
@@ -754,6 +758,7 @@ export default function ResultsheetView() {
                     </TableRow>
                   </TableBody>
                 </Table>
+                  </div>
                 </div>
               </div>
             ) : (

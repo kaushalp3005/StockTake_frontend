@@ -189,6 +189,11 @@ export const exportsAPI = {
 export const categorialInvAPI = {
   getByItemType: (itemType: "pm" | "rm" | "fg") =>
     apiFetch(`/categorial-inv/${itemType}`),
+
+  searchDescriptions: (itemType: "pm" | "rm" | "fg", query: string) => {
+    const params = new URLSearchParams({ query });
+    return apiFetch(`/categorial-inv/${itemType}/search?${params.toString()}`);
+  },
 };
 
 // StockTake Entries API

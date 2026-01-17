@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Trash2, Plus, ArrowLeft, Package, Loader, X, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { Trash2, Plus, ArrowLeft, Package, Loader, X, Check, ChevronDown, ChevronRight, Search } from "lucide-react";
 import { categorialInvAPI } from "@/utils/api";
 import {
   AlertDialog,
@@ -99,6 +99,15 @@ export default function AddItem() {
   // Track expanded categories
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
 
+  // Search functionality
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Array<{group: string; subgroup: string; particulars: string; uom: number | null}>>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+  
+  // Pending search selection (for auto-fill after categorialData loads)
+  const [pendingSelection, setPendingSelection] = useState<{group: string; subgroup: string; particulars: string; uom: number | null} | null>(null);
+
   useEffect(() => {
     // Get floor session from localStorage
     const session = localStorage.getItem("currentFloorSession");
@@ -135,11 +144,28 @@ export default function AddItem() {
       setError("");
       try {
         const data = await categorialInvAPI.getByItemType(itemType as "pm" | "rm" | "fg");
+        const previousCategory = category;
+        const previousSubcategory = subcategory;
+        const previousDescription = description;
+        
         setCategorialData(data.groups || []);
-        // Reset dependent fields
-        setCategory("");
-        setSubcategory("");
-        setDescription("");
+        
+        // Only reset if itemType changed (not just reloading)
+        // If itemType is the same, preserve existing selections if they're valid
+        const newData = data.groups || [];
+        const categoryExists = newData.find((g) => g.name === previousCategory);
+        const subcategoryExists = categoryExists?.subgroups.find((sg) => sg.name === previousSubcategory);
+        const descriptionExists = subcategoryExists?.particulars.find((p) => p.name === previousDescription);
+        
+        if (!categoryExists || !subcategoryExists || !descriptionExists) {
+          // Reset only if values don't exist in new data
+          setCategory("");
+          setSubcategory("");
+          setDescription("");
+          console.log("Reset fields because values not found in new categorialData");
+        } else {
+          console.log("Preserved existing selections:", { previousCategory, previousSubcategory, previousDescription });
+        }
       } catch (err: any) {
         console.error("Failed to fetch categorial data:", err);
         setError(err.message || "Failed to load inventory data");
@@ -151,6 +177,38 @@ export default function AddItem() {
 
     fetchCategorialData();
   }, [itemType]);
+
+  // Apply pending selection when categorialData is ready
+  useEffect(() => {
+    if (pendingSelection && categorialData.length > 0 && !isLoadingData) {
+      console.log("Applying pending selection after categorialData loaded:", pendingSelection);
+      const groupValue = pendingSelection.group.trim().toUpperCase();
+      const subgroupValue = pendingSelection.subgroup.trim().toUpperCase();
+      const particularsValue = pendingSelection.particulars.trim().toUpperCase();
+      
+      const matchedGroup = categorialData.find((g) => g.name === groupValue);
+      const matchedSubgroup = matchedGroup?.subgroups.find((sg) => sg.name === subgroupValue);
+      const matchedParticular = matchedSubgroup?.particulars.find((p) => p.name === particularsValue);
+      
+      if (matchedGroup && matchedSubgroup && matchedParticular) {
+        // Use setTimeout to ensure sequential updates
+        setTimeout(() => {
+          setCategory(groupValue);
+          setTimeout(() => {
+            setSubcategory(subgroupValue);
+            setTimeout(() => {
+              setDescription(particularsValue);
+              if (pendingSelection.uom !== null && pendingSelection.uom !== undefined && !isNaN(pendingSelection.uom)) {
+                setPackageSize(pendingSelection.uom.toFixed(3));
+              }
+              setPendingSelection(null);
+              console.log("Pending selection applied successfully");
+            }, 100);
+          }, 100);
+        }, 100);
+      }
+    }
+  }, [pendingSelection, categorialData, isLoadingData]);
 
   // Reset subcategory and description when category changes
   useEffect(() => {
@@ -168,9 +226,23 @@ export default function AddItem() {
     }
   }, [subcategory]);
 
+  // Debug: Log state changes
+  useEffect(() => {
+    console.log("Category state changed to:", category);
+  }, [category]);
+
+  useEffect(() => {
+    console.log("Subcategory state changed to:", subcategory);
+  }, [subcategory]);
+
+  useEffect(() => {
+    console.log("Description state changed to:", description);
+  }, [description]);
+
   // Auto-fill UOM when description is selected
   useEffect(() => {
     if (description && category && subcategory) {
+      console.log("UOM Auto-fill effect triggered:", { description, category, subcategory });
       const selectedParticular = categorialData
         .find((g) => g.name === category)
         ?.subgroups.find((sg) => sg.name === subcategory)
@@ -179,12 +251,143 @@ export default function AddItem() {
       if (selectedParticular && selectedParticular.uom !== null && selectedParticular.uom !== undefined) {
         // Format UOM with 3 decimal places
         const formattedUom = selectedParticular.uom.toFixed(3);
+        console.log("Auto-filling UOM from categorialData:", formattedUom);
         setPackageSize(formattedUom);
       } else {
-        setPackageSize("");
+        console.log("UOM not found in categorialData, keeping existing value");
+        // Don't clear packageSize if it was set from search results
+        // setPackageSize("");
       }
     }
   }, [description, category, subcategory, categorialData]);
+
+  // Search items when query changes
+  useEffect(() => {
+    const searchItems = async () => {
+      if (!itemType || !searchQuery || searchQuery.length < 2) {
+        setSearchResults([]);
+        setShowSearchResults(false);
+        return;
+      }
+
+      setIsSearching(true);
+      try {
+        console.log("Searching for:", { itemType, searchQuery });
+        const response = await categorialInvAPI.searchDescriptions(
+          itemType as "pm" | "rm" | "fg",
+          searchQuery
+        );
+        console.log("Search response:", response);
+        console.log("Search results count:", response.results?.length || 0);
+        if (response.results && response.results.length > 0) {
+          console.log("First result:", response.results[0]);
+        }
+        setSearchResults(response.results || []);
+        setShowSearchResults(true);
+      } catch (err: any) {
+        console.error("Search error:", err);
+        setSearchResults([]);
+        setShowSearchResults(false);
+      } finally {
+        setIsSearching(false);
+      }
+    };
+
+    const timeoutId = setTimeout(() => {
+      searchItems();
+    }, 300); // Debounce search by 300ms
+
+    return () => clearTimeout(timeoutId);
+  }, [searchQuery, itemType]);
+
+  // Handle item selection from search
+  const handleSearchItemSelect = (result: {group: string; subgroup: string; particulars: string; uom: number | null}) => {
+    console.log("=== ITEM SELECTED FROM SEARCH ===");
+    console.log("handleSearchItemSelect FUNCTION CALLED!");
+    console.log("Raw result:", result);
+    
+    // Validate result
+    if (!result || !result.group || !result.subgroup || !result.particulars) {
+      console.error("Invalid result object:", result);
+      return;
+    }
+    
+    // Normalize values to match Select dropdown values (uppercase)
+    const groupValue = result.group ? result.group.trim().toUpperCase() : "";
+    const subgroupValue = result.subgroup ? result.subgroup.trim().toUpperCase() : "";
+    const particularsValue = result.particulars ? result.particulars.trim().toUpperCase() : "";
+    
+    console.log("Normalized values:", { groupValue, subgroupValue, particularsValue, uom: result.uom });
+    console.log("Current category state:", category);
+    console.log("Current subcategory state:", subcategory);
+    console.log("Current description state:", description);
+    console.log("Categorial data available:", categorialData.length > 0);
+    
+    if (categorialData.length > 0) {
+      const matchedGroup = categorialData.find((g) => g.name === groupValue);
+      console.log("Matched group in categorialData:", matchedGroup ? matchedGroup.name : "NOT FOUND");
+      
+      if (matchedGroup) {
+        const matchedSubgroup = matchedGroup.subgroups.find((sg) => sg.name === subgroupValue);
+        console.log("Matched subgroup in categorialData:", matchedSubgroup ? matchedSubgroup.name : "NOT FOUND");
+        
+        if (matchedSubgroup) {
+          const matchedParticular = matchedSubgroup.particulars.find((p) => p.name === particularsValue);
+          console.log("Matched particular in categorialData:", matchedParticular ? matchedParticular.name : "NOT FOUND");
+        }
+      }
+    }
+    
+    // Check if categorialData is loaded and has the values
+    if (categorialData.length > 0) {
+      const matchedGroup = categorialData.find((g) => g.name === groupValue);
+      const matchedSubgroup = matchedGroup?.subgroups.find((sg) => sg.name === subgroupValue);
+      const matchedParticular = matchedSubgroup?.particulars.find((p) => p.name === particularsValue);
+      
+      if (matchedGroup && matchedSubgroup && matchedParticular) {
+        // Data is ready, set values directly
+        console.log("Setting category to:", groupValue);
+        setCategory(groupValue);
+        
+        // Use setTimeout to ensure sequential updates work properly
+        setTimeout(() => {
+          console.log("Setting subcategory to:", subgroupValue);
+          setSubcategory(subgroupValue);
+          
+          setTimeout(() => {
+            console.log("Setting description to:", particularsValue);
+            setDescription(particularsValue);
+            
+            // Set UOM if available
+            if (result.uom !== null && result.uom !== undefined && !isNaN(result.uom)) {
+              const uomValue = result.uom.toFixed(3);
+              console.log("Setting UOM to:", uomValue);
+              setPackageSize(uomValue);
+            } else {
+              console.log("UOM not available or invalid:", result.uom);
+            }
+          }, 200);
+        }, 200);
+      } else {
+        // Data not ready, store pending selection
+        console.log("CategorialData not ready, storing pending selection");
+        setPendingSelection(result);
+        // Still try to set category
+        setCategory(groupValue);
+      }
+    } else {
+      // No categorialData yet, store pending selection
+      console.log("No categorialData available, storing pending selection");
+      setPendingSelection(result);
+    }
+    
+    // Clear search
+    setSearchQuery("");
+    setSearchResults([]);
+    setShowSearchResults(false);
+    
+    console.log("=== END ITEM SELECTION ===");
+  };
 
   // Auto-calculate total weight
   const calculateTotalWeight = (pkgSize: number, qty: number): number => {
@@ -434,12 +637,92 @@ export default function AddItem() {
                   )}
                 </div>
 
+                {/* Search Bar for Item Descriptions */}
+                {itemType && (
+                  <div className="space-y-2 relative">
+                    <Label htmlFor="searchItem" className="text-foreground font-semibold">
+                      Search Item Description (Quick Search)
+                    </Label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        id="searchItem"
+                        type="text"
+                        placeholder="Type to search item descriptions..."
+                        value={searchQuery}
+                        onChange={(e) => {
+                          setSearchQuery(e.target.value);
+                          setShowSearchResults(e.target.value.length >= 2);
+                        }}
+                        onFocus={() => {
+                          if (searchResults.length > 0) {
+                            setShowSearchResults(true);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          // Don't hide if clicking on search results
+                          const relatedTarget = e.relatedTarget as HTMLElement;
+                          if (!relatedTarget || !relatedTarget.closest('.search-results-container')) {
+                            // Delay hiding to allow click on results
+                            setTimeout(() => setShowSearchResults(false), 200);
+                          }
+                        }}
+                        className="bg-input border-input pl-10"
+                        disabled={!itemType || isLoadingData}
+                      />
+                      {isSearching && (
+                        <Loader className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 animate-spin text-muted-foreground" />
+                      )}
+                      
+                      {/* Search Results Dropdown */}
+                      {showSearchResults && searchResults.length > 0 && (
+                        <div className="search-results-container absolute z-50 w-full mt-1 bg-popover border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                          {searchResults.map((result, index) => (
+                            <button
+                              key={index}
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault(); // Prevent onBlur from firing first
+                                e.stopPropagation();
+                              }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                console.log("Search result clicked:", result);
+                                handleSearchItemSelect(result);
+                              }}
+                              className="w-full text-left px-4 py-3 hover:bg-accent hover:text-accent-foreground border-b border-border last:border-b-0 transition-colors cursor-pointer"
+                            >
+                              <div className="font-semibold text-foreground">{result.particulars}</div>
+                              <div className="text-xs text-muted-foreground mt-1">
+                                {result.group} • {result.subgroup}
+                                {result.uom !== null && result.uom !== undefined && (
+                                  <span className="ml-2">• UOM: {formatUOM(result.uom)}</span>
+                                )}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {showSearchResults && searchQuery.length >= 2 && !isSearching && searchResults.length === 0 && (
+                        <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-lg shadow-lg p-4 text-center text-sm text-muted-foreground">
+                          No items found
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Search for item descriptions to auto-fill category, subcategory, and UOM
+                    </p>
+                  </div>
+                )}
+
                 {/* Category (Group) */}
                 <div className="space-y-2">
                   <Label htmlFor="category" className="text-foreground font-semibold">
                     Item Category (Group)
                   </Label>
-                  <Select value={category} onValueChange={setCategory} disabled={!itemType || isLoadingData}>
+                  <Select value={category || undefined} onValueChange={setCategory} disabled={!itemType || isLoadingData}>
                     <SelectTrigger id="category" className="bg-input border-input">
                       <SelectValue placeholder="Select category..." />
                     </SelectTrigger>
@@ -475,7 +758,7 @@ export default function AddItem() {
                   >
                     Sub-Category (Subgroup)
                   </Label>
-                  <Select value={subcategory} onValueChange={setSubcategory} disabled={!category || isLoadingData}>
+                  <Select value={subcategory || undefined} onValueChange={setSubcategory} disabled={!category || isLoadingData}>
                     <SelectTrigger
                       id="subcategory"
                       className="bg-input border-input"
@@ -518,7 +801,7 @@ export default function AddItem() {
                   <Label htmlFor="description" className="text-foreground font-semibold">
                     Item Description (Particulars)
                   </Label>
-                  <Select value={description} onValueChange={setDescription} disabled={!subcategory || isLoadingData}>
+                  <Select value={description || undefined} onValueChange={setDescription} disabled={!subcategory || isLoadingData}>
                     <SelectTrigger
                       id="description"
                       className="bg-input border-input"

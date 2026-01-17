@@ -164,6 +164,29 @@
   }
 
   /* Mobile-first responsive improvements */
+  /* Better table responsiveness */
+  .table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .table-responsive table {
+    min-width: 100%;
+  }
+
+  /* Better button stacking on mobile */
+  @media (max-width: 640px) {
+    .btn-group {
+      flex-direction: column;
+      width: 100%;
+    }
+
+    .btn-group button {
+      width: 100%;
+    }
+  }
+
   @media (max-width: 640px) {
     /* Ensure touch targets are at least 44px for mobile */
     button, a, input, select, textarea {
