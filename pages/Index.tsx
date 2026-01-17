@@ -4,12 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   Package,
-  BarChart3,
-  CheckCircle,
-  Users,
   ArrowRight,
-  Zap,
-  Shield,
 } from "lucide-react";
 
 export default function Index() {
@@ -22,59 +17,6 @@ export default function Index() {
     setIsLoggedIn(!!token);
   }, []);
 
-  const features = [
-    {
-      icon: Package,
-      title: "Pallet-Based Stock Entry",
-      description:
-        "Organize stock by logical pallet groupings. Simple, efficient, and non-intrusive tracking.",
-    },
-    {
-      icon: BarChart3,
-      title: "Unified Reporting",
-      description:
-        "Generate consolidated Excel reports across all floors. One unified view of your entire inventory.",
-    },
-    {
-      icon: CheckCircle,
-      title: "Multi-Level Approval",
-      description:
-        "Floor managers submit, inventory managers review and approve. Ensures accuracy at every step.",
-    },
-    {
-      icon: Users,
-      title: "Role-Based Access",
-      description:
-        "Floor Managers, Inventory Managers, and Admins—each with specific permissions and workflows.",
-    },
-    {
-      icon: Zap,
-      title: "Real-Time Edits",
-      description:
-        "Edit items and measurements before approval. Lock everything once approved for data integrity.",
-    },
-    {
-      icon: Shield,
-      title: "Audit Trail",
-      description:
-        "Complete logs of all changes, approvals, and exports. Full transparency and accountability.",
-    },
-  ];
-
-  const stats = [
-    {
-      number: "7",
-      label: "Floors Supported",
-    },
-    {
-      number: "100%",
-      label: "Audit Coverage",
-    },
-    {
-      number: "Real-Time",
-      label: "Synchronization",
-    },
-  ];
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
@@ -158,58 +100,6 @@ export default function Index() {
               </Link>
             )}
           </div>
-        </div>
-      </section>
-
-      {/* Stats Section */}
-      <section className="container py-12 sm:py-16 px-4 sm:px-6">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-8">
-          {stats.map((stat, idx) => (
-            <div key={idx} className="text-center">
-              <div className="text-3xl sm:text-4xl md:text-5xl font-bold text-primary mb-2">
-                {stat.number}
-              </div>
-              <p className="text-sm sm:text-base text-muted-foreground">{stat.label}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Features Section */}
-      <section className="container py-12 sm:py-20 px-4 sm:px-6">
-        <div className="text-center mb-10 sm:mb-16">
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mb-4">
-            Powerful Features
-          </h2>
-          <p className="text-base sm:text-lg text-muted-foreground">
-            Everything you need for efficient inventory management
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8">
-          {features.map((feature, idx) => {
-            const Icon = feature.icon;
-            return (
-              <Card
-                key={idx}
-                className="p-6 hover:shadow-lg transition-shadow border-border"
-              >
-                <div className="flex items-start gap-4">
-                  <div className="p-2 bg-primary/10 rounded-lg">
-                    <Icon className="w-6 h-6 text-primary" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-foreground mb-2">
-                      {feature.title}
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                      {feature.description}
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
         </div>
       </section>
 
@@ -363,7 +253,7 @@ export default function Index() {
           </div>
           <div className="border-t border-border pt-8">
             <p className="text-center text-sm text-muted-foreground">
-              © 2024 StockTake. All rights reserved. Built for Candor Foods.
+              © 2024 StockTake. All rights reserved. Built for Candor Foods Pvt. Ltd.
             </p>
           </div>
         </div>

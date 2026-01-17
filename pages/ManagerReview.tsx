@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X } from "lucide-react";
+import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Trash2 } from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -81,6 +81,7 @@ export default function ManagerReview() {
   const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingData, setSavingData] = useState(false);
+  const [clearingEntries, setClearingEntries] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [itemsDrawerOpen, setItemsDrawerOpen] = useState(false);
   const [selectedItemName, setSelectedItemName] = useState<string | null>(null);
@@ -249,13 +250,16 @@ export default function ManagerReview() {
   };
 
   const handleSaveData = async () => {
+    console.log("=== SAVE BUTTON CLICKED ===");
+    console.log("Timestamp:", new Date().toISOString());
     setSavingData(true);
     try {
-      // Collect all checked entries from localStorage
-      // Keys are in format: checkedEntries_${warehouse}_${floor}_${itemName}
-      const allCheckedEntries: Array<{ entryId: string; warehouse: string; floorName: string }> = [];
+      // Collect all checked entries from ALL warehouses/floors
+      // Structure: Map of warehouse_floor -> Set of checked entry IDs
+      const checkedEntriesByLocation = new Map<string, Set<string>>();
+      const warehouseFloorSet = new Set<string>();
       
-      // Iterate through all localStorage keys
+      // Iterate through ALL localStorage keys to collect checked entries
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (key && key.startsWith("checkedEntries_")) {
@@ -269,15 +273,19 @@ export default function ManagerReview() {
               const itemName = parts.slice(2).join("_"); // Item name might contain underscores
               const floorName = parts[1];
               const warehouse = parts[0];
+              const locationKey = `${warehouse}_${floorName}`;
               
-              // Add all checked entry IDs
+              warehouseFloorSet.add(locationKey);
+              
+              // Initialize Set for this location if not exists
+              if (!checkedEntriesByLocation.has(locationKey)) {
+                checkedEntriesByLocation.set(locationKey, new Set<string>());
+              }
+              
+              // Add checked entry IDs for this location
               Object.keys(checkedEntriesData).forEach((entryId) => {
                 if (checkedEntriesData[entryId] === true) {
-                  allCheckedEntries.push({
-                    entryId,
-                    warehouse,
-                    floorName,
-                  });
+                  checkedEntriesByLocation.get(locationKey)!.add(entryId);
                 }
               });
             }
@@ -287,18 +295,175 @@ export default function ManagerReview() {
         }
       }
       
-      if (allCheckedEntries.length === 0) {
+      // If no entries are checked, show error
+      let totalCheckedCount = 0;
+      checkedEntriesByLocation.forEach((ids, location) => {
+        totalCheckedCount += ids.size;
+        console.log(`Location ${location}: ${ids.size} checked entries`, Array.from(ids));
+      });
+      
+      if (totalCheckedCount === 0) {
+        console.warn("No checked entries found in localStorage. Available keys:", 
+          Array.from({length: localStorage.length}, (_, i) => localStorage.key(i)).filter(k => k?.startsWith("checkedEntries_"))
+        );
         toast({
           title: "No entries selected",
-          description: "Please check at least one entry before saving.",
+          description: "Please check at least one entry before saving. Make sure you have selected entries by clicking on the quantity boxes.",
           variant: "destructive",
         });
         setSavingData(false);
         return;
       }
       
-      // Call API to save to stocktake_resultsheet
+      console.log(`Found ${totalCheckedCount} checked entries across ${warehouseFloorSet.size} locations`);
+      
+      // First, add entries from current groupedItemsData if available (for current warehouse/floor)
+      const allEntriesMap = new Map<string, ItemEntry>(); // entryId -> entry
+      
+      if (selectedWarehouse && selectedFloor && groupedItemsData.length > 0) {
+        groupedItemsData.forEach((group) => {
+          group.entries.forEach((entry) => {
+            allEntriesMap.set(entry.id, entry);
+          });
+        });
+        console.log(`Added ${allEntriesMap.size} entries from current groupedItemsData`);
+      }
+      
+      // Fetch grouped entries for all warehouse/floor combinations (if not already loaded)
+      const fetchPromises = Array.from(warehouseFloorSet).map(async (locationKey) => {
+        const [warehouse, floorName] = locationKey.split('_');
+        
+        // Skip if this is the current warehouse/floor and we already have data
+        if (selectedWarehouse && selectedFloor &&
+            warehouse.toUpperCase() === selectedWarehouse.toUpperCase() &&
+            floorName.toUpperCase() === selectedFloor.toUpperCase() &&
+            allEntriesMap.size > 0) {
+          console.log(`Skipping fetch for ${warehouse}/${floorName} - already have data from groupedItemsData`);
+          return;
+        }
+        
+        try {
+          console.log(`Fetching entries for ${warehouse}/${floorName}...`);
+          const data = await stocktakeEntriesAPI.getGroupedEntries(warehouse, floorName);
+          let entryCount = 0;
+          if (data.groups) {
+            data.groups.forEach((group: any) => {
+              group.entries.forEach((entry: any) => {
+                // Store entry with its ID as key (overwrite if exists)
+                allEntriesMap.set(entry.id, entry);
+                entryCount++;
+              });
+            });
+          }
+          console.log(`Fetched ${entryCount} entries for ${warehouse}/${floorName}`);
+        } catch (err) {
+          console.error(`Error fetching entries for ${warehouse}/${floorName}:`, err);
+        }
+      });
+      
+      await Promise.all(fetchPromises);
+      
+      console.log(`Total entries available: ${allEntriesMap.size} (from UI state and database)`);
+      
+      // Now collect full entry data for all checked entries
+      const allCheckedEntries: Array<{
+        entryId?: string;
+        warehouse: string;
+        floorName: string;
+        itemName?: string;
+        itemType?: string;
+        category?: string;
+        subcategory?: string;
+        quantity?: number;
+        weight?: number;
+        uom?: number;
+      }> = [];
+      
+      const notFoundIds: string[] = [];
+      
+      checkedEntriesByLocation.forEach((checkedIds, locationKey) => {
+        const [warehouse, floorName] = locationKey.split('_');
+        
+        checkedIds.forEach((entryId) => {
+          const entry = allEntriesMap.get(entryId);
+          if (entry) {
+            // Entry exists in database, use its data
+            allCheckedEntries.push({
+              entryId: entry.id, // Include DB ID for reference
+              warehouse,
+              floorName,
+              itemName: entry.description,
+              category: entry.category,
+              subcategory: entry.subcategory,
+              quantity: entry.units,
+              weight: entry.totalWeight,
+              uom: entry.packageSize,
+            });
+          } else {
+            const notFoundKey = `${entryId}@${warehouse}/${floorName}`;
+            notFoundIds.push(notFoundKey);
+            console.warn(`Entry ${entryId} not found in database for ${warehouse}/${floorName}. Available entry IDs for this location:`, 
+              Array.from(allEntriesMap.keys()).filter(id => allEntriesMap.get(id)?.userName)
+            );
+          }
+        });
+      });
+      
+      if (notFoundIds.length > 0) {
+        console.warn(`${notFoundIds.length} checked entries were not found in database:`, notFoundIds);
+        console.warn(`Total entries in database: ${allEntriesMap.size}`);
+        console.warn(`Checked entry IDs that were not found:`, 
+          Array.from(checkedEntriesByLocation.values()).flatMap(ids => Array.from(ids))
+        );
+      }
+      
+      if (allCheckedEntries.length === 0) {
+        const message = notFoundIds.length > 0
+          ? `None of the ${totalCheckedCount} checked entries were found in the database. The entry IDs in localStorage may be outdated. Please refresh the page (F5) and re-select the entries you want to save.`
+          : "No valid entries to save. Please check entries before saving.";
+        
+        toast({
+          title: "No valid entries found",
+          description: message,
+          variant: "destructive",
+        });
+        setSavingData(false);
+        return;
+      }
+      
+      // If some entries were not found, show warning but continue with valid ones
+      if (notFoundIds.length > 0 && allCheckedEntries.length > 0) {
+        toast({
+          title: "Some entries skipped",
+          description: `${notFoundIds.length} checked entries were not found and will be skipped. Saving ${allCheckedEntries.length} valid entries.`,
+          variant: "default",
+        });
+      }
+      
+      console.log(`=== PREPARING TO SAVE ===`);
+      console.log(`Saving ${allCheckedEntries.length} entries with full entry data`);
+      console.log("Entries to save:", allCheckedEntries.map(e => ({
+        itemName: e.itemName,
+        warehouse: e.warehouse,
+        floorName: e.floorName,
+        quantity: e.quantity,
+        weight: e.weight
+      })));
+      
+      // Call API to save - backend will insert new entries
+      console.log("Calling API: stocktakeEntriesAPI.saveResultsheet()...");
       const response = await stocktakeEntriesAPI.saveResultsheet(allCheckedEntries);
+      console.log("API Response received:", response);
+      
+      // After saving, refresh the grouped entries for current warehouse/floor
+      if (selectedWarehouse && selectedFloor) {
+        try {
+          const refreshedData = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor);
+          setGroupedItemsData(refreshedData.groups || []);
+        } catch (refreshError) {
+          console.error("Error refreshing entries after save:", refreshError);
+        }
+      }
       
       toast({
         title: "Success",
@@ -307,13 +472,64 @@ export default function ManagerReview() {
       
       setSavingData(false);
     } catch (err: any) {
+      console.error("=== SAVE ERROR ===");
       console.error("Error saving data:", err);
+      console.error("Error status:", err.status);
+      console.error("Error message:", err.message);
+      console.error("Error data:", err.data);
+      
+      // Check if it's a 404 error with ID mismatch
+      if (err.status === 404 && err.data?.existingIds) {
+        const message = err.data.existingIds.length > 0
+          ? `The selected entries no longer exist in the database. Please refresh the page and re-select the entries you want to save. (Found ${err.data.totalEntriesInTable} entries with different IDs)`
+          : `No entries found in the database. Please refresh the page and try again.`;
+        
+        toast({
+          title: "Entries Not Found",
+          description: message,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: err.message || "Failed to save stock take data",
+          variant: "destructive",
+        });
+      }
+      setSavingData(false);
+    }
+  };
+
+  const handleClearEntries = async () => {
+    // Confirm before clearing
+    const confirmed = window.confirm(
+      "Are you sure you want to delete ALL entries from the stocktake_entries table? This action cannot be undone."
+    );
+    
+    if (!confirmed) {
+      return;
+    }
+
+    setClearingEntries(true);
+    try {
+      const response = await stocktakeEntriesAPI.clearAllEntries();
+      
+      toast({
+        title: "Success",
+        description: `All entries cleared successfully! ${response.deletedCount || 0} entries deleted.`,
+      });
+      
+      // Optionally refresh the page or clear local storage
+      // You might want to reload warehouse floors or reset state here
+      setClearingEntries(false);
+    } catch (err: any) {
+      console.error("Error clearing entries:", err);
       toast({
         title: "Error",
-        description: err.message || "Failed to save stock take data",
+        description: err.message || "Failed to clear entries",
         variant: "destructive",
       });
-      setSavingData(false);
+      setClearingEntries(false);
     }
   };
 
@@ -702,6 +918,45 @@ export default function ManagerReview() {
                     <>
                       <Save className="w-4 h-4 mr-2" />
                       Save Data
+                    </>
+                  )}
+                </Button>
+              </div>
+            </Card>
+          </motion.div>
+
+          {/* Clear Entries Section */}
+          <motion.div
+            className="mt-6 sm:mt-8"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, delay: 0.4 }}
+          >
+            <Card className="p-4 sm:p-6 border-border bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex-1">
+                  <p className="text-sm sm:text-base font-medium text-foreground mb-1">
+                    Clear All Entries
+                  </p>
+                  <p className="text-xs sm:text-sm text-muted-foreground">
+                    Delete all entries from the stocktake_entries database table. This action cannot be undone.
+                  </p>
+                </div>
+                <Button
+                  onClick={handleClearEntries}
+                  disabled={clearingEntries}
+                  variant="destructive"
+                  className="bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {clearingEntries ? (
+                    <>
+                      <Loader className="w-4 h-4 mr-2 animate-spin" />
+                      Clearing...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Clear Entries
                     </>
                   )}
                 </Button>

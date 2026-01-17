@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ArrowLeft, Package, Loader, Eye, Calendar, Clock, X, Download } from "lucide-react";
+import { ArrowLeft, Package, Loader, Eye, Calendar, Clock, X, Download, Trash2 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -44,7 +44,7 @@ interface ResultsheetData {
   date: string;
   items: ResultsheetDataItem[];
   warehouses: Warehouse[];
-  data: Record<string, Record<string, Record<string, { weight: number; quantity: number }>>>;
+  data: Record<string, Record<string, Record<string, { weight: number; quantity: number; uom: number }>>>;
 }
 
 export default function ResultsheetView() {
@@ -58,6 +58,7 @@ export default function ResultsheetView() {
   const [isSheetDialogOpen, setIsSheetDialogOpen] = useState(false);
   const [isLoadingSheet, setIsLoadingSheet] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     fetchEntries();
@@ -133,6 +134,44 @@ export default function ResultsheetView() {
     });
   };
 
+  const handleDeleteEntry = async (entry: ResultsheetEntry) => {
+    if (!entry.date) return;
+
+    // Confirm deletion
+    const confirmed = window.confirm(
+      `Are you sure you want to delete the resultsheet for ${formatDate(entry.date)}? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setDeleting(entry.date);
+    try {
+      // Format date for API call
+      const dateStr = entry.createdAt 
+        ? new Date(entry.createdAt).toISOString().split('T')[0]
+        : entry.date;
+
+      await resultsheetAPI.delete(dateStr);
+      
+      toast({
+        title: "Success",
+        description: "Resultsheet entry deleted successfully",
+      });
+
+      // Refresh the entries list
+      await fetchEntries();
+    } catch (error: any) {
+      console.error("Error deleting resultsheet entry:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to delete resultsheet entry",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleting(null);
+    }
+  };
+
   const handleExportToExcel = async () => {
     if (!sheetData) return;
     
@@ -144,8 +183,8 @@ export default function ResultsheetView() {
       const worksheet = workbook.addWorksheet("Resultsheet");
 
       // Build header rows
-      // Row 1: Group | Subgroup | Item Name | Warehouse1 (colspan) | Warehouse2 (colspan) | ... | Total Weight
-      const headerRow1 = ["Group", "Subgroup", "Item Name"];
+      // Row 1: Group | Subgroup | Item Name | UOM | Warehouse1 (colspan) | Warehouse2 (colspan) | ... | Total Weight
+      const headerRow1 = ["Group", "Subgroup", "Item Name", "UOM (kg)"];
       sheetData.warehouses.forEach((warehouse) => {
         // Add warehouse name spanning all its floors (2 cols per floor: weight + qty)
         for (let i = 0; i < warehouse.floors.length * 2; i++) {
@@ -163,7 +202,7 @@ export default function ResultsheetView() {
       row1.alignment = { horizontal: "center", vertical: "middle" };
 
       // Row 2: Floor names (each spanning 2 columns)
-      const headerRow2 = ["", "", ""]; // Empty for Group, Subgroup, Item Name
+      const headerRow2 = ["", "", "", ""]; // Empty for Group, Subgroup, Item Name, UOM
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach((floor) => {
           headerRow2.push(floor);
@@ -177,7 +216,7 @@ export default function ResultsheetView() {
       row2.alignment = { horizontal: "center", vertical: "middle" };
 
       // Row 3: Qty | Weight labels
-      const headerRow3 = ["", "", ""]; // Empty for Group, Subgroup, Item Name
+      const headerRow3 = ["", "", "", ""]; // Empty for Group, Subgroup, Item Name, UOM
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach(() => {
           headerRow3.push("Qty");
@@ -190,8 +229,11 @@ export default function ResultsheetView() {
       row3.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7E6E6" } };
       row3.alignment = { horizontal: "center", vertical: "middle" };
 
+      // Merge cells for UOM column (spans 3 rows)
+      worksheet.mergeCells(1, 4, 3, 4);
+      
       // Merge cells for warehouse headers
-      let colIndex = 2; // Start after "Item Name"
+      let colIndex = 5; // Start after Group, Subgroup, Item Name, UOM
       sheetData.warehouses.forEach((warehouse) => {
         const colspan = warehouse.floors.length * 2;
         worksheet.mergeCells(1, colIndex, 1, colIndex + colspan - 1);
@@ -199,7 +241,7 @@ export default function ResultsheetView() {
       });
 
       // Merge cells for floor headers
-      colIndex = 4; // Start after Group, Subgroup, Item Name
+      colIndex = 5; // Start after Group, Subgroup, Item Name, UOM
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach(() => {
           worksheet.mergeCells(2, colIndex, 2, colIndex + 1);
@@ -216,13 +258,26 @@ export default function ResultsheetView() {
       // Add data rows
       sheetData.items.forEach((item) => {
         const itemKey = item.item_name.toUpperCase();
-        const row = [item.group, item.subgroup, item.item_name];
+        // Get UOM from first available data entry for this item
+        let uom = 0;
+        for (const warehouse of sheetData.warehouses) {
+          for (const floor of warehouse.floors) {
+            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor];
+            if (cellData && cellData.uom) {
+              uom = cellData.uom;
+              break;
+            }
+          }
+          if (uom > 0) break;
+        }
+        
+        const row = [item.group, item.subgroup, item.item_name, uom > 0 ? uom.toFixed(3) : "-"];
         
         // Calculate total weight for this item
         let itemTotalWeight = 0;
         sheetData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach((floor) => {
-            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0 };
+            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
             row.push(cellData.quantity > 0 ? cellData.quantity : "-");
             row.push(cellData.weight > 0 ? cellData.weight.toFixed(2) : "-");
             itemTotalWeight += cellData.weight || 0;
@@ -234,8 +289,10 @@ export default function ResultsheetView() {
         
         const dataRow = worksheet.addRow(row);
         dataRow.alignment = { horizontal: "left", vertical: "middle" };
+        // Center align UOM column
+        dataRow.getCell(4).alignment = { horizontal: "center" };
         // Center align qty and weight columns
-        let dataCol = 4; // Start after Group, Subgroup, Item Name
+        let dataCol = 5; // Start after Group, Subgroup, Item Name, UOM
         sheetData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach(() => {
             dataRow.getCell(dataCol).alignment = { horizontal: "center" }; // Qty
@@ -250,7 +307,7 @@ export default function ResultsheetView() {
       });
 
       // Add total row
-      const totalRow = ["TOTAL", "", ""]; // Group, Subgroup, Item Name
+      const totalRow = ["TOTAL", "", "", ""]; // Group, Subgroup, Item Name, UOM
       let grandTotalWeight = 0;
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach((floor) => {
@@ -258,7 +315,7 @@ export default function ResultsheetView() {
           let totalQuantity = 0;
           sheetData.items.forEach((item) => {
             const itemKey = item.item_name.toUpperCase();
-            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0 };
+            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
             totalWeight += cellData.weight || 0;
             totalQuantity += cellData.quantity || 0;
             grandTotalWeight += cellData.weight || 0;
@@ -273,8 +330,10 @@ export default function ResultsheetView() {
       totalRowObj.font = { bold: true };
       totalRowObj.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
       totalRowObj.alignment = { horizontal: "left", vertical: "middle" };
+      // Center align UOM column (empty in total row)
+      totalRowObj.getCell(4).alignment = { horizontal: "center" };
       // Center align total columns
-      let totalCol = 4; // Start after Group, Subgroup, Item Name
+      let totalCol = 5; // Start after Group, Subgroup, Item Name, UOM
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach(() => {
           totalRowObj.getCell(totalCol).alignment = { horizontal: "center" };
@@ -302,7 +361,8 @@ export default function ResultsheetView() {
       worksheet.getColumn(1).width = 15; // Group
       worksheet.getColumn(2).width = 15; // Subgroup
       worksheet.getColumn(3).width = 30; // Item Name
-      let widthCol = 4; // Start after Group, Subgroup, Item Name
+      worksheet.getColumn(4).width = 12; // UOM
+      let widthCol = 5; // Start after Group, Subgroup, Item Name, UOM
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach(() => {
           worksheet.getColumn(widthCol).width = 10; // Qty
@@ -312,8 +372,8 @@ export default function ResultsheetView() {
       });
       worksheet.getColumn(widthCol).width = 15; // Total Weight column
 
-      // Freeze first column
-      worksheet.views = [{ state: "frozen", xSplit: 1, ySplit: 3 }];
+      // Freeze first 4 columns (Group, Subgroup, Item Name, UOM)
+      worksheet.views = [{ state: "frozen", xSplit: 4, ySplit: 3 }];
 
       // Save file
       const buffer = await workbook.xlsx.writeBuffer();
@@ -428,13 +488,33 @@ export default function ResultsheetView() {
                           </div>
                         </div>
                       </div>
-                      <Button
-                        onClick={() => handleViewSheet(entry)}
-                        className="bg-green-600 hover:bg-green-700 text-white"
-                      >
-                        <Eye className="w-4 h-4 mr-2" />
-                        View Sheet
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={() => handleViewSheet(entry)}
+                          className="bg-green-600 hover:bg-green-700 text-white"
+                        >
+                          <Eye className="w-4 h-4 mr-2" />
+                          View Sheet
+                        </Button>
+                        <Button
+                          onClick={() => handleDeleteEntry(entry)}
+                          variant="destructive"
+                          disabled={deleting === entry.date}
+                          className="bg-red-600 hover:bg-red-700 text-white"
+                        >
+                          {deleting === entry.date ? (
+                            <>
+                              <Loader className="w-4 h-4 mr-2 animate-spin" />
+                              Deleting...
+                            </>
+                          ) : (
+                            <>
+                              <Trash2 className="w-4 h-4 mr-2" />
+                              Delete
+                            </>
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </Card>
@@ -476,15 +556,15 @@ export default function ResultsheetView() {
             </div>
           </DialogHeader>
           
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <ScrollArea className="h-full px-6 pb-6">
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
             {isLoadingSheet ? (
               <div className="flex items-center justify-center py-12">
                 <Loader className="w-8 h-8 animate-spin text-primary" />
               </div>
             ) : sheetData && sheetData.items.length > 0 ? (
-              <div className="overflow-x-auto border border-gray-300 w-full" style={{ maxHeight: 'calc(90vh - 200px)' }}>
-                <Table className="border-collapse">
+              <div className="flex-1 overflow-auto px-6 pb-6">
+                <div className="border border-gray-300 inline-block min-w-full" style={{ maxHeight: 'calc(90vh - 200px)' }}>
+                  <Table className="border-collapse w-full">
                   <TableHeader>
                     {/* Row 1: Warehouse Names */}
                     <TableRow className="border-b-2 border-gray-400">
@@ -505,6 +585,12 @@ export default function ResultsheetView() {
                         className="sticky left-[240px] z-10 bg-gray-100 border border-gray-400 min-w-[200px] align-middle font-bold text-center text-xs py-2"
                       >
                         Item Name
+                      </TableHead>
+                      <TableHead 
+                        rowSpan={3}
+                        className="sticky left-[440px] z-10 bg-gray-100 border border-gray-400 min-w-[100px] align-middle font-bold text-center text-xs py-2"
+                      >
+                        UOM (kg)
                       </TableHead>
                       {sheetData.warehouses.map((warehouse) => (
                         <TableHead
@@ -574,9 +660,26 @@ export default function ResultsheetView() {
                           <TableCell className="sticky left-[240px] z-10 bg-white border border-gray-400 text-xs py-1 px-2 font-medium">
                             {item.item_name}
                           </TableCell>
+                          <TableCell className="sticky left-[440px] z-10 bg-white border border-gray-400 text-xs py-1 px-2 text-center">
+                            {(() => {
+                              // Get UOM from first available data entry for this item
+                              let uom = 0;
+                              for (const warehouse of sheetData.warehouses) {
+                                for (const floor of warehouse.floors) {
+                                  const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor];
+                                  if (cellData && cellData.uom) {
+                                    uom = cellData.uom;
+                                    break;
+                                  }
+                                }
+                                if (uom > 0) break;
+                              }
+                              return uom > 0 ? uom.toFixed(3) : "-";
+                            })()}
+                          </TableCell>
                           {sheetData.warehouses.map((warehouse) =>
                             warehouse.floors.map((floor) => {
-                              const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0 };
+                              const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
                               const weight = cellData.weight || 0;
                               const quantity = cellData.quantity || 0;
                               return (
@@ -608,13 +711,16 @@ export default function ResultsheetView() {
                       <TableCell className="sticky left-[240px] z-10 bg-yellow-100 border border-gray-400 text-xs py-1 px-2">
                         
                       </TableCell>
+                      <TableCell className="sticky left-[440px] z-10 bg-yellow-100 border border-gray-400 text-xs py-1 px-2">
+                        
+                      </TableCell>
                       {sheetData.warehouses.map((warehouse) =>
                         warehouse.floors.map((floor) => {
                           let totalWeight = 0;
                           let totalQuantity = 0;
                           sheetData.items.forEach((item) => {
                             const itemKey = item.item_name.toUpperCase();
-                            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0 };
+                            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
                             totalWeight += cellData.weight || 0;
                             totalQuantity += cellData.quantity || 0;
                           });
@@ -648,13 +754,13 @@ export default function ResultsheetView() {
                     </TableRow>
                   </TableBody>
                 </Table>
+                </div>
               </div>
             ) : (
               <div className="text-center py-12 text-muted-foreground">
                 No data available for this date
               </div>
             )}
-            </ScrollArea>
           </div>
         </DialogContent>
       </Dialog>

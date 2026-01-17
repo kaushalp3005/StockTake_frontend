@@ -243,6 +243,11 @@ export const stocktakeEntriesAPI = {
       method: "POST",
       body: { entries },
     }),
+
+  clearAllEntries: () =>
+    apiFetch("/stocktake-entries/clear-all", {
+      method: "DELETE",
+    }),
 };
 
 // Stocktake Resultsheet API
@@ -250,4 +255,9 @@ export const resultsheetAPI = {
   getList: () => apiFetch("/stocktake-resultsheet/list"),
 
   getData: (date: string) => apiFetch(`/stocktake-resultsheet/${encodeURIComponent(date)}`),
+
+  delete: (date: string) =>
+    apiFetch(`/stocktake-resultsheet/${encodeURIComponent(date)}`, {
+      method: "DELETE",
+    }),
 };

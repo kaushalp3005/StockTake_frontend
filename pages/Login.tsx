@@ -8,7 +8,7 @@ import { Package, Loader } from "lucide-react";
 
 export default function Login() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -24,7 +24,7 @@ export default function Login() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ username, password }),
       });
 
       const data = await response.json();
@@ -90,6 +90,9 @@ export default function Login() {
                   <p className="text-sm sm:text-base text-muted-foreground mt-2">
                     Inventory Management System
                   </p>
+                  <p className="text-xs sm:text-sm text-muted-foreground mt-1 font-medium">
+                    Candor Foods Pvt. Ltd
+                  </p>
                 </div>
               </div>
 
@@ -101,15 +104,15 @@ export default function Login() {
 
               <form onSubmit={handleSubmit} className="space-y-5">
                 <div className="space-y-2">
-                  <Label htmlFor="email" className="text-foreground font-medium">
-                    Email
+                  <Label htmlFor="username" className="text-foreground font-medium">
+                    Username
                   </Label>
                   <Input
-                    id="email"
-                    type="email"
-                    placeholder="Enter your email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    id="username"
+                    type="text"
+                    placeholder="Enter your username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
                     required
                     disabled={isLoading}
                     className="bg-white border-2 border-border/50 rounded-lg h-12 focus:border-[#1e3a8a] focus:ring-2 focus:ring-[#1e3a8a]/20 transition-all"
@@ -161,11 +164,9 @@ export default function Login() {
           </Card>
 
           <div className="text-center text-xs text-muted-foreground mt-6 sm:mt-8 space-y-2">
-            <p className="font-semibold text-foreground">Demo Credentials:</p>
+            <p className="font-semibold text-foreground">Login with your username and password</p>
             <div className="bg-white/80 backdrop-blur-sm p-3 rounded-lg border border-border/50 text-left space-y-1 text-[10px] sm:text-xs break-words shadow-sm">
-              <p><strong>Admin:</strong> admin@candorfoods.com / admin</p>
-              <p><strong>Manager:</strong> manager@candorfoods.com / manager</p>
-              <p><strong>Floor Staff:</strong> floor1@candorfoods.com / password123</p>
+              <p>Use your assigned username and password to access the system</p>
             </div>
           </div>
         </div>

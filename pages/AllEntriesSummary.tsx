@@ -162,6 +162,12 @@ export default function AllEntriesSummary() {
 
       // Add headers
       const headers = ["Category", "Sub-Category", "Description", ...Array.from(floors).sort()];
+      
+      // Add company header
+      const companyHeaderRow = worksheet.addRow(["Company: Candor Foods Pvt. Ltd"]);
+      companyHeaderRow.font = { bold: true, size: 14 };
+      worksheet.mergeCells(1, 1, 1, headers.length);
+      worksheet.addRow([]); // Empty row for spacing
       const headerRow = worksheet.addRow(headers);
       headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
       headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };

@@ -38,6 +38,20 @@ export default function FloorSelection() {
     if (!currentAudit) {
       setNoActiveAudit(true);
     }
+
+    // Check if user is floorhead and lock warehouse
+    const userStr = localStorage.getItem("user");
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr);
+        // If user has warehouse and role is floorhead (mapped to FLOOR_MANAGER), lock warehouse
+        if (user.warehouse && (user.dbRole === "floorhead" || user.role === "FLOOR_MANAGER")) {
+          setWarehouse(user.warehouse);
+        }
+      } catch (err) {
+        console.error("Failed to parse user", err);
+      }
+    }
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -179,22 +193,58 @@ export default function FloorSelection() {
                 <Label htmlFor="warehouse" className="text-foreground font-semibold">
                   Warehouse Location
                 </Label>
-                <Select value={warehouse} onValueChange={setWarehouse}>
-                  <SelectTrigger
-                    id="warehouse"
-                    className="bg-input border-input"
-                    disabled={isLoading}
-                  >
-                    <SelectValue placeholder="Select warehouse..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MOCK_WAREHOUSES.map((wh) => (
-                      <SelectItem key={wh.id} value={wh.id}>
-                        {wh.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {(() => {
+                  const userStr = localStorage.getItem("user");
+                  let isLocked = false;
+                  let lockedWarehouse = "";
+                  
+                  if (userStr) {
+                    try {
+                      const user = JSON.parse(userStr);
+                      if (user.warehouse && (user.dbRole === "floorhead" || user.role === "FLOOR_MANAGER")) {
+                        isLocked = true;
+                        lockedWarehouse = user.warehouse;
+                      }
+                    } catch (err) {
+                      console.error("Failed to parse user", err);
+                    }
+                  }
+
+                  if (isLocked) {
+                    return (
+                      <div>
+                        <Input
+                          id="warehouse"
+                          value={lockedWarehouse}
+                          disabled
+                          className="bg-muted border-input cursor-not-allowed"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Warehouse is locked based on your role assignment
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <Select value={warehouse} onValueChange={setWarehouse}>
+                      <SelectTrigger
+                        id="warehouse"
+                        className="bg-input border-input"
+                        disabled={isLoading}
+                      >
+                        <SelectValue placeholder="Select warehouse..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {MOCK_WAREHOUSES.map((wh) => (
+                          <SelectItem key={wh.id} value={wh.id}>
+                            {wh.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  );
+                })()}
               </div>
 
               {/* Floor Name */}
