@@ -1,6 +1,15 @@
 // API utility functions for frontend
 
-const API_BASE = "/api";
+// Use environment variable or default to local proxy
+// For local development with Render backend, set VITE_API_URL=https://stocktake-backend2.onrender.com
+const API_BASE = import.meta.env.VITE_API_URL 
+  ? `${import.meta.env.VITE_API_URL}/api`
+  : "/api";
+
+// Debug: Log API base URL (remove in production)
+if (import.meta.env.DEV) {
+  console.log("🔗 API Base URL:", API_BASE);
+}
 
 interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "DELETE" | "PUT";
@@ -32,27 +41,55 @@ async function apiFetch(
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    method: options.method || "GET",
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${endpoint}`, {
+      method: options.method || "GET",
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (networkError: any) {
+    console.error("Network error:", networkError);
+    throw new APIError(0, { message: networkError.message }, "Network error: Unable to connect to server");
+  }
 
   // Check if response has content
   const contentType = response.headers.get("content-type");
   let data;
   
-  if (contentType && contentType.includes("application/json")) {
-    data = await response.json();
-  } else {
-    const text = await response.text();
-    console.error("Non-JSON response:", text);
-    throw new APIError(response.status, { message: text }, "Invalid response format");
+  try {
+    if (contentType && contentType.includes("application/json")) {
+      const text = await response.text();
+      if (!text) {
+        throw new APIError(response.status, { message: "Empty response" }, "Server returned empty response");
+      }
+      try {
+        data = JSON.parse(text);
+      } catch (parseError) {
+        console.error("JSON parse error. Response text:", text);
+        throw new APIError(response.status, { message: text }, "Invalid JSON response from server");
+      }
+    } else {
+      const text = await response.text();
+      console.error("Non-JSON response:", {
+        status: response.status,
+        statusText: response.statusText,
+        contentType,
+        text: text.substring(0, 500) // Limit log size
+      });
+      throw new APIError(response.status, { message: text || "Invalid response format" }, `Server returned ${contentType || "unknown"} instead of JSON`);
+    }
+  } catch (error) {
+    // Re-throw APIError, but wrap other errors
+    if (error instanceof APIError) {
+      throw error;
+    }
+    throw new APIError(response.status, { message: String(error) }, "Failed to parse server response");
   }
 
   if (!response.ok) {
     console.error("API Error:", response.status, data);
-    throw new APIError(response.status, data, data.error || "API Error");
+    throw new APIError(response.status, data, data?.error || "API Error");
   }
 
   return data;
@@ -60,10 +97,10 @@ async function apiFetch(
 
 // Auth API
 export const authAPI = {
-  login: (email: string, password: string) =>
+  login: (username: string, password: string) =>
     apiFetch("/auth/login", {
       method: "POST",
-      body: { email, password },
+      body: { username, password },
     }),
 
   register: (email: string, password: string, name: string, role?: string) =>

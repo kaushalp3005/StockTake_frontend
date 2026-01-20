@@ -1,25 +1,35 @@
-import { defineConfig, Plugin } from "vite";
+import { defineConfig, loadEnv, Plugin } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { createServer } from "../backend";
 
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => ({
-  root: ".",
-  server: {
-    host: "::",
-    port: 3000,
-    fs: {
-      allow: [".."],
-      deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**"],
-    },
-    proxy: {
-      "/api": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
+export default defineConfig(({ mode }) => {
+  // Load env file based on `mode` in the current working directory.
+  const env = loadEnv(mode, process.cwd(), '');
+  
+  // Check if VITE_API_URL is set (for external backend like Render)
+  const useExternalBackend = env.VITE_API_URL;
+  
+  return {
+    root: ".",
+    server: {
+      host: "::",
+      port: 3000,
+      fs: {
+        allow: [".."],
+        deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**"],
       },
+      // Only use proxy if not using external backend
+      ...(useExternalBackend ? {} : {
+        proxy: {
+          "/api": {
+            target: "http://localhost:8000",
+            changeOrigin: true,
+          },
+        },
+      }),
     },
-  },
   publicDir: "public",
   build: {
     outDir: "../dist/spa",
@@ -31,7 +41,8 @@ export default defineConfig(({ mode }) => ({
       "@shared": path.resolve(__dirname, "../backend/shared"),
     },
   },
-}));
+  };
+});
 
 function expressPlugin(): Plugin {
   // Removed - backend runs separately on port 8000

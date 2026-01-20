@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Package, Loader } from "lucide-react";
+import { authAPI, APIError } from "@/utils/api";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -19,20 +20,7 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ username, password }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        setError(data.error || "Login failed");
-        return;
-      }
+      const data = await authAPI.login(username, password);
 
       // Save token to localStorage
       localStorage.setItem("token", data.token);
@@ -41,7 +29,20 @@ export default function Login() {
       // Redirect to dashboard
       navigate("/dashboard");
     } catch (err: any) {
-      setError(err.message || "An error occurred");
+      console.error("Login error:", err);
+      console.error("Error details:", {
+        name: err?.name,
+        message: err?.message,
+        status: err?.status,
+        data: err?.data,
+        stack: err?.stack
+      });
+      if (err instanceof APIError) {
+        const errorMessage = err.data?.error || err.data?.message || err.message || "Login failed";
+        setError(errorMessage);
+      } else {
+        setError(err.message || "An error occurred during login. Please check the console for details.");
+      }
     } finally {
       setIsLoading(false);
     }
