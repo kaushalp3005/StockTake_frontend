@@ -1,7 +1,6 @@
 import { defineConfig, loadEnv, Plugin } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
-import { createServer } from "../backend";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -32,13 +31,13 @@ export default defineConfig(({ mode }) => {
     },
   publicDir: "public",
   build: {
-    outDir: "../dist/spa",
+    // For standalone Netlify deploys, keep build output inside the frontend repo
+    outDir: "dist",
   },
   plugins: [react(), expressPlugin()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "."),
-      "@shared": path.resolve(__dirname, "../backend/shared"),
     },
   },
   };
