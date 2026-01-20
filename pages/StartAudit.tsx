@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -12,57 +12,59 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Loader, Package, ArrowLeft } from "lucide-react";
+import { auditsAPI, warehousesAPI } from "@/utils/api";
+import { useToast } from "@/hooks/use-toast";
 
-// Mock data - will be replaced with actual API calls
-const MOCK_WAREHOUSES = [
-  { id: "wh-1", name: "Main Warehouse" },
-  { id: "wh-2", name: "Secondary Warehouse" },
-  { id: "wh-3", name: "Cold Storage" },
-];
-
-const MOCK_AUTHORITIES = [
-  { id: "auth-1", name: "John Manager" },
-  { id: "auth-2", name: "Sarah Admin" },
-  { id: "auth-3", name: "Mike Supervisor" },
-];
+// Warehouse names used in the system
+const WAREHOUSES = ["W202", "A185", "F53", "A68", "Savla", "Rishi"];
 
 export default function StartAudit() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [warehouse, setWarehouse] = useState("");
   const [auditDate, setAuditDate] = useState("");
-  const [authority, setAuthority] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Set default audit date to today
+  useEffect(() => {
+    const today = new Date().toISOString().split("T")[0];
+    setAuditDate(today);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
     // Validation
-    if (!warehouse || !auditDate || !authority) {
-      setError("All fields are required");
+    if (!warehouse || !auditDate) {
+      setError("Warehouse and audit date are required");
       return;
     }
 
     setIsLoading(true);
 
     try {
-      // Store audit session in localStorage for now (demo mode)
-      const auditSession = {
-        id: `audit-${Date.now()}`,
-        warehouse,
-        auditDate,
-        authority,
-        createdAt: new Date().toISOString(),
-        status: "ACTIVE",
-      };
+      // Call backend API to start audit
+      // Use warehouse name (backend will look it up)
+      const auditSession = await auditsAPI.startAudit(warehouse, auditDate, undefined, true);
 
-      localStorage.setItem("currentAudit", JSON.stringify(auditSession));
+      toast({
+        title: "Audit Started",
+        description: `Audit session started for ${warehouse} on ${auditDate}`,
+      });
 
-      // Redirect to floor selection page
-      navigate("/audit/floor-selection");
+      // Redirect to manager review page to see entries
+      navigate("/review");
     } catch (err: any) {
-      setError(err.message || "Failed to start audit");
+      console.error("Start audit error:", err);
+      const errorMessage = err instanceof Error ? err.message : err?.data?.error || "Failed to start audit";
+      setError(errorMessage);
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setIsLoading(false);
     }

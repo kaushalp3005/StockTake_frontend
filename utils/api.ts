@@ -303,3 +303,19 @@ export const resultsheetAPI = {
       method: "DELETE",
     }),
 };
+
+// Audits API
+export const auditsAPI = {
+  startAudit: (warehouseIdOrName: string, auditDate: string, auditTime?: string, isName: boolean = false) =>
+    apiFetch("/audits/start", {
+      method: "POST",
+      body: isName 
+        ? { warehouseName: warehouseIdOrName, auditDate, auditTime }
+        : { warehouseId: warehouseIdOrName, auditDate, auditTime },
+    }),
+
+  getAudit: (auditId: string) => apiFetch(`/audits/${auditId}`),
+
+  getWarehouseAudits: (warehouseId: string) =>
+    apiFetch(`/audits/warehouse/${warehouseId}`),
+};

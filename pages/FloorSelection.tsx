@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader, Package, ArrowLeft, AlertCircle } from "lucide-react";
+import { Loader, Package, ArrowLeft } from "lucide-react";
 
 // Mock data
 const MOCK_WAREHOUSES = [
@@ -30,17 +30,11 @@ export default function FloorSelection() {
   const [authority, setAuthority] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [noActiveAudit, setNoActiveAudit] = useState(false);
 
   useEffect(() => {
-    // Check if there's an active audit session
-    const currentAudit = localStorage.getItem("currentAudit");
-    if (!currentAudit) {
-      setNoActiveAudit(true);
-    }
-
     // Check if user is floorhead and lock warehouse
     const userStr = localStorage.getItem("user");
+    
     if (userStr) {
       try {
         const user = JSON.parse(userStr);
@@ -94,55 +88,6 @@ export default function FloorSelection() {
     }
   };
 
-  if (noActiveAudit) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-        {/* Navigation */}
-        <nav className="sticky top-0 z-50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
-          <div className="container flex h-16 items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Package className="w-6 h-6 text-primary" />
-              <span className="text-xl font-bold text-foreground">StockTake</span>
-            </div>
-            <Button
-              variant="ghost"
-              onClick={() => navigate("/dashboard")}
-              size="sm"
-            >
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </div>
-        </nav>
-
-        <div className="container py-6 sm:py-12 px-4 sm:px-6">
-          <div className="max-w-md mx-auto">
-            <Card className="p-4 sm:p-6 md:p-8 border-destructive/50 bg-destructive/5">
-              <div className="flex gap-4">
-                <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
-                <div>
-                  <h3 className="font-semibold text-destructive mb-1">
-                    No Active Audit
-                  </h3>
-                  <p className="text-sm text-destructive/80 mb-4">
-                    There is no active audit session. Please ask your inventory
-                    manager to start an audit first.
-                  </p>
-                  <Button
-                    onClick={() => navigate("/dashboard")}
-                    variant="outline"
-                    size="sm"
-                  >
-                    Return to Dashboard
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">

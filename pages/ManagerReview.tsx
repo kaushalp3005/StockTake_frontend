@@ -973,8 +973,8 @@ export default function ManagerReview() {
           setSelectedWarehouse(null);
         }
       }}>
-        <DrawerContent className="max-h-[80vh]">
-          <DrawerHeader>
+        <DrawerContent className="flex flex-col max-h-[85vh]">
+          <DrawerHeader className="flex-shrink-0">
             <div className="flex items-center gap-2 mb-2">
               <Button
                 variant="ghost"
@@ -993,7 +993,7 @@ export default function ManagerReview() {
               Choose a floor to review its entries
             </DrawerDescription>
           </DrawerHeader>
-          <div className="px-4 pb-4 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto px-4 pb-4 min-h-0">
             {loadingFloors ? (
               <div className="py-8 flex flex-col items-center justify-center gap-2">
                 <Loader className="w-8 h-8 animate-spin text-primary" />
@@ -1052,8 +1052,8 @@ export default function ManagerReview() {
           setSelectedItemName(null);
         }
       }}>
-        <DrawerContent className="max-h-[90vh]">
-          <DrawerHeader>
+        <DrawerContent className="flex flex-col max-h-[85vh]">
+          <DrawerHeader className="flex-shrink-0">
             <div className="flex items-center gap-2 mb-2">
               <Button
                 variant="ghost"
@@ -1077,7 +1077,7 @@ export default function ManagerReview() {
               Select an item to view all entries with usernames and quantities
             </DrawerDescription>
           </DrawerHeader>
-          <div className="px-4 pb-4 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto px-4 pb-4 min-h-0">
             {loadingGroupedItems ? (
               <div className="py-8 flex flex-col items-center justify-center gap-2">
                 <Loader className="w-8 h-8 animate-spin text-primary" />
@@ -1221,7 +1221,7 @@ export default function ManagerReview() {
           setSelectedItemName(null);
         }
       }}>
-        <DrawerContent className="max-h-[90vh] flex flex-col">
+        <DrawerContent className="flex flex-col max-h-[85vh]">
           <DrawerHeader className="pb-2 flex-shrink-0">
             <div className="flex items-center gap-2 mb-1">
               <Button
