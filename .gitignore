@@ -16,6 +16,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Netlify CLI (netlify link)
+.netlify/
+
 # OS / IDE
 .DS_Store
 Thumbs.db

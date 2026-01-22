@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:netlify": "npm run build && npx netlify-cli deploy --prod --dir=dist"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.1",

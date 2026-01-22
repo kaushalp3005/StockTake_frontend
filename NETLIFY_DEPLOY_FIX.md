@@ -11,6 +11,37 @@ Failing build: Failed to prepare repo
 
 ---
 
+## Deploy your latest commit now (manual deploy)
+
+**Use this to get your latest code live without fixing Git.** Builds locally and uploads `dist/` to your existing Netlify site. No Git checkout on Netlify.
+
+### One-time setup
+
+1. **Login to Netlify** (opens browser):
+   ```bash
+   cd frontend
+   npx netlify-cli login
+   ```
+
+2. **Link this folder to your live site** (pick the site that’s already live):
+   ```bash
+   npx netlify-cli link
+   ```
+   Choose your team → select your **StockTake frontend** site.
+
+### Deploy
+
+```bash
+cd frontend
+npm run deploy:netlify
+```
+
+This runs `npm run build` then `netlify deploy --prod --dir=dist`. Your latest local code goes live.
+
+**Repeat whenever you want to deploy:** commit and push to GitHub as usual, then run `npm run deploy:netlify` from `frontend/`.
+
+---
+
 ## Fix in Netlify (Recommended)
 
 1. Open [Netlify Dashboard](https://app.netlify.com) → your site.
