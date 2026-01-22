@@ -1,3 +1,4 @@
+# If deploy fails with "refs/heads/main" not found, see NETLIFY_DEPLOY_FIX.md
 [build]
   command = "npm run build"
   publish = "dist"
