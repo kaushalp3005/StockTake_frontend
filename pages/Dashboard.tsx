@@ -2,19 +2,13 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loader, LogOut, Package, FileText, Calendar, Warehouse, Edit2, TrendingUp, BarChart3, PieChart, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight } from "lucide-react";
+import { Loader, LogOut, Package, FileText, Calendar, Warehouse, Edit2, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight } from "lucide-react";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import {
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart";
-import { Bar, BarChart, Line, LineChart, Pie, PieChart as RechartsPieChart, Cell, XAxis, YAxis, CartesianGrid, Legend } from "recharts";
 
 interface User {
   id: string;
@@ -347,134 +341,6 @@ export default function Dashboard() {
                   <p className="text-xs text-green-600 dark:text-green-400 mt-2">+8% from last week</p>
                 </Card>
               </div>
-
-              {/* Charts Section */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Stock by Warehouse Chart */}
-                <Card className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
-                      <BarChart3 className="w-5 h-5 text-primary" />
-                      Stock by Warehouse
-                    </h3>
-                  </div>
-                  <ChartContainer
-                    config={{
-                      weight: {
-                        label: "Weight (kg)",
-                        color: "hsl(var(--primary))",
-                      },
-                    }}
-                    className="h-[300px]"
-                  >
-                    <BarChart data={[
-                      { warehouse: "W202", weight: 3200 },
-                      { warehouse: "A185", weight: 2800 },
-                      { warehouse: "F53", weight: 2100 },
-                      { warehouse: "A68", weight: 1900 },
-                      { warehouse: "Savla", weight: 1650 },
-                      { warehouse: "Rishi", weight: 800 },
-                    ]}>
-                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                      <XAxis dataKey="warehouse" className="text-xs" />
-                      <YAxis className="text-xs" />
-                      <ChartTooltip content={<ChartTooltipContent />} />
-                      <Bar dataKey="weight" fill="hsl(var(--primary))" radius={[8, 8, 0, 0]} />
-                    </BarChart>
-                  </ChartContainer>
-                </Card>
-
-                {/* Category Distribution Chart */}
-                <Card className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
-                      <PieChart className="w-5 h-5 text-primary" />
-                      Category Distribution
-                    </h3>
-                  </div>
-                  <ChartContainer
-                    config={{
-                      grains: { label: "Grains", color: "hsl(16, 100%, 46%)" },
-                      vegetables: { label: "Vegetables", color: "hsl(142, 71%, 45%)" },
-                      spices: { label: "Spices", color: "hsl(38, 92%, 50%)" },
-                      dryGoods: { label: "Dry Goods", color: "hsl(216, 90%, 52%)" },
-                    }}
-                    className="h-[300px]"
-                  >
-                    <RechartsPieChart>
-                      <Pie
-                        data={[
-                          { name: "Grains", value: 35, fill: "hsl(16, 100%, 46%)" },
-                          { name: "Vegetables", value: 28, fill: "hsl(142, 71%, 45%)" },
-                          { name: "Spices", value: 22, fill: "hsl(38, 92%, 50%)" },
-                          { name: "Dry Goods", value: 15, fill: "hsl(216, 90%, 52%)" },
-                        ]}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={false}
-                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                        outerRadius={80}
-                        fill="#8884d8"
-                        dataKey="value"
-                        animationBegin={0}
-                        animationDuration={800}
-                      >
-                        {[
-                          { name: "Grains", value: 35, fill: "hsl(16, 100%, 46%)" },
-                          { name: "Vegetables", value: 28, fill: "hsl(142, 71%, 45%)" },
-                          { name: "Spices", value: 22, fill: "hsl(38, 92%, 50%)" },
-                          { name: "Dry Goods", value: 15, fill: "hsl(216, 90%, 52%)" },
-                        ].map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.fill} />
-                        ))}
-                      </Pie>
-                      <ChartTooltip content={<ChartTooltipContent />} />
-                    </RechartsPieChart>
-                  </ChartContainer>
-                </Card>
-              </div>
-
-              {/* Trends Chart */}
-              <Card className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-primary" />
-                    Weekly Stock Trends
-                  </h3>
-                </div>
-                <ChartContainer
-                  config={{
-                    weight: {
-                      label: "Weight (kg)",
-                      color: "hsl(var(--primary))",
-                    },
-                  }}
-                  className="h-[300px]"
-                >
-                  <LineChart data={[
-                    { day: "Mon", weight: 2100 },
-                    { day: "Tue", weight: 2800 },
-                    { day: "Wed", weight: 3200 },
-                    { day: "Thu", weight: 2900 },
-                    { day: "Fri", weight: 3500 },
-                    { day: "Sat", weight: 3100 },
-                    { day: "Sun", weight: 2800 },
-                  ]}>
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                    <XAxis dataKey="day" className="text-xs" />
-                    <YAxis className="text-xs" />
-                    <ChartTooltip content={<ChartTooltipContent />} />
-                    <Line 
-                      type="monotone" 
-                      dataKey="weight" 
-                      stroke="hsl(var(--primary))" 
-                      strokeWidth={3}
-                      dot={{ fill: "hsl(var(--primary))", r: 5 }}
-                      animationDuration={1000}
-                    />
-                  </LineChart>
-                </ChartContainer>
-              </Card>
 
               {/* Recent Activity */}
               <Card className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300">
