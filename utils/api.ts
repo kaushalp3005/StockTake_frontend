@@ -44,10 +44,10 @@ async function apiFetch(
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${endpoint}`, {
-      method: options.method || "GET",
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+    method: options.method || "GET",
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
   } catch (networkError: any) {
     console.error("Network error:", networkError);
     throw new APIError(0, { message: networkError.message }, "Network error: Unable to connect to server");
@@ -58,7 +58,7 @@ async function apiFetch(
   let data;
   
   try {
-    if (contentType && contentType.includes("application/json")) {
+  if (contentType && contentType.includes("application/json")) {
       const text = await response.text();
       if (!text) {
         throw new APIError(response.status, { message: "Empty response" }, "Server returned empty response");
@@ -69,8 +69,8 @@ async function apiFetch(
         console.error("JSON parse error. Response text:", text);
         throw new APIError(response.status, { message: text }, "Invalid JSON response from server");
       }
-    } else {
-      const text = await response.text();
+  } else {
+    const text = await response.text();
       console.error("Non-JSON response:", {
         status: response.status,
         statusText: response.statusText,

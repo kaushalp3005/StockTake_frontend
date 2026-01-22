@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -11,6 +11,7 @@ interface FloorSession {
   floor?: string;
   floorName?: string;
   items: Array<{
+    stockType?: string;
     category: string;
     subcategory: string;
     description: string;
@@ -31,6 +32,7 @@ export default function SubmissionSuccess() {
   const sessionId = (location.state as any)?.sessionId;
   const [floorSession, setFloorSession] = useState<FloorSession | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const hasAutoDownloadedRef = useRef(false);
 
   useEffect(() => {
     // Get the submitted session from localStorage
@@ -44,6 +46,202 @@ export default function SubmissionSuccess() {
       }
     }
   }, []);
+
+  // Auto-download when page loads and session is available
+  useEffect(() => {
+    if (
+      floorSession &&
+      floorSession.items &&
+      floorSession.items.length > 0 &&
+      !hasAutoDownloadedRef.current &&
+      !isExporting
+    ) {
+      // Small delay to ensure page is fully loaded
+      const timer = setTimeout(async () => {
+        hasAutoDownloadedRef.current = true;
+        setIsExporting(true);
+        try {
+          // Dynamic import of exceljs
+          const ExcelJS = (await import("exceljs")).default;
+          const workbook = new ExcelJS.Workbook();
+          
+          // Separate items by stock type
+          const freshStockItems = floorSession.items.filter(
+            item => item.stockType === "Fresh Stock" || !item.stockType
+          );
+          const offGradeItems = floorSession.items.filter(
+            item => item.stockType === "Off Grade/Rejection"
+          );
+
+          // Helper function to create a worksheet with items
+          const createWorksheet = (ws: any, items: any[], sheetTitle: string) => {
+            // Add header section
+            const headerRow1 = ws.addRow([sheetTitle]);
+            headerRow1.font = { bold: true, size: 16 };
+            headerRow1.height = 25;
+            ws.mergeCells(1, 1, 1, 8);
+
+            const headerRow2 = ws.addRow([
+              "Warehouse:",
+              floorSession.warehouse || "N/A",
+              "",
+              "Floor:",
+              floorSession.floorName || floorSession.floor || "N/A",
+            ]);
+            headerRow2.font = { bold: true };
+            ws.mergeCells(2, 1, 2, 2);
+            ws.mergeCells(2, 4, 2, 5);
+
+            const headerRow3 = ws.addRow([
+              "Submitted By:",
+              floorSession.userName || "N/A",
+              "",
+              "Submitted At:",
+              floorSession.submittedAt
+                ? new Date(floorSession.submittedAt).toLocaleString()
+                : new Date().toLocaleString(),
+            ]);
+            headerRow3.font = { bold: true };
+            ws.mergeCells(3, 1, 3, 2);
+            ws.mergeCells(3, 4, 3, 5);
+
+            // Empty row
+            ws.addRow([]);
+
+            // Table headers
+            const headers = [
+              "S.No",
+              "Category (Group)",
+              "Subcategory",
+              "Item Description",
+              "UOM (kg)",
+              "Units",
+              "Total Weight (kg)",
+            ];
+            const headerRow = ws.addRow(headers);
+            headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+            headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+            headerRow.alignment = { horizontal: "center", vertical: "middle" };
+
+            // Add data rows
+            items.forEach((item: any, index: number) => {
+              const row = [
+                index + 1,
+                item.category,
+                item.subcategory,
+                item.description,
+                item.packageSize.toFixed(3),
+                item.units,
+                item.totalWeight.toFixed(2),
+              ];
+              const dataRow = ws.addRow(row);
+              dataRow.alignment = { horizontal: "left", vertical: "middle" };
+              // Center align numeric columns
+              dataRow.getCell(1).alignment = { horizontal: "center" }; // S.No
+              dataRow.getCell(5).alignment = { horizontal: "center" }; // UOM
+              dataRow.getCell(6).alignment = { horizontal: "center" }; // Units
+              dataRow.getCell(7).alignment = { horizontal: "center" }; // Total Weight
+            });
+
+            // Add total row
+            const totalWeight = items.reduce(
+              (sum: number, item: any) => sum + item.totalWeight,
+              0
+            );
+            const totalUnits = items.reduce(
+              (sum: number, item: any) => sum + item.units,
+              0
+            );
+            const totalRow = [
+              "TOTAL",
+              "",
+              "",
+              "",
+              "",
+              totalUnits,
+              totalWeight.toFixed(2),
+            ];
+            const totalRowObj = ws.addRow(totalRow);
+            totalRowObj.font = { bold: true };
+            totalRowObj.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+            totalRowObj.alignment = { horizontal: "left", vertical: "middle" };
+            totalRowObj.getCell(6).alignment = { horizontal: "center" };
+            totalRowObj.getCell(7).alignment = { horizontal: "center" };
+
+            // Add borders to all cells
+            ws.eachRow((row: any, rowNumber: number) => {
+              if (rowNumber > 4) {
+                // Skip header section
+                row.eachCell((cell: any) => {
+                  cell.border = {
+                    top: { style: "thin", color: { argb: "FF000000" } },
+                    left: { style: "thin", color: { argb: "FF000000" } },
+                    bottom: { style: "thin", color: { argb: "FF000000" } },
+                    right: { style: "thin", color: { argb: "FF000000" } },
+                  };
+                });
+              }
+            });
+
+            // Set column widths
+            ws.getColumn(1).width = 8; // S.No
+            ws.getColumn(2).width = 20; // Category
+            ws.getColumn(3).width = 20; // Subcategory
+            ws.getColumn(4).width = 35; // Description
+            ws.getColumn(5).width = 12; // UOM
+            ws.getColumn(6).width = 12; // Units
+            ws.getColumn(7).width = 15; // Total Weight
+
+            // Freeze header row
+            ws.views = [{ state: "frozen", ySplit: 5 }];
+          };
+
+          // Create sheets based on available stock types
+          if (freshStockItems.length > 0) {
+            const freshSheet = workbook.addWorksheet("Fresh Stock");
+            createWorksheet(freshSheet, freshStockItems, "Fresh Stock Entries");
+          }
+          if (offGradeItems.length > 0) {
+            const offGradeSheet = workbook.addWorksheet("Off Grade-Rejection");
+            createWorksheet(offGradeSheet, offGradeItems, "Off Grade/Rejection Entries");
+          }
+          // If no stock types defined, create a default sheet
+          if (freshStockItems.length === 0 && offGradeItems.length === 0) {
+            const defaultSheet = workbook.addWorksheet("Submitted Entries");
+            createWorksheet(defaultSheet, floorSession.items, "Submitted Stock Entries");
+          }
+
+          // Save file
+          const buffer = await workbook.xlsx.writeBuffer();
+          const blob = new Blob([buffer], {
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          });
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          const dateStr = floorSession.submittedAt
+            ? new Date(floorSession.submittedAt).toISOString().split("T")[0]
+            : new Date().toISOString().split("T")[0];
+          const warehouse = (floorSession.warehouse || "Unknown").replace(/\s/g, "_");
+          const floor = (floorSession.floorName || floorSession.floor || "Unknown").replace(/\s/g, "_");
+          link.download = `Submitted_Entries_${warehouse}_${floor}_${dateStr}.xlsx`;
+          link.click();
+          window.URL.revokeObjectURL(url);
+
+          toast({
+            title: "Success",
+            description: "Submitted entries exported to Excel successfully",
+          });
+        } catch (err) {
+          console.error("Failed to auto-export:", err);
+          // Don't show error toast for auto-download to avoid interrupting user
+        } finally {
+          setIsExporting(false);
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [floorSession, isExporting, toast]);
 
   const handleDownloadRecord = async () => {
     if (!floorSession || !floorSession.items || floorSession.items.length === 0) {
@@ -60,127 +258,152 @@ export default function SubmissionSuccess() {
       // Dynamic import of exceljs
       const ExcelJS = (await import("exceljs")).default;
       const workbook = new ExcelJS.Workbook();
-      const worksheet = workbook.addWorksheet("Submitted Entries");
+      
+      // Separate items by stock type
+      const freshStockItems = floorSession.items.filter(
+        item => item.stockType === "Fresh Stock" || !item.stockType
+      );
+      const offGradeItems = floorSession.items.filter(
+        item => item.stockType === "Off Grade/Rejection"
+      );
 
-      // Add header section
-      const headerRow1 = worksheet.addRow(["Submitted Stock Entries"]);
-      headerRow1.font = { bold: true, size: 16 };
-      headerRow1.height = 25;
-      worksheet.mergeCells(1, 1, 1, 8);
+      // Helper function to create a worksheet with items
+      const createWorksheet = (ws: any, items: any[], sheetTitle: string) => {
+        // Add header section
+        const headerRow1 = ws.addRow([sheetTitle]);
+        headerRow1.font = { bold: true, size: 16 };
+        headerRow1.height = 25;
+        ws.mergeCells(1, 1, 1, 8);
 
-      const headerRow2 = worksheet.addRow([
-        "Warehouse:",
-        floorSession.warehouse || "N/A",
-        "",
-        "Floor:",
-        floorSession.floorName || floorSession.floor || "N/A",
-      ]);
-      headerRow2.font = { bold: true };
-      worksheet.mergeCells(2, 1, 2, 2);
-      worksheet.mergeCells(2, 4, 2, 5);
+        const headerRow2 = ws.addRow([
+          "Warehouse:",
+          floorSession.warehouse || "N/A",
+          "",
+          "Floor:",
+          floorSession.floorName || floorSession.floor || "N/A",
+        ]);
+        headerRow2.font = { bold: true };
+        ws.mergeCells(2, 1, 2, 2);
+        ws.mergeCells(2, 4, 2, 5);
 
-      const headerRow3 = worksheet.addRow([
-        "Submitted By:",
-        floorSession.userName || "N/A",
-        "",
-        "Submitted At:",
-        floorSession.submittedAt
-          ? new Date(floorSession.submittedAt).toLocaleString()
-          : new Date().toLocaleString(),
-      ]);
-      headerRow3.font = { bold: true };
-      worksheet.mergeCells(3, 1, 3, 2);
-      worksheet.mergeCells(3, 4, 3, 5);
+        const headerRow3 = ws.addRow([
+          "Submitted By:",
+          floorSession.userName || "N/A",
+          "",
+          "Submitted At:",
+          floorSession.submittedAt
+            ? new Date(floorSession.submittedAt).toLocaleString()
+            : new Date().toLocaleString(),
+        ]);
+        headerRow3.font = { bold: true };
+        ws.mergeCells(3, 1, 3, 2);
+        ws.mergeCells(3, 4, 3, 5);
 
-      // Empty row
-      worksheet.addRow([]);
+        // Empty row
+        ws.addRow([]);
 
-      // Table headers
-      const headers = [
-        "S.No",
-        "Category (Group)",
-        "Subcategory",
-        "Item Description",
-        "UOM (kg)",
-        "Units",
-        "Total Weight (kg)",
-      ];
-      const headerRow = worksheet.addRow(headers);
-      headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
-      headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
-      headerRow.alignment = { horizontal: "center", vertical: "middle" };
-
-      // Add data rows
-      floorSession.items.forEach((item, index) => {
-        const row = [
-          index + 1,
-          item.category,
-          item.subcategory,
-          item.description,
-          item.packageSize.toFixed(3),
-          item.units,
-          item.totalWeight.toFixed(2),
+        // Table headers
+        const headers = [
+          "S.No",
+          "Category (Group)",
+          "Subcategory",
+          "Item Description",
+          "UOM (kg)",
+          "Units",
+          "Total Weight (kg)",
         ];
-        const dataRow = worksheet.addRow(row);
-        dataRow.alignment = { horizontal: "left", vertical: "middle" };
-        // Center align numeric columns
-        dataRow.getCell(1).alignment = { horizontal: "center" }; // S.No
-        dataRow.getCell(5).alignment = { horizontal: "center" }; // UOM
-        dataRow.getCell(6).alignment = { horizontal: "center" }; // Units
-        dataRow.getCell(7).alignment = { horizontal: "center" }; // Total Weight
-      });
+        const headerRow = ws.addRow(headers);
+        headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+        headerRow.alignment = { horizontal: "center", vertical: "middle" };
 
-      // Add total row
-      const totalWeight = floorSession.items.reduce(
-        (sum, item) => sum + item.totalWeight,
-        0
-      );
-      const totalUnits = floorSession.items.reduce(
-        (sum, item) => sum + item.units,
-        0
-      );
-      const totalRow = [
-        "TOTAL",
-        "",
-        "",
-        "",
-        "",
-        totalUnits,
-        totalWeight.toFixed(2),
-      ];
-      const totalRowObj = worksheet.addRow(totalRow);
-      totalRowObj.font = { bold: true };
-      totalRowObj.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
-      totalRowObj.alignment = { horizontal: "left", vertical: "middle" };
-      totalRowObj.getCell(6).alignment = { horizontal: "center" };
-      totalRowObj.getCell(7).alignment = { horizontal: "center" };
+        // Add data rows
+        items.forEach((item: any, index: number) => {
+          const row = [
+            index + 1,
+            item.category,
+            item.subcategory,
+            item.description,
+            item.packageSize.toFixed(3),
+            item.units,
+            item.totalWeight.toFixed(2),
+          ];
+          const dataRow = ws.addRow(row);
+          dataRow.alignment = { horizontal: "left", vertical: "middle" };
+          // Center align numeric columns
+          dataRow.getCell(1).alignment = { horizontal: "center" }; // S.No
+          dataRow.getCell(5).alignment = { horizontal: "center" }; // UOM
+          dataRow.getCell(6).alignment = { horizontal: "center" }; // Units
+          dataRow.getCell(7).alignment = { horizontal: "center" }; // Total Weight
+        });
 
-      // Add borders to all cells
-      worksheet.eachRow((row, rowNumber) => {
-        if (rowNumber > 4) {
-          // Skip header section
-          row.eachCell((cell, colNumber) => {
-            cell.border = {
-              top: { style: "thin", color: { argb: "FF000000" } },
-              left: { style: "thin", color: { argb: "FF000000" } },
-              bottom: { style: "thin", color: { argb: "FF000000" } },
-              right: { style: "thin", color: { argb: "FF000000" } },
-            };
-          });
-        }
-      });
+        // Add total row
+        const totalWeight = items.reduce(
+          (sum: number, item: any) => sum + item.totalWeight,
+          0
+        );
+        const totalUnits = items.reduce(
+          (sum: number, item: any) => sum + item.units,
+          0
+        );
+        const totalRow = [
+          "TOTAL",
+          "",
+          "",
+          "",
+          "",
+          totalUnits,
+          totalWeight.toFixed(2),
+        ];
+        const totalRowObj = ws.addRow(totalRow);
+        totalRowObj.font = { bold: true };
+        totalRowObj.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+        totalRowObj.alignment = { horizontal: "left", vertical: "middle" };
+        totalRowObj.getCell(6).alignment = { horizontal: "center" };
+        totalRowObj.getCell(7).alignment = { horizontal: "center" };
 
-      // Set column widths
-      worksheet.getColumn(1).width = 8; // S.No
-      worksheet.getColumn(2).width = 20; // Category
-      worksheet.getColumn(3).width = 20; // Subcategory
-      worksheet.getColumn(4).width = 35; // Description
-      worksheet.getColumn(5).width = 12; // UOM
-      worksheet.getColumn(6).width = 12; // Units
-      worksheet.getColumn(7).width = 15; // Total Weight
+        // Add borders to all cells
+        ws.eachRow((row: any, rowNumber: number) => {
+          if (rowNumber > 4) {
+            // Skip header section
+            row.eachCell((cell: any) => {
+              cell.border = {
+                top: { style: "thin", color: { argb: "FF000000" } },
+                left: { style: "thin", color: { argb: "FF000000" } },
+                bottom: { style: "thin", color: { argb: "FF000000" } },
+                right: { style: "thin", color: { argb: "FF000000" } },
+              };
+            });
+          }
+        });
 
-      // Freeze header row
-      worksheet.views = [{ state: "frozen", ySplit: 5 }];
+        // Set column widths
+        ws.getColumn(1).width = 8; // S.No
+        ws.getColumn(2).width = 20; // Category
+        ws.getColumn(3).width = 20; // Subcategory
+        ws.getColumn(4).width = 35; // Description
+        ws.getColumn(5).width = 12; // UOM
+        ws.getColumn(6).width = 12; // Units
+        ws.getColumn(7).width = 15; // Total Weight
+
+        // Freeze header row
+        ws.views = [{ state: "frozen", ySplit: 5 }];
+      };
+
+      // Create sheets based on available stock types
+      if (freshStockItems.length > 0) {
+        const freshSheet = workbook.addWorksheet("Fresh Stock");
+        createWorksheet(freshSheet, freshStockItems, "Fresh Stock Entries");
+      }
+      if (offGradeItems.length > 0) {
+        const offGradeSheet = workbook.addWorksheet("Off Grade-Rejection");
+        createWorksheet(offGradeSheet, offGradeItems, "Off Grade/Rejection Entries");
+      }
+      // If no stock types defined, create a default sheet
+      if (freshStockItems.length === 0 && offGradeItems.length === 0) {
+        const defaultSheet = workbook.addWorksheet("Submitted Entries");
+        createWorksheet(defaultSheet, floorSession.items, "Submitted Stock Entries");
+      }
 
       // Save file
       const buffer = await workbook.xlsx.writeBuffer();

@@ -41,6 +41,7 @@ interface Particular {
 
 interface AddedItem {
   id: string;
+  stockType?: string;
   itemType?: string;
   category: string;
   subcategory: string;
@@ -75,6 +76,7 @@ export default function AddItem() {
   const [error, setError] = useState("");
 
   // Form fields
+  const [stockType, setStockType] = useState<"fresh" | "offgrade" | "">("fresh");
   const [itemType, setItemType] = useState<"pm" | "rm" | "fg" | "">("");
   const [category, setCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
@@ -105,6 +107,9 @@ export default function AddItem() {
   const [isSearching, setIsSearching] = useState(false);
   const [showSearchResults, setShowSearchResults] = useState(false);
   
+  // Description dropdown search
+  const [descriptionSearchQuery, setDescriptionSearchQuery] = useState("");
+  
   // Pending search selection (for auto-fill after categorialData loads)
   const [pendingSelection, setPendingSelection] = useState<{group: string; subgroup: string; particulars: string; uom: number | null} | null>(null);
 
@@ -128,6 +133,30 @@ export default function AddItem() {
       setAddedItems(parsedSession.items);
     }
   }, [navigate]);
+
+  // Auto-save items to localStorage whenever addedItems changes
+  useEffect(() => {
+    if (floorSession && addedItems.length >= 0) {
+      const updatedSession = {
+        ...floorSession,
+        itemType: itemType || floorSession.itemType || "",
+        items: addedItems,
+      };
+      localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
+      
+      // Also update in floorSessions array if it exists
+      const allSessions = JSON.parse(
+        localStorage.getItem("floorSessions") || "[]"
+      );
+      const sessionIndex = allSessions.findIndex(
+        (s: any) => s.id === floorSession.id
+      );
+      if (sessionIndex !== -1) {
+        allSessions[sessionIndex] = updatedSession;
+        localStorage.setItem("floorSessions", JSON.stringify(allSessions));
+      }
+    }
+  }, [addedItems, floorSession, itemType]);
 
   // Fetch categorial inventory data when item type is selected
   useEffect(() => {
@@ -399,7 +428,7 @@ export default function AddItem() {
     setError("");
 
     // Validation
-    if (!itemType || !category || !subcategory || !description || !packageSize || !units) {
+    if (!stockType || !itemType || !category || !subcategory || !description || !packageSize || !units) {
       setError("All fields are required");
       return;
     }
@@ -416,6 +445,7 @@ export default function AddItem() {
 
     const newItem: AddedItem = {
       id: `item-${Date.now()}`,
+      stockType: stockType === "fresh" ? "Fresh Stock" : "Off Grade/Rejection",
       itemType: itemType.toUpperCase(),
       category: category.toUpperCase(),
       subcategory: subcategory.toUpperCase(),
@@ -427,7 +457,7 @@ export default function AddItem() {
 
     setAddedItems([...addedItems, newItem]);
 
-    // Reset form (keep item type)
+    // Reset form (keep stock type and item type for convenience)
     setCategory("");
     setSubcategory("");
     setDescription("");
@@ -614,6 +644,39 @@ export default function AddItem() {
                   </div>
                 )}
 
+                {/* Stock Type */}
+                <div className="space-y-2">
+                  <Label htmlFor="stockType" className="text-foreground font-semibold">
+                    Stock Type
+                  </Label>
+                  <div className="flex gap-3">
+                    <Button
+                      type="button"
+                      variant={stockType === "fresh" ? "default" : "outline"}
+                      className={`flex-1 ${
+                        stockType === "fresh" 
+                          ? "bg-green-600 hover:bg-green-700 text-white" 
+                          : "hover:bg-green-50 dark:hover:bg-green-950"
+                      }`}
+                      onClick={() => setStockType("fresh")}
+                    >
+                      Fresh Stock
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={stockType === "offgrade" ? "default" : "outline"}
+                      className={`flex-1 ${
+                        stockType === "offgrade" 
+                          ? "bg-orange-600 hover:bg-orange-700 text-white" 
+                          : "hover:bg-orange-50 dark:hover:bg-orange-950"
+                      }`}
+                      onClick={() => setStockType("offgrade")}
+                    >
+                      Off Grade/Rejection
+                    </Button>
+                  </div>
+                </div>
+
                 {/* Item Type */}
                 <div className="space-y-2">
                   <Label htmlFor="itemType" className="text-foreground font-semibold">
@@ -623,7 +686,7 @@ export default function AddItem() {
                     <SelectTrigger id="itemType" className="bg-input border-input">
                       <SelectValue placeholder="Select item type..." />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper" sideOffset={4} className="max-h-[50vh] sm:max-h-[300px]">
                       <SelectItem value="pm">PM</SelectItem>
                       <SelectItem value="rm">RM</SelectItem>
                       <SelectItem value="fg">FG</SelectItem>
@@ -726,7 +789,7 @@ export default function AddItem() {
                     <SelectTrigger id="category" className="bg-input border-input">
                       <SelectValue placeholder="Select category..." />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper" sideOffset={4} className="max-h-[50vh] sm:max-h-[300px]">
                       {isLoadingData ? (
                         <div className="py-6 px-2 flex flex-col items-center justify-center gap-2">
                           <Loader className="w-5 h-5 animate-spin text-primary" />
@@ -766,7 +829,7 @@ export default function AddItem() {
                     >
                       <SelectValue placeholder="Select sub-category..." />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper" sideOffset={4} className="max-h-[50vh] sm:max-h-[300px]">
                       {isLoadingData ? (
                         <div className="py-6 px-2 flex flex-col items-center justify-center gap-2">
                           <Loader className="w-5 h-5 animate-spin text-primary" />
@@ -801,7 +864,19 @@ export default function AddItem() {
                   <Label htmlFor="description" className="text-foreground font-semibold">
                     Item Description (Particulars)
                   </Label>
-                  <Select value={description || undefined} onValueChange={setDescription} disabled={!subcategory || isLoadingData}>
+                  <Select 
+                    value={description || undefined} 
+                    onValueChange={(value) => {
+                      setDescription(value);
+                      setDescriptionSearchQuery(""); // Clear search when item is selected
+                    }}
+                    onOpenChange={(open) => {
+                      if (!open) {
+                        setDescriptionSearchQuery(""); // Clear search when dropdown closes
+                      }
+                    }}
+                    disabled={!subcategory || isLoadingData}
+                  >
                     <SelectTrigger
                       id="description"
                       className="bg-input border-input"
@@ -809,7 +884,7 @@ export default function AddItem() {
                     >
                       <SelectValue placeholder="Select description..." />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper" sideOffset={4} className="max-h-[50vh] sm:max-h-[300px]">
                       {isLoadingData ? (
                         <div className="py-6 px-2 flex flex-col items-center justify-center gap-2">
                           <Loader className="w-5 h-5 animate-spin text-primary" />
@@ -819,26 +894,75 @@ export default function AddItem() {
                         <div className="py-4 px-2 text-center text-sm text-muted-foreground">
                           Please select a sub-category first
                         </div>
-                      ) : categorialData
+                      ) : (() => {
+                        const particulars = categorialData
                           .find((g) => g.name === category)
                           ?.subgroups.find((sg) => sg.name === subcategory)
-                          ?.particulars.length === 0 ? (
-                        <div className="py-4 px-2 text-center text-sm text-muted-foreground">
-                          No descriptions available
-                        </div>
-                      ) : (
-                        categorialData
-                          .find((g) => g.name === category)
-                          ?.subgroups.find((sg) => sg.name === subcategory)
-                          ?.particulars.map((particular) => (
-                            <SelectItem 
-                              key={particular.name} 
-                              value={particular.name}
-                            >
-                              {particular.name}
-                            </SelectItem>
-                          ))
-                      )}
+                          ?.particulars || [];
+                        
+                        if (particulars.length === 0) {
+                          return (
+                            <div className="py-4 px-2 text-center text-sm text-muted-foreground">
+                              No descriptions available
+                            </div>
+                          );
+                        }
+
+                        // Filter particulars based on search query
+                        const filteredParticulars = descriptionSearchQuery.trim()
+                          ? particulars.filter((particular) =>
+                              particular.name.toLowerCase().includes(descriptionSearchQuery.toLowerCase())
+                            )
+                          : particulars;
+
+                        return (
+                          <>
+                            {/* Search Input */}
+                            {particulars.length > 5 && (
+                              <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
+                                <div className="relative">
+                                  <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                                  <Input
+                                    type="text"
+                                    placeholder="Search descriptions..."
+                                    value={descriptionSearchQuery}
+                                    onChange={(e) => {
+                                      e.stopPropagation();
+                                      setDescriptionSearchQuery(e.target.value);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      e.stopPropagation();
+                                      // Prevent closing dropdown on Enter
+                                      if (e.key === "Enter") {
+                                        e.preventDefault();
+                                      }
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="pl-8 h-8 text-sm bg-background"
+                                    autoFocus={false}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* Filtered Results */}
+                            {filteredParticulars.length === 0 ? (
+                              <div className="py-4 px-2 text-center text-sm text-muted-foreground">
+                                No descriptions match "{descriptionSearchQuery}"
+                              </div>
+                            ) : (
+                              filteredParticulars.map((particular) => (
+                                <SelectItem 
+                                  key={particular.name} 
+                                  value={particular.name}
+                                >
+                                  {particular.name}
+                                </SelectItem>
+                              ))
+                            )}
+                          </>
+                        );
+                      })()}
                     </SelectContent>
                   </Select>
                 </div>
@@ -874,7 +998,7 @@ export default function AddItem() {
                   {/* Units */}
                   <div className="space-y-2">
                     <Label htmlFor="units" className="text-foreground font-semibold text-sm sm:text-base">
-                      Number of Units
+                      Number of Units/Qty in kg
                     </Label>
                     <Input
                       id="units"
@@ -963,6 +1087,15 @@ export default function AddItem() {
                                   <Card key={item.id} className="p-3 bg-white dark:bg-slate-950">
                                     <div className="flex justify-between items-start gap-2">
                                       <div className="flex-1 min-w-0">
+                                        {item.stockType && (
+                                          <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold mb-1 ${
+                                            item.stockType === "Fresh Stock" 
+                                              ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+                                              : "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300"
+                                          }`}>
+                                            {item.stockType}
+                                          </span>
+                                        )}
                                         <p className="font-semibold text-xs sm:text-sm text-foreground">
                                           {item.subcategory}
                                         </p>

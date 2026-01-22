@@ -11,24 +11,24 @@ export default defineConfig(({ mode }) => {
   const useExternalBackend = env.VITE_API_URL;
   
   return {
-    root: ".",
-    server: {
-      host: "::",
-      port: 3000,
-      fs: {
-        allow: [".."],
-        deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**"],
-      },
+  root: ".",
+  server: {
+    host: "::",
+    port: 3000,
+    fs: {
+      allow: [".."],
+      deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**"],
+    },
       // Only use proxy if not using external backend
       ...(useExternalBackend ? {} : {
-        proxy: {
-          "/api": {
-            target: "http://localhost:8000",
-            changeOrigin: true,
-          },
-        },
-      }),
+    proxy: {
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
+      }),
+  },
   publicDir: "public",
   build: {
     // For standalone Netlify deploys, keep build output inside the frontend repo

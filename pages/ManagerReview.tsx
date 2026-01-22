@@ -161,6 +161,8 @@ export default function ManagerReview() {
     setDrawerOpen(false);
     setTimeout(() => {
       setItemsDrawerOpen(true);
+      // Scroll to top to ensure drawer is visible on all devices
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }, 200);
   };
 
@@ -239,7 +241,6 @@ export default function ManagerReview() {
       localStorage.setItem("checkedEntries", JSON.stringify(checkedEntries));
       
       setTimeout(() => {
-        alert("Checked entries saved successfully!");
         setSaving(false);
         setConfirmed(false);
       }, 500);
@@ -681,7 +682,6 @@ export default function ManagerReview() {
       localStorage.setItem("checkedItems", JSON.stringify(checkedItems));
       
       setTimeout(() => {
-        alert("Status saved successfully!");
         setSaving(false);
         setConfirmed(false);
         // Close drawer after saving
@@ -969,7 +969,12 @@ export default function ManagerReview() {
       {/* Floors Drawer */}
       <Drawer open={drawerOpen} onOpenChange={(open) => {
         setDrawerOpen(open);
-        if (!open) {
+        if (open) {
+          // Scroll to top when drawer opens to ensure visibility on all devices
+          setTimeout(() => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }, 100);
+        } else {
           setSelectedWarehouse(null);
         }
       }}>
@@ -1047,7 +1052,12 @@ export default function ManagerReview() {
       {/* Items List Drawer - Shows unique item names */}
       <Drawer open={itemsDrawerOpen} onOpenChange={(open) => {
         setItemsDrawerOpen(open);
-        if (!open) {
+        if (open) {
+          // Scroll to top when drawer opens to ensure visibility on all devices
+          setTimeout(() => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }, 100);
+        } else {
           setSelectedFloor(null);
           setSelectedItemName(null);
         }
@@ -1217,7 +1227,12 @@ export default function ManagerReview() {
       {/* Item Details Drawer - Shows entries grouped by username with quantity boxes */}
       <Drawer open={itemDetailsOpen} onOpenChange={(open) => {
         setItemDetailsOpen(open);
-        if (!open) {
+        if (open) {
+          // Scroll to top when drawer opens to ensure visibility on all devices
+          setTimeout(() => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }, 100);
+        } else {
           setSelectedItemName(null);
         }
       }}>

@@ -73,12 +73,12 @@ SelectScrollDownButton.displayName =
 const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(({ className, children, position = "popper", side = "bottom", sideOffset = 4, avoidCollisions = false, ...props }, ref) => (
+>(({ className, children, position = "popper", side = "bottom", sideOffset = 4, avoidCollisions = true, ...props }, ref) => (
   <SelectPrimitive.Portal>
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        "select-dropdown-content relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg",
+        "select-dropdown-content relative z-50 max-h-[60vh] sm:max-h-96 min-w-[8rem] overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg",
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
@@ -90,15 +90,24 @@ const SelectContent = React.forwardRef<
       side={side}
       sideOffset={sideOffset}
       avoidCollisions={avoidCollisions}
+      onCloseAutoFocus={(e) => {
+        // Prevent auto-focus on close to avoid scroll jumping
+        e.preventDefault();
+      }}
       {...props}
     >
       <SelectScrollUpButton />
       <SelectPrimitive.Viewport
         className={cn(
-          "p-1",
+          "p-1 max-h-[50vh] sm:max-h-[300px] overflow-y-auto",
+          "overscroll-contain touch-pan-y",
+          "-webkit-overflow-scrolling-touch",
           position === "popper" &&
-            "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]",
+            "w-full min-w-[var(--radix-select-trigger-width)]",
         )}
+        style={{
+          WebkitOverflowScrolling: "touch",
+        }}
       >
         {children}
       </SelectPrimitive.Viewport>
@@ -127,12 +136,13 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-pointer select-none items-center rounded-md py-2 pl-8 pr-2 text-sm outline-none",
+      "relative flex w-full cursor-pointer select-none items-center rounded-md py-2.5 sm:py-2 pl-8 pr-2 text-sm outline-none",
       "transition-all duration-150 ease-out",
       "hover:bg-accent/80 hover:text-accent-foreground",
       "focus:bg-accent focus:text-accent-foreground",
+      "active:bg-accent active:text-accent-foreground",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-      "active:scale-[0.98]",
+      "touch-manipulation",
       className,
     )}
     {...props}
@@ -143,7 +153,7 @@ const SelectItem = React.forwardRef<
       </SelectPrimitive.ItemIndicator>
     </span>
 
-    <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    <SelectPrimitive.ItemText className="truncate">{children}</SelectPrimitive.ItemText>
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;
