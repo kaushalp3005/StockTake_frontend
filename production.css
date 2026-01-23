@@ -1,0 +1,155 @@
+/* Production CSS Override - Ensures critical styles work in production builds */
+
+/* CRITICAL: Force warehouse drawer positioning - must not be purged */
+.warehouse-entries-drawer [data-vaul-drawer-content] {
+  position: fixed !important;
+  z-index: 50 !important;
+  background-color: white !important;
+  border: 1px solid hsl(var(--border)) !important;
+}
+
+/* Desktop: 75% width positioned from 25% left */
+@media (min-width: 769px) {
+  .warehouse-entries-drawer [data-vaul-drawer-content] {
+    left: 25% !important;
+    right: 0 !important;
+    width: 75% !important;
+    max-width: 75% !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    border-radius: 0.5rem 0 0 0.5rem !important;
+    box-shadow: -10px 0 25px -5px rgba(0, 0, 0, 0.1), -10px 0 10px -5px rgba(0, 0, 0, 0.04) !important;
+  }
+}
+
+/* Mobile: Full width with proper snap behavior */
+@media (max-width: 768px) {
+  .warehouse-entries-drawer [data-vaul-drawer-content] {
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    bottom: 0 !important;
+    top: auto !important;
+    height: 90vh !important;
+    max-height: 90vh !important;
+    border-radius: 0.5rem 0.5rem 0 0 !important;
+    box-shadow: 0 -10px 25px -5px rgba(0, 0, 0, 0.1), 0 -4px 6px -2px rgba(0, 0, 0, 0.04) !important;
+  }
+  
+  /* Handle mobile drawer when expanded to top */
+  .warehouse-entries-drawer [data-vaul-drawer-content][data-vaul-snap="1"],
+  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 100%"],
+  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 95vh"],
+  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 90vh"] {
+    height: 95vh !important;
+    max-height: 95vh !important;
+    top: 5vh !important;
+    bottom: auto !important;
+    border-radius: 0.5rem 0.5rem 0 0 !important;
+  }
+  
+  /* Prevent drawer from going full screen incorrectly */
+  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 100vh"] {
+    height: 95vh !important;
+    top: 5vh !important;
+    bottom: auto !important;
+  }
+}
+
+/* Ensure vaul overlay works correctly */
+.warehouse-entries-drawer [data-vaul-overlay] {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 49 !important;
+  background-color: rgba(0, 0, 0, 0.8) !important;
+}
+
+/* Mobile drawer overlay - less dark on mobile for better UX */
+@media (max-width: 768px) {
+  .warehouse-entries-drawer [data-vaul-overlay] {
+    background-color: rgba(0, 0, 0, 0.6) !important;
+  }
+}
+
+/* Fix dropdown positioning in production */
+[data-radix-select-content] {
+  position: fixed !important;
+  z-index: 9999 !important;
+  background-color: hsl(var(--popover)) !important;
+  color: hsl(var(--popover-foreground)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: calc(var(--radius) - 2px) !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+}
+
+[data-radix-select-viewport] {
+  padding: 0.25rem !important;
+  max-height: 300px !important;
+  overflow-y: auto !important;
+}
+
+/* Fix mobile select dropdowns */
+@media (max-width: 768px) {
+  [data-radix-select-content] {
+    max-height: 50vh !important;
+    max-width: 95vw !important;
+  }
+  
+  [data-radix-select-viewport] {
+    max-height: 45vh !important;
+  }
+}
+
+/* Ensure buttons and inputs work in production */
+.fixed-select-trigger {
+  display: flex !important;
+  height: 2.25rem !important;
+  width: 100% !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  white-space: nowrap !important;
+  border-radius: calc(var(--radius) - 2px) !important;
+  border: 1px solid hsl(var(--input)) !important;
+  background-color: hsl(var(--background)) !important;
+  padding-left: 0.75rem !important;
+  padding-right: 0.75rem !important;
+  padding-top: 0.5rem !important;
+  padding-bottom: 0.5rem !important;
+  font-size: 0.875rem !important;
+  line-height: 1.25rem !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+}
+
+.fixed-select-trigger:focus {
+  outline: 2px solid transparent !important;
+  outline-offset: 2px !important;
+  border-color: hsl(var(--ring)) !important;
+  box-shadow: 0 0 0 1px hsl(var(--ring)) !important;
+}
+
+/* Critical: Prevent scroll lock issues in production */
+body[style*="position: fixed"] {
+  overflow: hidden !important;
+  -webkit-overflow-scrolling: auto !important;
+}
+
+/* Force important classes that might get purged */
+.z-50 { z-index: 50 !important; }
+.z-9999 { z-index: 9999 !important; }
+.fixed { position: fixed !important; }
+.absolute { position: absolute !important; }
+.relative { position: relative !important; }
+.inset-0 { top: 0 !important; right: 0 !important; bottom: 0 !important; left: 0 !important; }
+.w-full { width: 100% !important; }
+.h-full { height: 100% !important; }
+.overflow-hidden { overflow: hidden !important; }
+.overflow-y-auto { overflow-y: auto !important; }
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .warehouse-entries-drawer [data-vaul-drawer-content] {
+    background-color: hsl(var(--background)) !important;
+    color: hsl(var(--foreground)) !important;
+  }
+}

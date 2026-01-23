@@ -1,38 +1,129 @@
 /** @import must precede all other statements */
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap");
+@import "./production.css";
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Prevent viewport jumping on dropdown interactions */
-.select-dropdown-content {
-  /* Ensure dropdown doesn't cause page scroll */
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+    box-sizing: border-box;
+  }
+  
+  html {
+    scroll-behavior: auto;
+    -webkit-text-size-adjust: 100%;
+    height: 100%;
+  }
+  
+  body {
+    overscroll-behavior: none;
+    height: 100%;
+    /* Prevent rubber band scrolling on iOS */
+    position: relative;
+  }
+  
+  /* Root app container */
+  #root {
+    min-height: 100vh;
+    position: relative;
+  }
+  
+  /* Fix iOS font size and zoom issues */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+    -webkit-appearance: none;
+    /* Prevent zoom on iOS when focusing inputs */
+    transform: scale(1) !important;
+  }
+  
+  /* Prevent body scroll when select is open */
+  body[style*="position: fixed"] {
+    overflow: hidden !important;
+    -webkit-overflow-scrolling: auto !important;
+  }
+  
+  /* Force prevent scroll on mobile when dropdown is open */
+  body:has([data-state="open"]) {
+    overflow: hidden !important;
+    position: fixed !important;
+    width: 100% !important;
+  }
+}
+
+/* Critical: Select dropdown positioning - must work in production */
+[data-radix-select-content] {
+  z-index: 9999 !important;
   position: fixed !important;
-  z-index: 9999;
 }
 
-/* Prevent iOS zoom on input focus */
-input[type="text"],
-input[type="number"],
-select {
-  font-size: 16px;
+/* Additional mobile fixes */
+@media (max-width: 768px) {
+  [data-radix-select-content] {
+    max-height: 50vh !important;
+  }
+  
+  [data-radix-select-viewport] {
+    max-height: 45vh !important;
+  }
+  
+  /* Ensure drawers work properly on mobile */
+  [data-vaul-drawer] {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 50 !important;
+  }
+  
+  [data-vaul-overlay] {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 50 !important;
+    background-color: rgba(0, 0, 0, 0.8) !important;
+  }
 }
 
-/* Prevent page scroll when body has fixed positioning for dropdown */
-body[style*="position: fixed"] {
-  overflow: hidden !important;
+/* CRITICAL: Warehouse entries section - 75% width for vaul drawer */
+/* This must be preserved in production builds */
+.warehouse-entries-drawer [data-vaul-drawer-content] {
+  position: fixed !important;
+  left: 25% !important;
+  right: 0 !important;
+  width: 75% !important;
+  max-width: 75% !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  z-index: 50 !important;
+  background-color: white !important;
+  border-radius: 0.5rem 0 0 0.5rem !important;
+  box-shadow: -10px 0 25px -5px rgba(0, 0, 0, 0.1), -10px 0 10px -5px rgba(0, 0, 0, 0.04) !important;
 }
 
-/* Smooth scroll behavior for better UX */
-html {
-  scroll-behavior: auto; /* Changed from smooth to auto to prevent conflicts */
-}
-
-/* Prevent overscroll on mobile */
-body {
-  overscroll-behavior: none;
-  -webkit-overflow-scrolling: touch;
+/* Mobile responsive - keep full width on mobile */
+@media (max-width: 768px) {
+  .warehouse-entries-drawer [data-vaul-drawer-content] {
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: 0.5rem 0.5rem 0 0 !important;
+    top: auto !important;
+    bottom: 0 !important;
+    height: 90vh !important;
+    max-height: 90vh !important;
+  }
+  
+  /* Fix mobile drawer positioning when expanded at top */
+  .warehouse-entries-drawer [data-vaul-drawer-content][data-vaul-snap="1"],
+  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 100%"] {
+    height: 95vh !important;
+    max-height: 95vh !important;
+    top: 5vh !important;
+    border-radius: 0.5rem 0.5rem 0 0 !important;
+  }
 }
 
 /* iOS Safari viewport fix */

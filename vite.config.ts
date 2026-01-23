@@ -33,6 +33,21 @@ export default defineConfig(({ mode }) => {
   build: {
     // For standalone Netlify deploys, keep build output inside the frontend repo
     outDir: "dist",
+    // Ensure CSS is properly extracted and optimized for production
+    cssCodeSplit: true,
+    // Enable source maps for debugging in production if needed
+    sourcemap: false,
+    // Optimize chunks for better loading
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          ui: ['@radix-ui/react-select', '@radix-ui/react-dialog'],
+        }
+      }
+    },
+    // Ensure assets are properly inlined
+    assetsInlineLimit: 4096,
   },
   plugins: [react(), expressPlugin()],
   resolve: {

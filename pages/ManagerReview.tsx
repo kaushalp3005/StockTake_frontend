@@ -973,11 +973,15 @@ export default function ManagerReview() {
       <Drawer open={drawerOpen} onOpenChange={(open) => {
         setDrawerOpen(open);
         if (open) {
+          // Prevent body scroll and ensure proper positioning
+          document.body.style.overflow = 'hidden';
           // Scroll to top when drawer opens to ensure visibility on all devices
           setTimeout(() => {
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }, 100);
         } else {
+          // Restore body scroll
+          document.body.style.overflow = '';
           setSelectedWarehouse(null);
         }
       }}>
@@ -1056,11 +1060,15 @@ export default function ManagerReview() {
       <Drawer open={itemsDrawerOpen} onOpenChange={(open) => {
         setItemsDrawerOpen(open);
         if (open) {
+          // Prevent body scroll and ensure proper positioning
+          document.body.style.overflow = 'hidden';
           // Scroll to top when drawer opens to ensure visibility on all devices
           setTimeout(() => {
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }, 100);
         } else {
+          // Restore body scroll
+          document.body.style.overflow = '';
           setSelectedFloor(null);
           setSelectedItemName(null);
         }
@@ -1231,11 +1239,15 @@ export default function ManagerReview() {
       <Drawer open={itemDetailsOpen} onOpenChange={(open) => {
         setItemDetailsOpen(open);
         if (open) {
+          // Prevent body scroll and ensure proper positioning
+          document.body.style.overflow = 'hidden';
           // Scroll to top when drawer opens to ensure visibility on all devices
           setTimeout(() => {
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }, 100);
         } else {
+          // Restore body scroll
+          document.body.style.overflow = '';
           setSelectedItemName(null);
         }
       }}>

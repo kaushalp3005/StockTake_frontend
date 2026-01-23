@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { FixedSelect } from "@/components/ui/fixed-select";
 import { Trash2, Plus, ArrowLeft, Package, Loader, X, Check, ChevronDown, ChevronRight, Search } from "lucide-react";
 import { categorialInvAPI } from "@/utils/api";
 import {
@@ -682,16 +683,17 @@ export default function AddItem() {
                   <Label htmlFor="itemType" className="text-foreground font-semibold">
                     Item Type
                   </Label>
-                  <Select value={itemType} onValueChange={(value) => setItemType(value as "pm" | "rm" | "fg" | "")}>
-                    <SelectTrigger id="itemType" className="bg-input border-input">
-                      <SelectValue placeholder="Select item type..." />
-                    </SelectTrigger>
-                    <SelectContent position="popper" sideOffset={4} className="max-h-[50vh] sm:max-h-[300px]">
-                      <SelectItem value="pm">PM</SelectItem>
-                      <SelectItem value="rm">RM</SelectItem>
-                      <SelectItem value="fg">FG</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <FixedSelect 
+                    value={itemType} 
+                    onValueChange={(value) => setItemType(value as "pm" | "rm" | "fg" | "")}
+                    placeholder="Select item type..."
+                    options={[
+                      { value: "pm", label: "PM" },
+                      { value: "rm", label: "RM" },
+                      { value: "fg", label: "FG" }
+                    ]}
+                    className="bg-input border-input"
+                  />
                   {isLoadingData && (
                     <p className="text-xs text-muted-foreground flex items-center gap-2">
                       <Loader className="w-3 h-3 animate-spin" />
@@ -785,32 +787,22 @@ export default function AddItem() {
                   <Label htmlFor="category" className="text-foreground font-semibold">
                     Item Category (Group)
                   </Label>
-                  <Select value={category || undefined} onValueChange={setCategory} disabled={!itemType || isLoadingData}>
-                    <SelectTrigger id="category" className="bg-input border-input">
-                      <SelectValue placeholder="Select category..." />
-                    </SelectTrigger>
-                    <SelectContent position="popper" sideOffset={4} className="max-h-[50vh] sm:max-h-[300px]">
-                      {isLoadingData ? (
-                        <div className="py-6 px-2 flex flex-col items-center justify-center gap-2">
-                          <Loader className="w-5 h-5 animate-spin text-primary" />
-                          <p className="text-xs text-muted-foreground animate-pulse">Loading categories...</p>
-                        </div>
-                      ) : categorialData.length === 0 ? (
-                        <div className="py-4 px-2 text-center text-sm text-muted-foreground">
-                          No categories available
-                        </div>
-                      ) : (
-                        categorialData.map((group, index) => (
-                          <SelectItem 
-                            key={group.name} 
-                            value={group.name}
-                          >
-                            {group.name}
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                  {(!itemType || isLoadingData) ? (
+                    <div className="flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground">
+                      {isLoadingData ? "Loading categories..." : "Select item type first..."}
+                    </div>
+                  ) : (
+                    <FixedSelect 
+                      value={category || ""} 
+                      onValueChange={setCategory}
+                      placeholder="Select category..."
+                      options={categorialData.map(group => ({
+                        value: group.name,
+                        label: group.name
+                      }))}
+                      className="bg-input border-input"
+                    />
+                  )}
                 </div>
 
                 {/* Subcategory (Subgroup) */}
@@ -821,42 +813,26 @@ export default function AddItem() {
                   >
                     Sub-Category (Subgroup)
                   </Label>
-                  <Select value={subcategory || undefined} onValueChange={setSubcategory} disabled={!category || isLoadingData}>
-                    <SelectTrigger
-                      id="subcategory"
-                      className="bg-input border-input"
-                      disabled={!category}
-                    >
-                      <SelectValue placeholder="Select sub-category..." />
-                    </SelectTrigger>
-                    <SelectContent position="popper" sideOffset={4} className="max-h-[50vh] sm:max-h-[300px]">
-                      {isLoadingData ? (
-                        <div className="py-6 px-2 flex flex-col items-center justify-center gap-2">
-                          <Loader className="w-5 h-5 animate-spin text-primary" />
-                          <p className="text-xs text-muted-foreground animate-pulse">Loading sub-categories...</p>
-                        </div>
-                      ) : !category ? (
-                        <div className="py-4 px-2 text-center text-sm text-muted-foreground">
-                          Please select a category first
-                        </div>
-                      ) : categorialData.find((g) => g.name === category)?.subgroups.length === 0 ? (
-                        <div className="py-4 px-2 text-center text-sm text-muted-foreground">
-                          No sub-categories available
-                        </div>
-                      ) : (
+                  {(!category || isLoadingData) ? (
+                    <div className="flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground">
+                      {isLoadingData ? "Loading sub-categories..." : "Select category first..."}
+                    </div>
+                  ) : (
+                    <FixedSelect 
+                      value={subcategory || ""} 
+                      onValueChange={setSubcategory}
+                      placeholder="Select sub-category..."
+                      options={
                         categorialData
                           .find((g) => g.name === category)
-                          ?.subgroups.map((subgroup) => (
-                            <SelectItem 
-                              key={subgroup.name} 
-                              value={subgroup.name}
-                            >
-                              {subgroup.name}
-                            </SelectItem>
-                          ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                          ?.subgroups.map((subgroup) => ({
+                            value: subgroup.name,
+                            label: subgroup.name
+                          })) || []
+                      }
+                      className="bg-input border-input"
+                    />
+                  )}
                 </div>
 
                 {/* Description (Particulars) */}
@@ -864,107 +840,30 @@ export default function AddItem() {
                   <Label htmlFor="description" className="text-foreground font-semibold">
                     Item Description (Particulars)
                   </Label>
-                  <Select 
-                    value={description || undefined} 
-                    onValueChange={(value) => {
-                      setDescription(value);
-                      setDescriptionSearchQuery(""); // Clear search when item is selected
-                    }}
-                    onOpenChange={(open) => {
-                      if (!open) {
-                        setDescriptionSearchQuery(""); // Clear search when dropdown closes
-                      }
-                    }}
-                    disabled={!subcategory || isLoadingData}
-                  >
-                    <SelectTrigger
-                      id="description"
-                      className="bg-input border-input"
-                      disabled={!subcategory}
-                    >
-                      <SelectValue placeholder="Select description..." />
-                    </SelectTrigger>
-                    <SelectContent position="popper" sideOffset={4} className="max-h-[50vh] sm:max-h-[300px]">
-                      {isLoadingData ? (
-                        <div className="py-6 px-2 flex flex-col items-center justify-center gap-2">
-                          <Loader className="w-5 h-5 animate-spin text-primary" />
-                          <p className="text-xs text-muted-foreground animate-pulse">Loading descriptions...</p>
-                        </div>
-                      ) : !subcategory ? (
-                        <div className="py-4 px-2 text-center text-sm text-muted-foreground">
-                          Please select a sub-category first
-                        </div>
-                      ) : (() => {
-                        const particulars = categorialData
+                  {(!subcategory || isLoadingData) ? (
+                    <div className="flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground">
+                      {isLoadingData ? "Loading descriptions..." : "Select sub-category first..."}
+                    </div>
+                  ) : (
+                    <FixedSelect 
+                      value={description || ""} 
+                      onValueChange={(value) => {
+                        setDescription(value);
+                        setDescriptionSearchQuery(""); // Clear search when item is selected
+                      }}
+                      placeholder="Select description..."
+                      options={
+                        categorialData
                           .find((g) => g.name === category)
                           ?.subgroups.find((sg) => sg.name === subcategory)
-                          ?.particulars || [];
-                        
-                        if (particulars.length === 0) {
-                          return (
-                            <div className="py-4 px-2 text-center text-sm text-muted-foreground">
-                              No descriptions available
-                            </div>
-                          );
-                        }
-
-                        // Filter particulars based on search query
-                        const filteredParticulars = descriptionSearchQuery.trim()
-                          ? particulars.filter((particular) =>
-                              particular.name.toLowerCase().includes(descriptionSearchQuery.toLowerCase())
-                            )
-                          : particulars;
-
-                        return (
-                          <>
-                            {/* Search Input */}
-                            {particulars.length > 5 && (
-                              <div className="p-2 border-b border-border sticky top-0 bg-popover z-10">
-                                <div className="relative">
-                                  <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                                  <Input
-                                    type="text"
-                                    placeholder="Search descriptions..."
-                                    value={descriptionSearchQuery}
-                                    onChange={(e) => {
-                                      e.stopPropagation();
-                                      setDescriptionSearchQuery(e.target.value);
-                                    }}
-                                    onKeyDown={(e) => {
-                                      e.stopPropagation();
-                                      // Prevent closing dropdown on Enter
-                                      if (e.key === "Enter") {
-                                        e.preventDefault();
-                                      }
-                                    }}
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="pl-8 h-8 text-sm bg-background"
-                                    autoFocus={false}
-                                  />
-                                </div>
-                              </div>
-                            )}
-                            
-                            {/* Filtered Results */}
-                            {filteredParticulars.length === 0 ? (
-                              <div className="py-4 px-2 text-center text-sm text-muted-foreground">
-                                No descriptions match "{descriptionSearchQuery}"
-                              </div>
-                            ) : (
-                              filteredParticulars.map((particular) => (
-                                <SelectItem 
-                                  key={particular.name} 
-                                  value={particular.name}
-                                >
-                                  {particular.name}
-                                </SelectItem>
-                              ))
-                            )}
-                          </>
-                        );
-                      })()}
-                    </SelectContent>
-                  </Select>
+                          ?.particulars.map((particular) => ({
+                            value: particular.name,
+                            label: particular.name
+                          })) || []
+                      }
+                      className="bg-input border-input"
+                    />
+                  )}
                 </div>
 
                 {/* UOM */}

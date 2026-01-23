@@ -16,21 +16,15 @@ const SelectTrigger = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
   <SelectPrimitive.Trigger
     ref={ref}
-    data-radix-select-trigger=""
     className={cn(
-      "flex h-10 w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background",
-      "placeholder:text-muted-foreground",
-      "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
-      "disabled:cursor-not-allowed disabled:opacity-50",
-      "transition-all duration-200 hover:border-ring/50",
-      "[&>span]:line-clamp-1",
+      "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
       className,
     )}
     {...props}
   >
     {children}
     <SelectPrimitive.Icon asChild>
-      <ChevronDown className="h-4 w-4 opacity-50 transition-transform duration-200 data-[state=open]:rotate-180" />
+      <ChevronDown className="h-4 w-4 opacity-50" />
     </SelectPrimitive.Icon>
   </SelectPrimitive.Trigger>
 ));
@@ -75,100 +69,94 @@ const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
 >(({ className, children, position = "popper", side = "bottom", sideOffset = 4, avoidCollisions = true, ...props }, ref) => {
-  // Store scroll position when dropdown opens
-  const scrollPositionRef = React.useRef<number>(0);
-
-  const handleOpenAutoFocus = React.useCallback((e: Event) => {
-    // Always prevent the default focus behavior
-    e.preventDefault();
-    
-    // Store current scroll position
-    scrollPositionRef.current = window.pageYOffset || document.documentElement.scrollTop;
-    
-    // Prevent page from scrolling
-    document.body.style.overflow = 'hidden';
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${scrollPositionRef.current}px`;
-    document.body.style.width = '100%';
-  }, []);
-
-  const handleCloseAutoFocus = React.useCallback((e: Event) => {
-    // Always prevent the default focus behavior
-    e.preventDefault();
-    
-    // Restore scroll position
-    document.body.style.overflow = '';
-    document.body.style.position = '';
-    document.body.style.top = '';
-    document.body.style.width = '';
-    
-    // Restore the exact scroll position without animation
-    if (scrollPositionRef.current > 0) {
-      window.scrollTo({
-        top: scrollPositionRef.current,
-        behavior: 'instant' as ScrollBehavior
-      });
-    }
-  }, []);
-
-  // Also handle escape key and click outside
+  const scrollY = React.useRef(0);
+  const [isOpen, setIsOpen] = React.useState(false);
+  
   React.useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        // Restore scroll when escaping
-        document.body.style.overflow = '';
+    const handleOpenChange = () => {
+      setIsOpen(true);
+      // Store current scroll position
+      scrollY.current = window.pageYOffset;
+      
+      // Prevent scrolling
+      document.body.style.position = 'fixed';
+      document.body.style.top = `-${scrollY.current}px`;
+      document.body.style.width = '100%';
+      document.body.style.overflow = 'hidden';
+    };
+    
+    const handleClose = () => {
+      if (isOpen) {
+        setIsOpen(false);
+        
+        // Restore scrolling
         document.body.style.position = '';
         document.body.style.top = '';
         document.body.style.width = '';
+        document.body.style.overflow = '';
         
-        if (scrollPositionRef.current > 0) {
-          window.scrollTo({
-            top: scrollPositionRef.current,
-            behavior: 'instant' as ScrollBehavior
-          });
-        }
+        // Restore scroll position
+        window.scrollTo(0, scrollY.current);
       }
     };
-
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, []);
-
+    
+    // Listen for select state changes
+    const selectTrigger = document.querySelector('[data-state="open"]');
+    if (selectTrigger) {
+      handleOpenChange();
+    }
+    
+    return () => {
+      handleClose();
+    };
+  }, [isOpen]);
+  
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
         ref={ref}
         className={cn(
-          "select-dropdown-content relative z-50 max-h-[60vh] sm:max-h-96 min-w-[8rem] overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out",
-          "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-          "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
-          "data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2",
-          "data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2",
+          "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
           className,
         )}
         position={position}
         side={side}
         sideOffset={sideOffset}
         avoidCollisions={avoidCollisions}
-        onOpenAutoFocus={handleOpenAutoFocus}
-        onCloseAutoFocus={handleCloseAutoFocus}
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          scrollY.current = window.pageYOffset;
+          document.body.style.position = 'fixed';
+          document.body.style.top = `-${scrollY.current}px`;
+          document.body.style.width = '100%';
+          document.body.style.overflow = 'hidden';
+        }}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          document.body.style.position = '';
+          document.body.style.top = '';
+          document.body.style.width = '';
+          document.body.style.overflow = '';
+          window.scrollTo(0, scrollY.current);
+        }}
+        onEscapeKeyDown={(e) => {
+          document.body.style.position = '';
+          document.body.style.top = '';
+          document.body.style.width = '';
+          document.body.style.overflow = '';
+          window.scrollTo(0, scrollY.current);
+        }}
+        onPointerDownOutside={(e) => {
+          document.body.style.position = '';
+          document.body.style.top = '';
+          document.body.style.width = '';
+          document.body.style.overflow = '';
+          window.scrollTo(0, scrollY.current);
+        }}
         {...props}
       >
         <SelectScrollUpButton />
-        <SelectPrimitive.Viewport
-          className={cn(
-            "p-1 max-h-[50vh] sm:max-h-[300px] overflow-y-auto",
-            "overscroll-contain touch-pan-y",
-            "-webkit-overflow-scrolling-touch",
-            position === "popper" &&
-              "w-full min-w-[var(--radix-select-trigger-width)]",
-          )}
-          style={{
-            WebkitOverflowScrolling: "touch",
-            touchAction: "pan-y",
-          }}
-        >
+        <SelectPrimitive.Viewport className="p-1 h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]">
           {children}
         </SelectPrimitive.Viewport>
         <SelectScrollDownButton />
@@ -197,43 +185,18 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-pointer select-none items-center rounded-md py-2.5 sm:py-2 pl-8 pr-2 text-sm outline-none",
-      "transition-all duration-150 ease-out",
-      "hover:bg-accent/80 hover:text-accent-foreground",
-      "focus:bg-accent focus:text-accent-foreground",
-      "active:bg-accent active:text-accent-foreground",
-      "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-      "touch-manipulation",
+      "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}
-    onSelect={(e) => {
-      // Prevent any scroll behavior when item is selected
-      e.preventDefault();
-      
-      // Call the original onSelect if it exists
-      if (props.onSelect) {
-        props.onSelect(e);
-      }
-    }}
-    onClick={(e) => {
-      // Prevent scroll on click
-      e.preventDefault();
-      e.stopPropagation();
-      
-      // Call the original onClick if it exists
-      if (props.onClick) {
-        props.onClick(e);
-      }
-    }}
     {...props}
   >
     <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
       <SelectPrimitive.ItemIndicator>
-        <Check className="h-4 w-4 text-primary animate-in fade-in-0 zoom-in-95 duration-150" />
+        <Check className="h-4 w-4" />
       </SelectPrimitive.ItemIndicator>
     </span>
 
-    <SelectPrimitive.ItemText className="truncate">{children}</SelectPrimitive.ItemText>
+    <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;

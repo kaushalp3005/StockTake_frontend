@@ -2,8 +2,42 @@ import type { Config } from "tailwindcss";
 
 export default {
   darkMode: ["class"],
-  content: ["./**/*.{ts,tsx}"],
+  content: [
+    "./index.html",
+    "./pages/**/*.{ts,tsx}",
+    "./components/**/*.{ts,tsx}",
+    "./hooks/**/*.{ts,tsx}",
+    "./lib/**/*.{ts,tsx}",
+    "./utils/**/*.{ts,tsx}",
+    "./App.tsx"
+  ],
   prefix: "",
+  // Safelist important classes that might be purged incorrectly
+  safelist: [
+    'warehouse-entries-drawer',
+    'data-state-open',
+    'data-radix-select-content',
+    'data-radix-select-viewport',
+    'data-vaul-drawer-content',
+    'fixed',
+    'z-50',
+    'z-9999',
+    // Mobile responsive classes
+    'sm:w-full',
+    'md:w-3/4', 
+    'lg:w-1/2',
+    // Position classes
+    'left-0',
+    'left-25',
+    'right-0',
+    'top-0',
+    'bottom-0',
+    // Animation classes
+    'animate-in',
+    'animate-out',
+    'slide-in-from-bottom',
+    'slide-out-to-bottom',
+  ],
   theme: {
     container: {
       center: true,
