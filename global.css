@@ -5,6 +5,125 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Prevent viewport jumping on dropdown interactions */
+.select-dropdown-content {
+  /* Ensure dropdown doesn't cause page scroll */
+  position: fixed !important;
+  z-index: 9999;
+}
+
+/* Prevent iOS zoom on input focus */
+input[type="text"],
+input[type="number"],
+select {
+  font-size: 16px;
+}
+
+/* Prevent page scroll when body has fixed positioning for dropdown */
+body[style*="position: fixed"] {
+  overflow: hidden !important;
+}
+
+/* Smooth scroll behavior for better UX */
+html {
+  scroll-behavior: auto; /* Changed from smooth to auto to prevent conflicts */
+}
+
+/* Prevent overscroll on mobile */
+body {
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* iOS Safari viewport fix */
+@supports (-webkit-touch-callout: none) {
+  /* iOS specific styles */
+  .select-dropdown-content {
+    -webkit-overflow-scrolling: touch;
+    touch-action: manipulation;
+  }
+  
+  /* Prevent iOS viewport zoom/shift on focus */
+  input, 
+  select, 
+  textarea {
+    font-size: 16px !important;
+    transform-origin: left top;
+    will-change: transform;
+  }
+}
+
+/* Prevent select dropdown from causing scroll on mobile */
+[data-radix-select-content] {
+  position: fixed !important;
+  z-index: 9999;
+  max-height: 50vh !important;
+  overscroll-behavior: contain;
+}
+
+/* Better scroll prevention for radix-ui select */
+[data-radix-select-viewport] {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Custom scrollbar for dropdown */
+.select-dropdown-content [data-radix-select-viewport]::-webkit-scrollbar {
+  width: 4px;
+}
+
+.select-dropdown-content [data-radix-select-viewport]::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+}
+
+.select-dropdown-content [data-radix-select-viewport]::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 2px;
+}
+
+.select-dropdown-content [data-radix-select-viewport]::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--accent));
+}
+
+/* Fix for Select trigger focus state */
+[data-radix-select-trigger] {
+  touch-action: manipulation;
+}
+
+/* Ensure select items don't cause scroll */
+[data-radix-select-item] {
+  touch-action: manipulation;
+}
+
+/* Warehouse entries section - 75% width for vaul drawer */
+.warehouse-entries-drawer [data-vaul-drawer-content] {
+  left: 25% !important;
+  right: 0 !important;
+  width: 75% !important;
+  max-width: 75% !important;
+}
+
+/* Mobile responsive - keep full width on mobile */
+@media (max-width: 768px) {
+  .warehouse-entries-drawer [data-vaul-drawer-content] {
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+}
+
+/* Alternative approach using CSS variables */
+.warehouse-entries-drawer {
+  --drawer-width: 75%;
+}
+
+@media (max-width: 768px) {
+  .warehouse-entries-drawer {
+    --drawer-width: 100%;
+  }
+}
+
 @layer base {
   /**
    * Tailwind CSS theme

@@ -31,6 +31,7 @@ interface ResultsheetEntry {
 
 interface ResultsheetDataItem {
   item_name: string;
+  item_type: string;
   group: string;
   subgroup: string;
 }
@@ -183,8 +184,8 @@ export default function ResultsheetView() {
       const worksheet = workbook.addWorksheet("Resultsheet");
 
       // Build header rows
-      // Row 1: Group | Subgroup | Item Name | UOM | Warehouse1 (colspan) | Warehouse2 (colspan) | ... | Total Weight
-      const headerRow1 = ["Group", "Subgroup", "Item Name", "UOM (kg)"];
+      // Row 1: Group | Subgroup | Item Name | UOM | Item Type | Warehouse1 (colspan) | Warehouse2 (colspan) | ... | Total Weight
+      const headerRow1 = ["Group", "Subgroup", "Item Name", "UOM (kg)", "Item Type"];
       sheetData.warehouses.forEach((warehouse) => {
         // Add warehouse name spanning all its floors (2 cols per floor: weight + qty)
         for (let i = 0; i < warehouse.floors.length * 2; i++) {
@@ -202,7 +203,7 @@ export default function ResultsheetView() {
       row1.alignment = { horizontal: "center", vertical: "middle" };
 
       // Row 2: Floor names (each spanning 2 columns)
-      const headerRow2 = ["", "", "", ""]; // Empty for Group, Subgroup, Item Name, UOM
+      const headerRow2 = ["", "", "", "", ""]; // Empty for Group, Subgroup, Item Name, UOM, Item Type
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach((floor) => {
           headerRow2.push(floor);
@@ -216,7 +217,7 @@ export default function ResultsheetView() {
       row2.alignment = { horizontal: "center", vertical: "middle" };
 
       // Row 3: Qty | Weight labels
-      const headerRow3 = ["", "", "", ""]; // Empty for Group, Subgroup, Item Name, UOM
+      const headerRow3 = ["", "", "", "", ""]; // Empty for Group, Subgroup, Item Name, UOM, Item Type
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach(() => {
           headerRow3.push("Qty");
@@ -232,8 +233,11 @@ export default function ResultsheetView() {
       // Merge cells for UOM column (spans 3 rows)
       worksheet.mergeCells(1, 4, 3, 4);
       
+      // Merge cells for Item Type column (spans 3 rows)
+      worksheet.mergeCells(1, 5, 3, 5);
+      
       // Merge cells for warehouse headers
-      let colIndex = 5; // Start after Group, Subgroup, Item Name, UOM
+      let colIndex = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
       sheetData.warehouses.forEach((warehouse) => {
         const colspan = warehouse.floors.length * 2;
         worksheet.mergeCells(1, colIndex, 1, colIndex + colspan - 1);
@@ -241,7 +245,7 @@ export default function ResultsheetView() {
       });
 
       // Merge cells for floor headers
-      colIndex = 5; // Start after Group, Subgroup, Item Name, UOM
+      colIndex = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach(() => {
           worksheet.mergeCells(2, colIndex, 2, colIndex + 1);
@@ -257,7 +261,9 @@ export default function ResultsheetView() {
 
       // Add data rows
       sheetData.items.forEach((item) => {
-        const itemKey = item.item_name.toUpperCase();
+        // Use item_name + item_type as key to match backend data structure
+        const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
+        const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
         // Get UOM from first available data entry for this item
         let uom = 0;
         for (const warehouse of sheetData.warehouses) {
@@ -271,7 +277,7 @@ export default function ResultsheetView() {
           if (uom > 0) break;
         }
         
-        const row = [item.group, item.subgroup, item.item_name, uom > 0 ? uom.toFixed(3) : "-"];
+        const row = [item.group, item.subgroup, item.item_name, uom > 0 ? uom.toFixed(3) : "-", (item.item_type && item.item_type.trim()) ? item.item_type : "-"];
         
         // Calculate total weight for this item
         let itemTotalWeight = 0;
@@ -291,8 +297,10 @@ export default function ResultsheetView() {
         dataRow.alignment = { horizontal: "left", vertical: "middle" };
         // Center align UOM column
         dataRow.getCell(4).alignment = { horizontal: "center" };
+        // Center align Item Type column
+        dataRow.getCell(5).alignment = { horizontal: "center" };
         // Center align qty and weight columns
-        let dataCol = 5; // Start after Group, Subgroup, Item Name, UOM
+        let dataCol = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
         sheetData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach(() => {
             dataRow.getCell(dataCol).alignment = { horizontal: "center" }; // Qty
@@ -307,23 +315,25 @@ export default function ResultsheetView() {
       });
 
       // Add total row
-      const totalRow = ["TOTAL", "", "", ""]; // Group, Subgroup, Item Name, UOM
+      const totalRow = ["TOTAL", "", "", "", ""]; // Group, Subgroup, Item Name, UOM, Item Type
       let grandTotalWeight = 0;
-      sheetData.warehouses.forEach((warehouse) => {
-        warehouse.floors.forEach((floor) => {
-          let totalWeight = 0;
-          let totalQuantity = 0;
-          sheetData.items.forEach((item) => {
-            const itemKey = item.item_name.toUpperCase();
-            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
-            totalWeight += cellData.weight || 0;
-            totalQuantity += cellData.quantity || 0;
-            grandTotalWeight += cellData.weight || 0;
+        sheetData.warehouses.forEach((warehouse) => {
+          warehouse.floors.forEach((floor) => {
+            let totalWeight = 0;
+            let totalQuantity = 0;
+            sheetData.items.forEach((item) => {
+              // Use item_name + item_type as key to match backend data structure
+              const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
+              const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
+              const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
+              totalWeight += cellData.weight || 0;
+              totalQuantity += cellData.quantity || 0;
+              grandTotalWeight += cellData.weight || 0;
+            });
+            totalRow.push(totalQuantity > 0 ? totalQuantity.toString() : "-");
+            totalRow.push(totalWeight > 0 ? totalWeight.toFixed(2) : "-");
           });
-          totalRow.push(totalQuantity > 0 ? totalQuantity.toString() : "-");
-          totalRow.push(totalWeight > 0 ? totalWeight.toFixed(2) : "-");
         });
-      });
       // Add grand total weight
       totalRow.push(grandTotalWeight > 0 ? grandTotalWeight.toFixed(2) : "-");
       const totalRowObj = worksheet.addRow(totalRow);
@@ -332,8 +342,10 @@ export default function ResultsheetView() {
       totalRowObj.alignment = { horizontal: "left", vertical: "middle" };
       // Center align UOM column (empty in total row)
       totalRowObj.getCell(4).alignment = { horizontal: "center" };
+      // Center align Item Type column (empty in total row)
+      totalRowObj.getCell(5).alignment = { horizontal: "center" };
       // Center align total columns
-      let totalCol = 5; // Start after Group, Subgroup, Item Name, UOM
+      let totalCol = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach(() => {
           totalRowObj.getCell(totalCol).alignment = { horizontal: "center" };
@@ -362,7 +374,8 @@ export default function ResultsheetView() {
       worksheet.getColumn(2).width = 15; // Subgroup
       worksheet.getColumn(3).width = 30; // Item Name
       worksheet.getColumn(4).width = 12; // UOM
-      let widthCol = 5; // Start after Group, Subgroup, Item Name, UOM
+      worksheet.getColumn(5).width = 12; // Item Type
+      let widthCol = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
       sheetData.warehouses.forEach((warehouse) => {
         warehouse.floors.forEach(() => {
           worksheet.getColumn(widthCol).width = 10; // Qty
@@ -372,8 +385,8 @@ export default function ResultsheetView() {
       });
       worksheet.getColumn(widthCol).width = 15; // Total Weight column
 
-      // Freeze first 4 columns (Group, Subgroup, Item Name, UOM)
-      worksheet.views = [{ state: "frozen", xSplit: 4, ySplit: 3 }];
+      // Freeze first 5 columns (Group, Subgroup, Item Name, UOM, Item Type)
+      worksheet.views = [{ state: "frozen", xSplit: 5, ySplit: 3 }];
 
       // Save file
       const buffer = await workbook.xlsx.writeBuffer();
@@ -596,6 +609,12 @@ export default function ResultsheetView() {
                       >
                         UOM (kg)
                       </TableHead>
+                      <TableHead 
+                        rowSpan={3}
+                        className="sticky left-[540px] z-10 bg-gray-100 border border-gray-400 min-w-[100px] align-middle font-bold text-center text-xs py-2"
+                      >
+                        Item Type
+                      </TableHead>
                       {sheetData.warehouses.map((warehouse) => (
                         <TableHead
                           key={warehouse.name}
@@ -644,7 +663,9 @@ export default function ResultsheetView() {
                   </TableHeader>
                   <TableBody>
                     {sheetData.items.map((item) => {
-                      const itemKey = item.item_name.toUpperCase();
+                      // Use item_name + item_type as key to match backend data structure
+                      const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
+                      const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
                       // Calculate total weight for this item across all warehouses and floors
                       let itemTotalWeight = 0;
                       sheetData.warehouses.forEach((warehouse) => {
@@ -680,6 +701,9 @@ export default function ResultsheetView() {
                               }
                               return uom > 0 ? uom.toFixed(3) : "-";
                             })()}
+                          </TableCell>
+                          <TableCell className="sticky left-[540px] z-10 bg-white border border-gray-400 text-xs py-1 px-2 text-center font-medium">
+                            {item.item_type && item.item_type.trim() ? item.item_type : "-"}
                           </TableCell>
                           {sheetData.warehouses.map((warehouse) =>
                             warehouse.floors.map((floor) => {
@@ -718,12 +742,17 @@ export default function ResultsheetView() {
                       <TableCell className="sticky left-[440px] z-10 bg-yellow-100 border border-gray-400 text-xs py-1 px-2">
                         
                       </TableCell>
+                      <TableCell className="sticky left-[540px] z-10 bg-yellow-100 border border-gray-400 text-xs py-1 px-2">
+                        
+                      </TableCell>
                       {sheetData.warehouses.map((warehouse) =>
                         warehouse.floors.map((floor) => {
                           let totalWeight = 0;
                           let totalQuantity = 0;
                           sheetData.items.forEach((item) => {
-                            const itemKey = item.item_name.toUpperCase();
+                            // Use item_name + item_type as key to match backend data structure
+                            const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
+                            const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
                             const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
                             totalWeight += cellData.weight || 0;
                             totalQuantity += cellData.quantity || 0;
@@ -744,7 +773,9 @@ export default function ResultsheetView() {
                         {(() => {
                           let grandTotalWeight = 0;
                           sheetData.items.forEach((item) => {
-                            const itemKey = item.item_name.toUpperCase();
+                            // Use item_name + item_type as key to match backend data structure
+                            const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
+                            const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
                             sheetData.warehouses.forEach((warehouse) => {
                               warehouse.floors.forEach((floor) => {
                                 const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0 };

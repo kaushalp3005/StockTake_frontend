@@ -34,8 +34,10 @@ DrawerOverlay.displayName = DrawerPrimitive.Overlay.displayName;
 
 const DrawerContent = React.forwardRef<
   React.ElementRef<typeof DrawerPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Content> & {
+    containerClassName?: string;
+  }
+>(({ className, containerClassName, children, ...props }, ref) => (
   <DrawerPortal>
     <DrawerOverlay />
     <DrawerPrimitive.Content
@@ -43,6 +45,10 @@ const DrawerContent = React.forwardRef<
       className={cn(
         "fixed inset-x-0 bottom-0 z-50 flex h-auto max-h-[85vh] flex-col rounded-t-[10px] border bg-background shadow-lg",
         "sm:mt-24",
+        // Apply warehouse-entries-drawer specific styling
+        containerClassName?.includes('warehouse-entries-drawer') 
+          ? "md:left-[25%] md:right-0 md:inset-x-auto md:w-[75%]" 
+          : "",
         className,
       )}
       {...props}

@@ -434,10 +434,10 @@ export default function AddItem() {
     }
 
     const pkgSizeNum = parseFloat(packageSize);
-    const unitsNum = parseInt(units, 10);
+    const unitsNum = parseFloat(units);
 
     if (isNaN(pkgSizeNum) || isNaN(unitsNum) || pkgSizeNum <= 0 || unitsNum <= 0) {
-      setError("UOM and units must be valid positive numbers");
+      setError("UOM and units must be valid positive numbers (decimals allowed, e.g., 450.25)");
       return;
     }
 
@@ -521,8 +521,8 @@ export default function AddItem() {
   };
 
   const handleSubmitAddQt = (itemId: string) => {
-    if (!newQuantity || isNaN(parseInt(newQuantity, 10)) || parseInt(newQuantity, 10) <= 0) {
-      setError("Please enter a valid quantity");
+    if (!newQuantity || isNaN(parseFloat(newQuantity)) || parseFloat(newQuantity) <= 0) {
+      setError("Please enter a valid quantity (decimals allowed, e.g., 450.25)");
       return;
     }
 
@@ -532,7 +532,7 @@ export default function AddItem() {
       return;
     }
 
-    const newUnits = parseInt(newQuantity, 10);
+    const newUnits = parseFloat(newQuantity);
     const totalWeight = calculateTotalWeight(existingItem.packageSize, newUnits);
 
     const newItem: AddedItem = {
@@ -1003,7 +1003,8 @@ export default function AddItem() {
                     <Input
                       id="units"
                       type="number"
-                      placeholder="e.g., 10"
+                      step="0.01"
+                      placeholder="e.g., 450.25"
                       value={units}
                       onChange={(e) => setUnits(e.target.value)}
                       className="bg-input border-input"
@@ -1012,17 +1013,35 @@ export default function AddItem() {
                 </div>
 
                 {/* Auto-calculated Total */}
-                {packageSize && units && (
+                {(packageSize || units) && (
                   <div className="p-4 bg-primary/10 rounded-lg border border-primary/20">
                     <p className="text-sm text-muted-foreground mb-1">
                       Total Weight (Auto-calculated)
                     </p>
                     <p className="text-2xl font-bold text-primary">
-                      {(
-                        parseFloat(packageSize) * parseInt(units, 10)
-                      ).toFixed(2)}{" "}
+                      {(() => {
+                        // Parse both values as floats to preserve decimal precision
+                        // If UOM is empty, default to 1.0 (assuming 1 kg per unit)
+                        const pkgSize = packageSize ? parseFloat(String(packageSize).trim()) : 1.0;
+                        const unitsValue = units ? parseFloat(String(units).trim()) : 0;
+                        
+                        // Check if values are valid numbers
+                        if (isNaN(pkgSize) || isNaN(unitsValue)) {
+                          return "0.00";
+                        }
+                        
+                        // Multiply and preserve decimal precision
+                        const calculated = pkgSize * unitsValue;
+                        // Return with 2 decimal places
+                        return calculated.toFixed(2);
+                      })()}{" "}
                       kg
                     </p>
+                    {!packageSize && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                        ⚠ UOM not set - using 1.0 kg per unit as default
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -1104,7 +1123,7 @@ export default function AddItem() {
                                         </p>
                                         <div className="flex items-center gap-2 mt-2">
                                           <p className="text-xs text-muted-foreground">
-                                            UOM: {formatUOM(item.packageSize)} × {item.units} units
+                                            UOM: {formatUOM(item.packageSize)} × {item.units % 1 === 0 ? item.units : item.units.toFixed(2)} units
                                           </p>
                                         </div>
                                         <p className="text-xs font-semibold text-primary mt-1">
@@ -1117,7 +1136,8 @@ export default function AddItem() {
                                             <div className="flex items-center gap-2">
                                               <Input
                                                 type="number"
-                                                placeholder="Enter quantity"
+                                                step="0.01"
+                                                placeholder="Enter quantity (e.g., 450.25)"
                                                 value={newQuantity}
                                                 onChange={(e) => setNewQuantity(e.target.value)}
                                                 className="h-8 text-xs flex-1 bg-background"
@@ -1135,7 +1155,7 @@ export default function AddItem() {
                                                 size="sm"
                                                 onClick={() => handleSubmitAddQt(item.id)}
                                                 className="h-8 px-2 bg-green-600 hover:bg-green-700"
-                                                disabled={!newQuantity || parseInt(newQuantity, 10) <= 0}
+                                                disabled={!newQuantity || parseFloat(newQuantity) <= 0 || isNaN(parseFloat(newQuantity))}
                                               >
                                                 <Check className="w-3 h-3" />
                                               </Button>

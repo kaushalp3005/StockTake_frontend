@@ -87,7 +87,7 @@ export default function ManagerReview() {
   const [selectedItemName, setSelectedItemName] = useState<string | null>(null);
   const [itemDetailsOpen, setItemDetailsOpen] = useState(false);
   const [checkedEntries, setCheckedEntries] = useState<Record<string, boolean>>({});
-  const [editingQuantity, setEditingQuantity] = useState<{ entryId: string; value: number } | null>(null);
+  const [editingQuantity, setEditingQuantity] = useState<{ entryId: string; value: string } | null>(null);
   const [editingItemName, setEditingItemName] = useState<{ itemName: string; newName: string } | null>(null);
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const longPressDetectedRef = useRef<boolean>(false);
@@ -540,7 +540,7 @@ export default function ManagerReview() {
     const timer = setTimeout(() => {
       longPressDetectedRef.current = true;
       if (type === 'quantity') {
-        setEditingQuantity({ entryId, value: currentValue });
+        setEditingQuantity({ entryId, value: currentValue.toString() });
       }
     }, 500); // 500ms for long press
     longPressTimerRef.current = timer;
@@ -571,7 +571,7 @@ export default function ManagerReview() {
 
   const handleSaveEditedQuantity = async (entryId: string, newValue: number) => {
     if (isNaN(newValue) || newValue <= 0) {
-      alert("Please enter a valid positive number");
+      alert("Please enter a valid positive number (decimals allowed, e.g., 55.6)");
       return;
     }
 
@@ -586,12 +586,15 @@ export default function ManagerReview() {
         return;
       }
 
+      // Parse the value as float to preserve decimal precision
+      const parsedValue = parseFloat(String(newValue)) || 0;
+      
       // Calculate new total weight
-      const newTotalWeight = entry.packageSize * newValue;
+      const newTotalWeight = entry.packageSize * parsedValue;
 
       // Update entry in database
       await stocktakeEntriesAPI.updateEntry(entryId, {
-        totalQuantity: newValue,
+        totalQuantity: parsedValue,
         totalWeight: newTotalWeight,
       });
 
@@ -1236,7 +1239,10 @@ export default function ManagerReview() {
           setSelectedItemName(null);
         }
       }}>
-        <DrawerContent className="flex flex-col max-h-[85vh]">
+        <DrawerContent 
+          className="flex flex-col h-90"
+          containerClassName="warehouse-entries-drawer"
+        >
           <DrawerHeader className="pb-2 flex-shrink-0">
             <div className="flex items-center gap-2 mb-1">
               <Button
@@ -1315,17 +1321,19 @@ export default function ManagerReview() {
                                       <div className="flex flex-col gap-2">
                                         <Input
                                           type="number"
+                                          step="0.1"
                                           value={editingQuantity.value}
                                           onChange={(e) => {
-                                            const val = parseInt(e.target.value) || 0;
-                                            setEditingQuantity({ entryId: entry.id, value: val });
+                                            // Store the raw string value to preserve decimal precision
+                                            setEditingQuantity({ entryId: entry.id, value: e.target.value });
                                           }}
                                           className="text-center text-lg font-bold"
                                           autoFocus
-                                          min="1"
+                                          min="0.1"
                                           onKeyDown={(e) => {
                                             if (e.key === "Enter") {
-                                              handleSaveEditedQuantity(entry.id, editingQuantity.value);
+                                              const val = parseFloat(editingQuantity.value) || 0;
+                                              handleSaveEditedQuantity(entry.id, val);
                                             } else if (e.key === "Escape") {
                                               handleCancelEdit();
                                             }
@@ -1334,7 +1342,10 @@ export default function ManagerReview() {
                                         <div className="flex gap-1 justify-center">
                                           <Button
                                             size="sm"
-                                            onClick={() => handleSaveEditedQuantity(entry.id, editingQuantity.value)}
+                                            onClick={() => {
+                                              const val = parseFloat(editingQuantity.value) || 0;
+                                              handleSaveEditedQuantity(entry.id, val);
+                                            }}
                                             className="h-6 px-2 bg-green-600 hover:bg-green-700"
                                           >
                                             <Check className="w-3 h-3" />
@@ -1400,7 +1411,7 @@ export default function ManagerReview() {
                                         Long press to edit
                                       </p>
                                       <p className="text-xl font-bold text-black dark:text-white">
-                                        {entry.units}
+                                        {entry.units % 1 === 0 ? entry.units : entry.units.toFixed(1)}
                                       </p>
                                       <p className="text-[9px] text-muted-foreground mt-1">
                                         UOM: {entry.packageSize.toFixed(3)}kg

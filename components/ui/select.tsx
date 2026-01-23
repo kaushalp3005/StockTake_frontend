@@ -16,6 +16,7 @@ const SelectTrigger = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
   <SelectPrimitive.Trigger
     ref={ref}
+    data-radix-select-trigger=""
     className={cn(
       "flex h-10 w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background",
       "placeholder:text-muted-foreground",
@@ -73,48 +74,108 @@ SelectScrollDownButton.displayName =
 const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(({ className, children, position = "popper", side = "bottom", sideOffset = 4, avoidCollisions = true, ...props }, ref) => (
-  <SelectPrimitive.Portal>
-    <SelectPrimitive.Content
-      ref={ref}
-      className={cn(
-        "select-dropdown-content relative z-50 max-h-[60vh] sm:max-h-96 min-w-[8rem] overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg",
-        "data-[state=open]:animate-in data-[state=closed]:animate-out",
-        "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-        "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
-        "data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2",
-        "data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2",
-        className,
-      )}
-      position={position}
-      side={side}
-      sideOffset={sideOffset}
-      avoidCollisions={avoidCollisions}
-      onCloseAutoFocus={(e) => {
-        // Prevent auto-focus on close to avoid scroll jumping
-        e.preventDefault();
-      }}
-      {...props}
-    >
-      <SelectScrollUpButton />
-      <SelectPrimitive.Viewport
+>(({ className, children, position = "popper", side = "bottom", sideOffset = 4, avoidCollisions = true, ...props }, ref) => {
+  // Store scroll position when dropdown opens
+  const scrollPositionRef = React.useRef<number>(0);
+
+  const handleOpenAutoFocus = React.useCallback((e: Event) => {
+    // Always prevent the default focus behavior
+    e.preventDefault();
+    
+    // Store current scroll position
+    scrollPositionRef.current = window.pageYOffset || document.documentElement.scrollTop;
+    
+    // Prevent page from scrolling
+    document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${scrollPositionRef.current}px`;
+    document.body.style.width = '100%';
+  }, []);
+
+  const handleCloseAutoFocus = React.useCallback((e: Event) => {
+    // Always prevent the default focus behavior
+    e.preventDefault();
+    
+    // Restore scroll position
+    document.body.style.overflow = '';
+    document.body.style.position = '';
+    document.body.style.top = '';
+    document.body.style.width = '';
+    
+    // Restore the exact scroll position without animation
+    if (scrollPositionRef.current > 0) {
+      window.scrollTo({
+        top: scrollPositionRef.current,
+        behavior: 'instant' as ScrollBehavior
+      });
+    }
+  }, []);
+
+  // Also handle escape key and click outside
+  React.useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // Restore scroll when escaping
+        document.body.style.overflow = '';
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.width = '';
+        
+        if (scrollPositionRef.current > 0) {
+          window.scrollTo({
+            top: scrollPositionRef.current,
+            behavior: 'instant' as ScrollBehavior
+          });
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, []);
+
+  return (
+    <SelectPrimitive.Portal>
+      <SelectPrimitive.Content
+        ref={ref}
         className={cn(
-          "p-1 max-h-[50vh] sm:max-h-[300px] overflow-y-auto",
-          "overscroll-contain touch-pan-y",
-          "-webkit-overflow-scrolling-touch",
-          position === "popper" &&
-            "w-full min-w-[var(--radix-select-trigger-width)]",
+          "select-dropdown-content relative z-50 max-h-[60vh] sm:max-h-96 min-w-[8rem] overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg",
+          "data-[state=open]:animate-in data-[state=closed]:animate-out",
+          "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+          "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          "data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2",
+          "data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2",
+          className,
         )}
-        style={{
-          WebkitOverflowScrolling: "touch",
-        }}
+        position={position}
+        side={side}
+        sideOffset={sideOffset}
+        avoidCollisions={avoidCollisions}
+        onOpenAutoFocus={handleOpenAutoFocus}
+        onCloseAutoFocus={handleCloseAutoFocus}
+        {...props}
       >
-        {children}
-      </SelectPrimitive.Viewport>
-      <SelectScrollDownButton />
-    </SelectPrimitive.Content>
-  </SelectPrimitive.Portal>
-));
+        <SelectScrollUpButton />
+        <SelectPrimitive.Viewport
+          className={cn(
+            "p-1 max-h-[50vh] sm:max-h-[300px] overflow-y-auto",
+            "overscroll-contain touch-pan-y",
+            "-webkit-overflow-scrolling-touch",
+            position === "popper" &&
+              "w-full min-w-[var(--radix-select-trigger-width)]",
+          )}
+          style={{
+            WebkitOverflowScrolling: "touch",
+            touchAction: "pan-y",
+          }}
+        >
+          {children}
+        </SelectPrimitive.Viewport>
+        <SelectScrollDownButton />
+      </SelectPrimitive.Content>
+    </SelectPrimitive.Portal>
+  )
+});
 SelectContent.displayName = SelectPrimitive.Content.displayName;
 
 const SelectLabel = React.forwardRef<
@@ -145,6 +206,25 @@ const SelectItem = React.forwardRef<
       "touch-manipulation",
       className,
     )}
+    onSelect={(e) => {
+      // Prevent any scroll behavior when item is selected
+      e.preventDefault();
+      
+      // Call the original onSelect if it exists
+      if (props.onSelect) {
+        props.onSelect(e);
+      }
+    }}
+    onClick={(e) => {
+      // Prevent scroll on click
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // Call the original onClick if it exists
+      if (props.onClick) {
+        props.onClick(e);
+      }
+    }}
     {...props}
   >
     <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
