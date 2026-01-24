@@ -375,29 +375,22 @@ export default function AddItem() {
       const matchedParticular = matchedSubgroup?.particulars.find((p) => p.name === particularsValue);
       
       if (matchedGroup && matchedSubgroup && matchedParticular) {
-        // Data is ready, set values directly
+        // Data is ready, set values sequentially with React state batching
         console.log("Setting category to:", groupValue);
         setCategory(groupValue);
+        console.log("Setting subcategory to:", subgroupValue);
+        setSubcategory(subgroupValue);
+        console.log("Setting description to:", particularsValue);
+        setDescription(particularsValue);
         
-        // Use setTimeout to ensure sequential updates work properly
-        setTimeout(() => {
-          console.log("Setting subcategory to:", subgroupValue);
-          setSubcategory(subgroupValue);
-          
-          setTimeout(() => {
-            console.log("Setting description to:", particularsValue);
-            setDescription(particularsValue);
-            
-            // Set UOM if available
-            if (result.uom !== null && result.uom !== undefined && !isNaN(result.uom)) {
-              const uomValue = result.uom.toFixed(3);
-              console.log("Setting UOM to:", uomValue);
-              setPackageSize(uomValue);
-            } else {
-              console.log("UOM not available or invalid:", result.uom);
-            }
-          }, 200);
-        }, 200);
+        // Set UOM if available
+        if (result.uom !== null && result.uom !== undefined && !isNaN(result.uom)) {
+          const uomValue = result.uom.toFixed(3);
+          console.log("Setting UOM to:", uomValue);
+          setPackageSize(uomValue);
+        } else {
+          console.log("UOM not available or invalid:", result.uom);
+        }
       } else {
         // Data not ready, store pending selection
         console.log("CategorialData not ready, storing pending selection");

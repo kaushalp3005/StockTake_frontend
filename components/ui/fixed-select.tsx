@@ -28,6 +28,11 @@ export function FixedSelect({
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const scrollY = React.useRef(0);
 
+  // Sync internal state with prop value
+  React.useEffect(() => {
+    setSelectedValue(value || "");
+  }, [value]);
+
   const selectedOption = options.find(option => option.value === selectedValue);
 
   const handleOpen = () => {
