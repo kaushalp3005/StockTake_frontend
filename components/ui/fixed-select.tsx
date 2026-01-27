@@ -26,7 +26,6 @@ export function FixedSelect({
   const [selectedValue, setSelectedValue] = React.useState(value || "");
   const dropdownRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
-  const scrollY = React.useRef(0);
 
   // Sync internal state with prop value
   React.useEffect(() => {
@@ -36,25 +35,11 @@ export function FixedSelect({
   const selectedOption = options.find(option => option.value === selectedValue);
 
   const handleOpen = () => {
-    // Store scroll position and prevent scrolling
-    scrollY.current = window.pageYOffset;
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${scrollY.current}px`;
-    document.body.style.width = '100%';
-    document.body.style.overflow = 'hidden';
-    
     setIsOpen(true);
   };
 
   const handleClose = () => {
     setIsOpen(false);
-    
-    // Restore scroll position
-    document.body.style.position = '';
-    document.body.style.top = '';
-    document.body.style.width = '';
-    document.body.style.overflow = '';
-    window.scrollTo(0, scrollY.current);
   };
 
   const handleSelect = (optionValue: string) => {
@@ -80,16 +65,9 @@ export function FixedSelect({
       document.addEventListener('mousedown', handleClickOutside);
       document.addEventListener('touchstart', handleClickOutside);
       
-      // Prevent scroll events
-      const preventDefault = (e: Event) => e.preventDefault();
-      document.addEventListener('wheel', preventDefault, { passive: false });
-      document.addEventListener('touchmove', preventDefault, { passive: false });
-      
       return () => {
         document.removeEventListener('mousedown', handleClickOutside);
         document.removeEventListener('touchstart', handleClickOutside);
-        document.removeEventListener('wheel', preventDefault);
-        document.removeEventListener('touchmove', preventDefault);
       };
     }
   }, [isOpen]);
@@ -111,7 +89,11 @@ export function FixedSelect({
       <button
         ref={triggerRef}
         type="button"
-        onClick={isOpen ? handleClose : handleOpen}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          isOpen ? handleClose() : handleOpen();
+        }}
         className={cn(
           "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
           className
@@ -133,7 +115,11 @@ export function FixedSelect({
               <button
                 key={option.value}
                 type="button"
-                onClick={() => handleSelect(option.value)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleSelect(option.value);
+                }}
                 className={cn(
                   "relative flex w-full cursor-pointer select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground",
                   selectedValue === option.value && "bg-accent"

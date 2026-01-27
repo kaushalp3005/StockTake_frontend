@@ -29,6 +29,9 @@ interface FloorSession {
   authority: string;
   itemType?: string;
   items: Item[];
+  userName?: string;
+  userEmail?: string;
+  userId?: string;
 }
 
 export default function EntriesSummary() {
@@ -92,28 +95,36 @@ export default function EntriesSummary() {
       // Get itemType from session or from first item
       const sessionItemType = floorSession.itemType || (floorSession.items.length > 0 && (floorSession.items[0] as any).itemType) || "";
       
-      const entries = floorSession.items.map((item: Item) => ({
-        itemName: item.description,
-        description: item.description,
-        itemType: (item as any).itemType || sessionItemType || "",
-        category: item.category,
-        itemCategory: item.category,
-        subcategory: item.subcategory,
-        itemSubcategory: item.subcategory,
-        floorName: floorSession.floorName || floorSession.floor || "",
-        floor: floorSession.floor || "",
-        warehouse: floorSession.warehouse || "",
-        units: item.units,
-        totalQuantity: item.units,
-        packageSize: item.packageSize,
-        unitUom: item.packageSize,
-        totalWeight: item.totalWeight,
-        enteredBy: user?.name || floorSession.userName || "",
-        userName: user?.name || floorSession.userName || "",
-        enteredByEmail: user?.email || floorSession.userEmail || "",
-        userEmail: user?.email || floorSession.userEmail || "",
-        authority: floorSession.authority || "",
-      }));
+      const entries = floorSession.items.map((item: Item) => {
+        // Check if this is an "Other Category" item
+        // In this case, the category field contains the unlisted item name and should be saved as item_name
+        // We detect this when category exists but subcategory is empty (custom category has no subcategory)
+        const isCustomCategory = item.category && !item.subcategory;
+        const itemName = isCustomCategory ? item.category : item.description;
+        
+        return {
+          itemName: itemName,
+          description: item.description || "",
+          itemType: (item as any).itemType || sessionItemType || "",
+          category: isCustomCategory ? "" : item.category,
+          itemCategory: isCustomCategory ? "" : item.category,
+          subcategory: item.subcategory,
+          itemSubcategory: item.subcategory,
+          floorName: floorSession.floorName || floorSession.floor || "",
+          floor: floorSession.floor || "",
+          warehouse: floorSession.warehouse || "",
+          units: item.units,
+          totalQuantity: item.units,
+          packageSize: item.packageSize,
+          unitUom: item.packageSize,
+          totalWeight: item.totalWeight,
+          enteredBy: user?.name || floorSession.userName || "",
+          userName: user?.name || floorSession.userName || "",
+          enteredByEmail: user?.email || floorSession.userEmail || "",
+          userEmail: user?.email || floorSession.userEmail || "",
+          authority: floorSession.authority || "",
+        };
+      });
 
       // Submit entries to database
       const result = await stocktakeEntriesAPI.submitEntries(entries);
@@ -136,6 +147,9 @@ export default function EntriesSummary() {
       );
       allSessions.push(updatedSession);
       localStorage.setItem("floorSessions", JSON.stringify(allSessions));
+
+      // Clear loading state before navigation
+      setIsLoading(false);
 
       // Redirect to completion page or dashboard
       navigate("/audit/submitted", { state: { sessionId: floorSession.id } });

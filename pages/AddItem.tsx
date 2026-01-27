@@ -80,8 +80,10 @@ export default function AddItem() {
   const [stockType, setStockType] = useState<"fresh" | "offgrade" | "">("fresh");
   const [itemType, setItemType] = useState<"pm" | "rm" | "fg" | "">("");
   const [category, setCategory] = useState("");
+  const [customCategory, setCustomCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
   const [description, setDescription] = useState("");
+  const [customItemName, setCustomItemName] = useState("");
   const [packageSize, setPackageSize] = useState("");
   const [units, setUnits] = useState("");
 
@@ -245,6 +247,10 @@ export default function AddItem() {
     if (!category) {
       setSubcategory("");
       setDescription("");
+      setCustomItemName("");
+    }
+    if (category && category !== "OTHER") {
+      setCustomCategory("");
     }
   }, [category]);
 
@@ -252,6 +258,7 @@ export default function AddItem() {
   useEffect(() => {
     if (!subcategory) {
       setDescription("");
+      setCustomItemName("");
       setPackageSize("");
     }
   }, [subcategory]);
@@ -269,9 +276,16 @@ export default function AddItem() {
     console.log("Description state changed to:", description);
   }, [description]);
 
+  // Clear custom item name when regular description is selected
+  useEffect(() => {
+    if (description && description !== "OTHER") {
+      setCustomItemName("");
+    }
+  }, [description]);
+
   // Auto-fill UOM when description is selected
   useEffect(() => {
-    if (description && category && subcategory) {
+    if (description && description !== "OTHER" && category && subcategory) {
       console.log("UOM Auto-fill effect triggered:", { description, category, subcategory });
       const selectedParticular = categorialData
         .find((g) => g.name === category)
@@ -422,9 +436,42 @@ export default function AddItem() {
     setError("");
 
     // Validation
-    if (!stockType || !itemType || !category || !subcategory || !description || !packageSize || !units) {
-      setError("All fields are required");
+    const isOtherCategory = category === "OTHER";
+    const isOtherItem = description === "OTHER";
+    
+    if (!stockType || !itemType) {
+      setError("Stock type and item type are required");
       return;
+    }
+    
+    // Check category
+    if (!category) {
+      setError("Category is required");
+      return;
+    }
+    if (isOtherCategory && !customCategory) {
+      setError("Please enter unlisted item name");
+      return;
+    }
+    
+    if (isOtherItem) {
+      // For Other items, only custom item name, UOM, and units are required
+      if (!customItemName || !packageSize || !units) {
+        setError("Custom item name, UOM and units are required for Other items");
+        return;
+      }
+    } else if (!isOtherCategory) {
+      // For regular items (not Other category), all fields are required
+      if (!category || !subcategory || !description || !packageSize || !units) {
+        setError("All fields are required");
+        return;
+      }
+    } else {
+      // For Other category items, only UOM and units are required
+      if (!packageSize || !units) {
+        setError("UOM and units are required");
+        return;
+      }
     }
 
     const pkgSizeNum = parseFloat(packageSize);
@@ -436,14 +483,14 @@ export default function AddItem() {
     }
 
     const totalWeight = calculateTotalWeight(pkgSizeNum, unitsNum);
-
+    
     const newItem: AddedItem = {
       id: `item-${Date.now()}`,
       stockType: stockType === "fresh" ? "Fresh Stock" : "Off Grade/Rejection",
       itemType: itemType.toUpperCase(),
-      category: category.toUpperCase(),
-      subcategory: subcategory.toUpperCase(),
-      description: description.toUpperCase(),
+      category: isOtherCategory ? customCategory.toUpperCase() : (isOtherItem ? "" : category.toUpperCase()),
+      subcategory: isOtherItem ? "" : subcategory.toUpperCase(),
+      description: isOtherItem ? customItemName.toUpperCase() : description.toUpperCase(),
       packageSize: pkgSizeNum,
       units: unitsNum,
       totalWeight,
@@ -453,8 +500,10 @@ export default function AddItem() {
 
     // Reset form (keep stock type and item type for convenience)
     setCategory("");
+    setCustomCategory("");
     setSubcategory("");
     setDescription("");
+    setCustomItemName("");
     setPackageSize("");
     setUnits("");
   };
@@ -785,16 +834,38 @@ export default function AddItem() {
                       {isLoadingData ? "Loading categories..." : "Select item type first..."}
                     </div>
                   ) : (
-                    <FixedSelect 
-                      value={category || ""} 
-                      onValueChange={setCategory}
-                      placeholder="Select category..."
-                      options={categorialData.map(group => ({
-                        value: group.name,
-                        label: group.name
-                      }))}
-                      className="bg-input border-input"
-                    />
+                    <>
+                      <FixedSelect 
+                        value={category || ""} 
+                        onValueChange={setCategory}
+                        placeholder="Select category..."
+                        options={[
+                          ...categorialData.map(group => ({
+                            value: group.name,
+                            label: group.name
+                          })),
+                          { value: "OTHER", label: "Other (Custom Category)" }
+                        ]}
+                        className="bg-input border-input"
+                      />
+                      
+                      {/* Custom Category Input - shown when Other is selected */}
+                      {category === "OTHER" && (
+                        <div className="mt-3 space-y-2">
+                          <Label htmlFor="customCategory" className="text-foreground font-semibold text-sm">
+                            Unlisted item name
+                          </Label>
+                          <Input
+                            id="customCategory"
+                            type="text"
+                            placeholder="Enter unlisted item name..."
+                            value={customCategory}
+                            onChange={(e) => setCustomCategory(e.target.value)}
+                            className="bg-input border-input"
+                          />
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -843,19 +914,43 @@ export default function AddItem() {
                       onValueChange={(value) => {
                         setDescription(value);
                         setDescriptionSearchQuery(""); // Clear search when item is selected
+                        if (value === "OTHER") {
+                          setPackageSize(""); // Clear UOM for manual entry
+                        }
                       }}
                       placeholder="Select description..."
-                      options={
-                        categorialData
+                      options={[
+                        ...(categorialData
                           .find((g) => g.name === category)
                           ?.subgroups.find((sg) => sg.name === subcategory)
                           ?.particulars.map((particular) => ({
                             value: particular.name,
                             label: particular.name
-                          })) || []
-                      }
+                          })) || []),
+                        { value: "OTHER", label: "Other (Custom Item)" }
+                      ]}
                       className="bg-input border-input"
                     />
+                  )}
+                  
+                  {/* Custom Item Name Input - shown when Other is selected */}
+                  {description === "OTHER" && (
+                    <div className="mt-3 space-y-2">
+                      <Label htmlFor="customItemName" className="text-foreground font-semibold text-sm">
+                        Custom Item Name
+                      </Label>
+                      <Input
+                        id="customItemName"
+                        type="text"
+                        placeholder="Enter custom item name..."
+                        value={customItemName}
+                        onChange={(e) => setCustomItemName(e.target.value)}
+                        className="bg-input border-input"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        This will be saved without category and subcategory
+                      </p>
+                    </div>
                   )}
                 </div>
 
@@ -882,9 +977,11 @@ export default function AddItem() {
                         Display: {formatUOM(parseFloat(packageSize))}
                       </p>
                     )}
-                    {!description && (
+                    {description === "OTHER" ? (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">Enter UOM manually for custom item</p>
+                    ) : !description ? (
                       <p className="text-xs text-muted-foreground">Select description to auto-fill UOM from database</p>
-                    )}
+                    ) : null}
                   </div>
 
                   {/* Units */}

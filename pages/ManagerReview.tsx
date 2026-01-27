@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Trash2 } from "lucide-react";
+import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Trash2, Upload } from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -82,6 +82,8 @@ export default function ManagerReview() {
   const [saving, setSaving] = useState(false);
   const [savingData, setSavingData] = useState(false);
   const [clearingEntries, setClearingEntries] = useState(false);
+  const [deletingWarehouse, setDeletingWarehouse] = useState<string | null>(null);
+  const [deletingFloorEntries, setDeletingFloorEntries] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [itemsDrawerOpen, setItemsDrawerOpen] = useState(false);
   const [selectedItemName, setSelectedItemName] = useState<string | null>(null);
@@ -225,11 +227,6 @@ export default function ManagerReview() {
   };
 
   const handleSaveCheckedEntries = () => {
-    if (!confirmed) {
-      alert("Please confirm that all items are accurate before saving.");
-      return;
-    }
-    
     setSaving(true);
     try {
       // Save checked entries to localStorage with warehouse/floor/item key
@@ -242,7 +239,6 @@ export default function ManagerReview() {
       
       setTimeout(() => {
         setSaving(false);
-        setConfirmed(false);
       }, 500);
     } catch (err) {
       alert("Failed to save checked entries");
@@ -451,9 +447,12 @@ export default function ManagerReview() {
         weight: e.weight
       })));
       
+      // Filter entries with valid entryId
+      const validEntries = allCheckedEntries.filter(e => e.entryId);
+      
       // Call API to save - backend will insert new entries
       console.log("Calling API: stocktakeEntriesAPI.saveResultsheet()...");
-      const response = await stocktakeEntriesAPI.saveResultsheet(allCheckedEntries);
+      const response = await stocktakeEntriesAPI.saveResultsheet(validEntries);
       console.log("API Response received:", response);
       
       // After saving, refresh the grouped entries for current warehouse/floor
@@ -534,6 +533,84 @@ export default function ManagerReview() {
     }
   };
 
+  const handleDeleteFloorEntries = async () => {
+    if (!selectedWarehouse || !selectedFloor) {
+      return;
+    }
+
+    // Confirm before deleting
+    const confirmed = window.confirm(
+      `Are you sure you want to delete ALL entries for ${selectedWarehouse} - ${selectedFloor}? This action cannot be undone.`
+    );
+    
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingFloorEntries(true);
+    try {
+      const response = await stocktakeEntriesAPI.clearFloorEntries(selectedWarehouse, selectedFloor);
+      
+      toast({
+        title: "Success",
+        description: `Floor entries deleted successfully! ${response.deletedCount || 0} entries removed.`,
+      });
+      
+      // Close the drawer and refresh
+      setItemsDrawerOpen(false);
+      setSelectedFloor(null);
+      
+      // Optionally reload warehouse floors
+      if (selectedWarehouse) {
+        handleWarehouseClick(selectedWarehouse);
+      }
+      
+      setDeletingFloorEntries(false);
+    } catch (err: any) {
+      console.error("Error deleting floor entries:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to delete floor entries",
+        variant: "destructive",
+      });
+      setDeletingFloorEntries(false);
+    }
+  };
+
+  const handleDeleteWarehouseEntries = async (warehouse: string, event: React.MouseEvent) => {
+    // Stop propagation to prevent opening the warehouse drawer
+    event.stopPropagation();
+
+    // Confirm before deleting
+    const confirmed = window.confirm(
+      `Are you sure you want to delete ALL entries for warehouse ${warehouse}? This action cannot be undone.`
+    );
+    
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingWarehouse(warehouse);
+    try {
+      const response = await stocktakeEntriesAPI.clearWarehouseEntries(warehouse);
+      
+      toast({
+        title: "Success",
+        description: `All entries for ${warehouse} cleared successfully! ${response.deletedCount || 0} entries deleted.`,
+      });
+      
+      setDeletingWarehouse(null);
+    } catch (err: any) {
+      console.error("Error clearing warehouse entries:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to clear warehouse entries",
+        variant: "destructive",
+      });
+      setDeletingWarehouse(null);
+    }
+  };
+
   // Long press handlers
   const handleLongPressStart = (entryId: string, currentValue: number, type: 'quantity') => {
     longPressDetectedRef.current = false;
@@ -542,7 +619,7 @@ export default function ManagerReview() {
       if (type === 'quantity') {
         setEditingQuantity({ entryId, value: currentValue.toString() });
       }
-    }, 500); // 500ms for long press
+    }, 800); // 800ms for long press
     longPressTimerRef.current = timer;
   };
 
@@ -565,7 +642,7 @@ export default function ManagerReview() {
     const timer = setTimeout(() => {
       longPressDetectedRef.current = true;
       setEditingItemName({ itemName, newName: itemName });
-    }, 500);
+    }, 800);
     longPressTimerRef.current = timer;
   };
 
@@ -762,6 +839,63 @@ export default function ManagerReview() {
     return grouped;
   };
 
+  // Helper function to check if a floor has any unchecked entries
+  const hasUncheckedEntriesInFloor = (floorName: string): boolean => {
+    if (!selectedWarehouse) return false;
+    
+    // Get all items for this floor
+    const items = getGroupedItems();
+    
+    // Check each item for unchecked entries
+    for (const item of items) {
+      const itemName = item.description.toUpperCase();
+      const storageKey = `checkedEntries_${selectedWarehouse}_${floorName}_${itemName}`;
+      const savedCheckedEntries = localStorage.getItem(storageKey);
+      
+      if (!savedCheckedEntries) {
+        // No saved state means unchecked
+        return true;
+      }
+      
+      const checkedState = JSON.parse(savedCheckedEntries);
+      const entries = item.entries;
+      
+      // Check if all entries are checked
+      for (const entry of entries) {
+        if (!checkedState[entry.id]) {
+          return true; // Found an unchecked entry
+        }
+      }
+    }
+    
+    return false;
+  };
+
+  // Helper function to check if an item has any unchecked entries
+  const hasUncheckedEntriesInItem = (itemName: string): boolean => {
+    if (!selectedWarehouse || !selectedFloor) return false;
+    
+    const storageKey = `checkedEntries_${selectedWarehouse}_${selectedFloor}_${itemName.toUpperCase()}`;
+    const savedCheckedEntries = localStorage.getItem(storageKey);
+    
+    if (!savedCheckedEntries) {
+      // No saved state means unchecked
+      return true;
+    }
+    
+    const checkedState = JSON.parse(savedCheckedEntries);
+    const entries = getItemEntries(itemName);
+    
+    // Check if all entries are checked
+    for (const entry of entries) {
+      if (!checkedState[entry.id]) {
+        return true; // Found an unchecked entry
+      }
+    }
+    
+    return false;
+  };
+
 
   if (isLoading) {
     return (
@@ -785,7 +919,7 @@ export default function ManagerReview() {
       scale: 1,
       transition: {
         duration: 0.4,
-        ease: [0.22, 1, 0.36, 1],
+        ease: [0.22, 1, 0.36, 1] as const,
         staggerChildren: 0.1,
       },
     },
@@ -795,7 +929,7 @@ export default function ManagerReview() {
       scale: 0.98,
       transition: {
         duration: 0.3,
-        ease: [0.22, 1, 0.36, 1],
+        ease: [0.22, 1, 0.36, 1] as const,
       },
     },
   };
@@ -810,7 +944,7 @@ export default function ManagerReview() {
       y: 0,
       transition: {
         duration: 0.4,
-        ease: [0.22, 1, 0.36, 1],
+        ease: [0.22, 1, 0.36, 1] as const,
       },
     },
   };
@@ -887,6 +1021,40 @@ export default function ManagerReview() {
                       </div>
                       <ChevronRight className="w-5 h-5 text-muted-foreground" />
                     </div>
+                    
+                    {/* Upload Sheet Button for Savla and Rishi */}
+                    {(warehouse === "Savla" || warehouse === "Rishi") && (
+                      <Button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // Handle upload sheet functionality
+                          alert(`Upload sheet for ${warehouse} - Feature coming soon!`);
+                        }}
+                        className="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white"
+                        size="sm"
+                      >
+                        <Upload className="w-4 h-4 mr-2" />
+                        Upload Sheet
+                      </Button>
+                    )}
+                    
+                    {/* Delete Warehouse Entries Button */}
+                    <div className="flex justify-end mt-2">
+                      <Button
+                        onClick={(e) => handleDeleteWarehouseEntries(warehouse, e)}
+                        disabled={deletingWarehouse === warehouse}
+                        variant="destructive"
+                        className="bg-red-600 hover:bg-red-700 text-white h-7 w-7 p-0 disabled:opacity-50 disabled:cursor-not-allowed rounded-md"
+                        size="sm"
+                        title="Delete all warehouse entries"
+                      >
+                        {deletingWarehouse === warehouse ? (
+                          <Loader className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
+                      </Button>
+                    </div>
                   </Card>
                 </motion.div>
               );
@@ -949,18 +1117,13 @@ export default function ManagerReview() {
                   onClick={handleClearEntries}
                   disabled={clearingEntries}
                   variant="destructive"
-                  className="bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                  className="bg-red-600 hover:bg-red-700 text-white h-9 w-9 p-0 disabled:opacity-50 disabled:cursor-not-allowed rounded-md flex-shrink-0"
+                  title="Delete all entries"
                 >
                   {clearingEntries ? (
-                    <>
-                      <Loader className="w-4 h-4 mr-2 animate-spin" />
-                      Clearing...
-                    </>
+                    <Loader className="w-4 h-4 animate-spin" />
                   ) : (
-                    <>
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      Clear Entries
-                    </>
+                    <Trash2 className="w-4 h-4" />
                   )}
                 </Button>
               </div>
@@ -1027,7 +1190,10 @@ export default function ManagerReview() {
                       className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary"
                       onClick={() => handleFloorClick(floor.floorName)}
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between relative">
+                        {hasUncheckedEntriesInFloor(floor.floorName) && (
+                          <div className="absolute -top-2 -right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900"></div>
+                        )}
                         <div className="flex items-center gap-3">
                           <div className="p-2 bg-primary/10 rounded-lg">
                             <Package className="w-5 h-5 text-primary" />
@@ -1152,10 +1318,19 @@ export default function ManagerReview() {
                         }
                       }}
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between relative">
+                        {hasUncheckedEntriesInItem(groupedItem.description) && (
+                          <div className="absolute -top-2 -right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900"></div>
+                        )}
                         <div className="flex-1 min-w-0">
                           {editingItemName && editingItemName.itemName === groupedItem.description ? (
-                            <div className="flex items-center gap-2">
+                            <div 
+                              className="flex items-center gap-2"
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onMouseUp={(e) => e.stopPropagation()}
+                              onTouchStart={(e) => e.stopPropagation()}
+                              onTouchEnd={(e) => e.stopPropagation()}
+                            >
                               <Input
                                 value={editingItemName.newName}
                                 onChange={(e) => setEditingItemName({ ...editingItemName, newName: e.target.value })}
@@ -1174,6 +1349,12 @@ export default function ManagerReview() {
                                 size="sm"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  e.preventDefault();
+                                  handleSaveEditedItemName();
+                                }}
+                                onTouchEnd={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
                                   handleSaveEditedItemName();
                                 }}
                                 className="h-8 px-2 bg-green-600 hover:bg-green-700"
@@ -1185,6 +1366,12 @@ export default function ManagerReview() {
                                 variant="ghost"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  e.preventDefault();
+                                  handleCancelEdit();
+                                }}
+                                onTouchEnd={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
                                   handleCancelEdit();
                                 }}
                                 className="h-8 px-2"
@@ -1232,6 +1419,26 @@ export default function ManagerReview() {
               </div>
             )}
           </div>
+          
+          {/* Delete Floor Entries Button */}
+          {getGroupedItems().length > 0 && (
+            <div className="px-4 pb-4 border-t border-border pt-4 bg-background flex justify-end">
+              <Button
+                onClick={handleDeleteFloorEntries}
+                disabled={deletingFloorEntries}
+                variant="destructive"
+                size="sm"
+                className="bg-red-600 hover:bg-red-700 text-white h-7 w-7 p-0 disabled:opacity-50 disabled:cursor-not-allowed rounded-md"
+                title="Delete all floor entries"
+              >
+                {deletingFloorEntries ? (
+                  <Loader className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5" />
+                )}
+              </Button>
+            </div>
+          )}
         </DrawerContent>
       </Drawer>
 
@@ -1354,7 +1561,14 @@ export default function ManagerReview() {
                                         <div className="flex gap-1 justify-center">
                                           <Button
                                             size="sm"
-                                            onClick={() => {
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              const val = parseFloat(editingQuantity.value) || 0;
+                                              handleSaveEditedQuantity(entry.id, val);
+                                            }}
+                                            onTouchEnd={(e) => {
+                                              e.stopPropagation();
+                                              e.preventDefault();
                                               const val = parseFloat(editingQuantity.value) || 0;
                                               handleSaveEditedQuantity(entry.id, val);
                                             }}
@@ -1365,7 +1579,15 @@ export default function ManagerReview() {
                                           <Button
                                             size="sm"
                                             variant="ghost"
-                                            onClick={handleCancelEdit}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleCancelEdit();
+                                            }}
+                                            onTouchEnd={(e) => {
+                                              e.stopPropagation();
+                                              e.preventDefault();
+                                              handleCancelEdit();
+                                            }}
                                             className="h-6 px-2"
                                           >
                                             <X className="w-3 h-3" />
@@ -1447,39 +1669,21 @@ export default function ManagerReview() {
                 </div>
                 
                 {/* Save Button */}
-                <div className="sticky bottom-0 bg-background pt-2 border-t border-border -mx-3 px-3 pb-2 mt-3">
-                  <div className="mb-2 p-2 bg-blue-50 dark:bg-blue-950/20 rounded border border-blue-200 dark:border-blue-800">
-                  <p className="text-[10px] text-blue-900 dark:text-blue-100 font-medium mb-0.5">
-                    Checked Entries: <span className="text-black dark:text-white">{
-                      getItemEntries(selectedItemName || "").filter(entry => checkedEntries[entry.id]).length
-                    }</span> of <span className="text-black dark:text-white">{getItemEntries(selectedItemName || "").length}</span>
-                  </p>
-                    <p className="text-[9px] text-blue-700 dark:text-blue-300">
+                <div className="sticky bottom-0 bg-background pt-3 border-t border-border -mx-3 px-3 pb-3 mt-4">
+                  {/* <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200 dark:border-blue-800">
+                    <p className="text-xs text-blue-900 dark:text-blue-100 font-semibold mb-1">
+                      Checked Entries: <span className="text-primary">{
+                        getItemEntries(selectedItemName || "").filter(entry => checkedEntries[entry.id]).length
+                      }</span> of <span className="text-primary">{getItemEntries(selectedItemName || "").length}</span>
+                    </p>
+                    <p className="text-[10px] text-blue-700 dark:text-blue-300">
                       Click quantity boxes to check/uncheck. Click "Save State" to persist.
                     </p>
-                  </div>
-                  
-                  {/* Confirmation Checkbox */}
-                  <div className="mb-2 p-2 bg-muted/50 rounded border border-border">
-                    <div className="flex items-start gap-2">
-                      <Checkbox
-                        id="confirm-accuracy"
-                        checked={confirmed}
-                        onCheckedChange={(checked) => setConfirmed(checked === true)}
-                        className="mt-0.5"
-                      />
-                      <label
-                        htmlFor="confirm-accuracy"
-                        className="text-[10px] font-medium text-foreground cursor-pointer leading-tight flex-1"
-                      >
-                        I hereby confirm that all items and their quantities are accurate and verified. I have reviewed all entries and certify their correctness before saving.
-                      </label>
-                    </div>
-                  </div>
+                  </div> */}
                   
                   <Button
                     onClick={handleSaveCheckedEntries}
-                    disabled={saving || !confirmed}
+                    disabled={saving}
                     className="w-full h-9 bg-primary hover:bg-primary/90 text-white text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {saving ? (

@@ -447,14 +447,14 @@ export default function ResultsheetView() {
       </nav>
 
       {/* Main Content */}
-      <div className="container py-6 sm:py-12 px-4 sm:px-6">
-        <div className="max-w-6xl mx-auto">
+      <div className="container py-6 sm:py-8 lg:py-12 px-4 sm:px-6 max-w-7xl mx-auto">
+        <div className="w-full">
           {/* Header */}
-          <div className="mb-6 sm:mb-8">
-            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mb-2">
+          <div className="mb-6 sm:mb-8 lg:mb-10">
+            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-foreground mb-2">
               Resultsheet Summary
             </h1>
-            <p className="text-base sm:text-lg text-muted-foreground">
+            <p className="text-sm sm:text-base lg:text-lg text-muted-foreground">
               View saved stock take results by date and time
             </p>
           </div>
@@ -471,28 +471,26 @@ export default function ResultsheetView() {
               </p>
             </Card>
           ) : (
-            <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-6">
               {entries.map((entry, index) => (
-                <Card key={index} className="border-border overflow-hidden hover:shadow-lg transition-shadow">
+                <Card key={index} className="border-border overflow-hidden hover:shadow-lg transition-all duration-200 hover:border-primary/50">
                   <div className="p-4 sm:p-6">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                      <div className="flex items-center gap-4">
-                        <div className="p-3 bg-primary/10 rounded-lg">
-                          <Calendar className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
+                    <div className="flex flex-col gap-4">
+                      <div className="flex items-start gap-3">
+                        <div className="p-3 bg-primary/10 rounded-lg flex-shrink-0">
+                          <Calendar className="w-6 h-6 text-primary" />
                         </div>
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-lg sm:text-xl font-bold text-foreground">
-                              {formatDate(entry.date)}
-                            </span>
-                            {entry.time && (
-                              <span className="flex items-center gap-1 text-sm text-muted-foreground">
-                                <Clock className="w-4 h-4" />
-                                {formatTime(entry.time)}
-                              </span>
-                            )}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-lg font-bold text-foreground mb-1">
+                            {formatDate(entry.date)}
                           </div>
-                          <div className="flex gap-4 text-sm text-muted-foreground">
+                          {entry.time && (
+                            <div className="flex items-center gap-1 text-sm text-muted-foreground mb-2">
+                              <Clock className="w-4 h-4 flex-shrink-0" />
+                              {formatTime(entry.time)}
+                            </div>
+                          )}
+                          <div className="flex gap-3 text-sm text-muted-foreground">
                             <span>{entry.entryCount} entries</span>
                             <span>•</span>
                             <span className="font-semibold text-primary">
@@ -501,10 +499,10 @@ export default function ResultsheetView() {
                           </div>
                         </div>
                       </div>
-                      <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                      <div className="flex gap-2">
                         <Button
                           onClick={() => handleViewSheet(entry)}
-                          className="bg-green-600 hover:bg-green-700 text-white w-full sm:w-auto"
+                          className="bg-green-600 hover:bg-green-700 text-white flex-1"
                           size="sm"
                         >
                           <Eye className="w-4 h-4 mr-2" />
@@ -514,13 +512,13 @@ export default function ResultsheetView() {
                           onClick={() => handleDeleteEntry(entry)}
                           variant="destructive"
                           disabled={deleting === entry.date}
-                          className="bg-red-600 hover:bg-red-700 text-white w-full sm:w-auto"
+                          className="bg-red-600 hover:bg-red-700 text-white flex-1"
                           size="sm"
                         >
                           {deleting === entry.date ? (
                             <>
                               <Loader className="w-4 h-4 mr-2 animate-spin" />
-                              <span className="sm:inline">Deleting...</span>
+                              Deleting...
                             </>
                           ) : (
                             <>
@@ -541,17 +539,17 @@ export default function ResultsheetView() {
 
       {/* Sheet Dialog */}
       <Dialog open={isSheetDialogOpen} onOpenChange={setIsSheetDialogOpen}>
-        <DialogContent className="max-w-[95vw] h-[90vh] flex flex-col p-0 overflow-hidden">
-          <DialogHeader className="px-4 sm:px-6 pt-4 sm:pt-6 pb-4 flex-shrink-0 border-b">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4 pr-8 sm:pr-10">
-              <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
-                <Calendar className="w-4 h-4 sm:w-5 sm:h-5" />
+        <DialogContent className="max-w-[95vw] lg:max-w-[98vw] h-[90vh] lg:h-[95vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6 pb-4 flex-shrink-0 border-b bg-background">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4 lg:gap-6 pr-8 sm:pr-10 lg:pr-12">
+              <DialogTitle className="flex items-center gap-2 text-base sm:text-lg lg:text-xl font-bold">
+                <Calendar className="w-4 h-4 sm:w-5 sm:h-5 lg:w-6 lg:h-6 text-primary" />
                 <span className="break-words">Resultsheet - {selectedDate && formatDate(selectedDate)}</span>
               </DialogTitle>
               {sheetData && sheetData.items.length > 0 && (
                 <Button
                   onClick={handleExportToExcel}
-                  className="bg-green-600 hover:bg-green-700 text-white w-full sm:w-auto"
+                  className="bg-green-600 hover:bg-green-700 text-white w-full sm:w-auto lg:px-8 lg:py-5 lg:text-base shadow-md"
                   disabled={exporting}
                   size="sm"
                 >
@@ -578,10 +576,10 @@ export default function ResultsheetView() {
                 <Loader className="w-8 h-8 animate-spin text-primary" />
               </div>
             ) : sheetData && sheetData.items.length > 0 ? (
-              <div className="flex-1 overflow-auto px-4 sm:px-6 pb-4 sm:pb-6">
+              <div className="flex-1 overflow-auto px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6">
                 <div className="overflow-x-auto -mx-4 sm:mx-0">
-                  <div className="border border-gray-300 inline-block min-w-full" style={{ maxHeight: 'calc(90vh - 200px)' }}>
-                    <Table className="border-collapse w-full min-w-[800px]">
+                  <div className="border-2 border-gray-300 rounded-lg inline-block min-w-full shadow-sm" style={{ maxHeight: 'calc(95vh - 200px)' }}>
+                    <Table className="border-collapse w-full min-w-[1000px]">
                   <TableHeader>
                     {/* Row 1: Warehouse Names */}
                     <TableRow className="border-b-2 border-gray-400">

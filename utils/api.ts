@@ -2,14 +2,17 @@
 
 // Use environment variable or default to local proxy
 // For local development with Render backend, set VITE_API_URL=https://stocktake-backend2.onrender.com
+
+// Debug environment variables
+console.log("🔍 VITE_API_URL from env:", import.meta.env.VITE_API_URL);
+console.log("🔍 All env vars:", import.meta.env);
+
 const API_BASE = import.meta.env.VITE_API_URL 
   ? `${import.meta.env.VITE_API_URL}/api`
   : "/api";
 
 // Debug: Log API base URL (remove in production)
-if (import.meta.env.DEV) {
-  console.log("🔗 API Base URL:", API_BASE);
-}
+console.log("🔗 API Base URL:", API_BASE);
 
 interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "DELETE" | "PUT";
@@ -43,6 +46,13 @@ async function apiFetch(
 
   let response: Response;
   try {
+    console.log("📤 API Request:", {
+      url: `${API_BASE}${endpoint}`,
+      method: options.method || "GET",
+      body: options.body,
+      headers: headers
+    });
+    
     response = await fetch(`${API_BASE}${endpoint}`, {
     method: options.method || "GET",
     headers,
@@ -97,11 +107,18 @@ async function apiFetch(
 
 // Auth API
 export const authAPI = {
-  login: (username: string, password: string) =>
-    apiFetch("/auth/login", {
+  login: (username: string, password: string) => {
+    console.log("🔐 Login attempt:", { 
+      username: username || "[empty]", 
+      password: password ? "[provided]" : "[empty]",
+      usernameLength: username?.length || 0,
+      passwordLength: password?.length || 0
+    });
+    return apiFetch("/auth/login", {
       method: "POST",
       body: { username, password },
-    }),
+    });
+  },
 
   register: (email: string, password: string, name: string, role?: string) =>
     apiFetch("/auth/register", {
@@ -288,6 +305,16 @@ export const stocktakeEntriesAPI = {
 
   clearAllEntries: () =>
     apiFetch("/stocktake-entries/clear-all", {
+      method: "DELETE",
+    }),
+
+  clearWarehouseEntries: (warehouse: string) =>
+    apiFetch(`/stocktake-entries/warehouse/${encodeURIComponent(warehouse)}`, {
+      method: "DELETE",
+    }),
+
+  clearFloorEntries: (warehouse: string, floor: string) =>
+    apiFetch(`/stocktake-entries/warehouse/${encodeURIComponent(warehouse)}/floor/${encodeURIComponent(floor)}`, {
       method: "DELETE",
     }),
 };

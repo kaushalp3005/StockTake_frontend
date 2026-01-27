@@ -49,6 +49,9 @@ export default function Dashboard() {
           localStorage.getItem("floorSessions") || "[]"
         ) as FloorSession[];
 
+        console.log("All sessions:", allSessions);
+        console.log("Current user:", parsedUser);
+
         // Filter sessions by user email or user ID
         const filteredSessions = allSessions.filter(
           (session) =>
@@ -56,6 +59,8 @@ export default function Dashboard() {
             session.userId === parsedUser.id ||
             session.userId === parsedUser.email
         );
+
+        console.log("Filtered sessions for user:", filteredSessions);
 
         // Sort by creation date (newest first)
         filteredSessions.sort(
@@ -65,7 +70,7 @@ export default function Dashboard() {
 
         setUserSessions(filteredSessions);
       } catch (err) {
-        console.error("Failed to parse user", err);
+        console.error("Failed to parse user or sessions", err);
       }
     }
   };
@@ -392,49 +397,68 @@ export default function Dashboard() {
                   My Entries
                 </h2>
                 <p className="text-sm sm:text-base text-muted-foreground">
-                  All stock entries you have entered
+                  Properly submitted stock entries
                 </p>
               </div>
 
-              {/* Summary Stats */}
-              {userSessions.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-6">
-                  <Card className="p-4 sm:p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
-                    <p className="text-xs sm:text-sm text-muted-foreground mb-2">
-                      Total Sessions
-                    </p>
-                    <p className="text-2xl sm:text-3xl font-bold text-primary">
-                      {userSessions.length}
-                    </p>
-                  </Card>
-                  <Card className="p-4 sm:p-6 bg-gradient-to-br from-blue-500/10 to-blue-500/5 border-blue-500/20">
-                    <p className="text-xs sm:text-sm text-muted-foreground mb-2">
-                      Total Items
-                    </p>
-                    <p className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">
-                      {totalItems}
-                    </p>
-                  </Card>
-                  <Card className="p-4 sm:p-6 bg-gradient-to-br from-green-500/10 to-green-500/5 border-green-500/20">
-                    <p className="text-xs sm:text-sm text-muted-foreground mb-2">
-                      Total Weight
-                    </p>
-                    <p className="text-2xl sm:text-3xl font-bold text-green-600 dark:text-green-400">
-                      {totalWeight.toFixed(2)} kg
-                    </p>
-                  </Card>
-                </div>
-              )}
+              {/* Filter sessions to show only submitted/approved entries */}
+              {(() => {
+                const submittedSessions = userSessions.filter(
+                  session => session.status === "SUBMITTED" || session.status === "APPROVED"
+                );
+                const submittedItems = submittedSessions.reduce(
+                  (sum, session) => sum + (session.items?.length || 0),
+                  0
+                );
+                const submittedWeight = submittedSessions.reduce((sum, session) => {
+                  const sessionWeight = session.items?.reduce(
+                    (itemSum: number, item: any) => itemSum + (item.totalWeight || 0),
+                    0
+                  ) || 0;
+                  return sum + sessionWeight;
+                }, 0);
 
-              {/* Entries List */}
-              {userSessions.length === 0 ? (
+                return (
+                  <>
+                    {/* Summary Stats */}
+                    {submittedSessions.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-6">
+                        <Card className="p-4 sm:p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
+                          <p className="text-xs sm:text-sm text-muted-foreground mb-2">
+                            Submitted Sessions
+                          </p>
+                          <p className="text-2xl sm:text-3xl font-bold text-primary">
+                            {submittedSessions.length}
+                          </p>
+                        </Card>
+                        <Card className="p-4 sm:p-6 bg-gradient-to-br from-blue-500/10 to-blue-500/5 border-blue-500/20">
+                          <p className="text-xs sm:text-sm text-muted-foreground mb-2">
+                            Total Items
+                          </p>
+                          <p className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">
+                            {submittedItems}
+                          </p>
+                        </Card>
+                        <Card className="p-4 sm:p-6 bg-gradient-to-br from-green-500/10 to-green-500/5 border-green-500/20">
+                          <p className="text-xs sm:text-sm text-muted-foreground mb-2">
+                            Total Weight
+                          </p>
+                          <p className="text-2xl sm:text-3xl font-bold text-green-600 dark:text-green-400">
+                            {submittedWeight.toFixed(2)} kg
+                          </p>
+                        </Card>
+                      </div>
+                    )}
+
+                    {/* Entries List */}
+                    {submittedSessions.length === 0 ? (
                 <Card className="p-6 sm:p-12 text-center bg-muted/50">
                   <FileText className="w-10 h-10 sm:w-12 sm:h-12 text-muted-foreground mx-auto mb-4" />
                   <p className="text-base sm:text-lg font-semibold text-foreground mb-1">
-                    No entries yet
+                    No submitted entries yet
                   </p>
                   <p className="text-sm sm:text-base text-muted-foreground mb-4">
-                    Start entering stock by clicking "Enter Stock for Floor" above.
+                    Complete and submit your stock entries to see them here.
                   </p>
                   <Button
                     onClick={() => navigate("/audit/floor-selection")}
@@ -444,19 +468,19 @@ export default function Dashboard() {
                   </Button>
                 </Card>
               ) : (
-                <div className="space-y-4">
-                  {userSessions.map((session) => {
+                <div className="space-y-4 lg:space-y-6">
+                  {submittedSessions.map((session) => {
                     const sessionWeight = session.items?.reduce(
                       (sum: number, item: any) => sum + (item.totalWeight || 0),
                       0
                     ) || 0;
-                    const sessionDate = new Date(session.createdAt).toLocaleDateString();
-                    const sessionTime = new Date(session.createdAt).toLocaleTimeString();
+                    const sessionDate = session.createdAt ? new Date(session.createdAt).toLocaleDateString() : "N/A";
+                    const sessionTime = session.createdAt ? new Date(session.createdAt).toLocaleTimeString() : "";
 
                     return (
                       <Card
                         key={session.id}
-                        className="p-4 sm:p-6 border-border hover:shadow-md transition-shadow"
+                        className="p-4 sm:p-6 lg:p-8 border-border hover:shadow-md transition-all duration-200"
                       >
                         <div className="space-y-4">
                           {/* Session Header */}
@@ -488,29 +512,29 @@ export default function Dashboard() {
                                 )}
                               </div>
                             </div>
-                            <div className="flex flex-col sm:flex-row items-end gap-3 sm:gap-4">
-                              <div className="text-right">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-4 sm:gap-6 mt-4 sm:mt-0">
+                              <div className="text-right flex-shrink-0">
                                 <p className="text-xs sm:text-sm text-muted-foreground">
                                   Total Weight
                                 </p>
-                                <p className="text-xl sm:text-2xl font-bold text-primary">
+                                <p className="text-2xl sm:text-3xl font-bold text-primary whitespace-nowrap">
                                   {sessionWeight.toFixed(2)} kg
                                 </p>
                               </div>
-                              {/* Edit Button - Only show for DRAFT status or no status (not APPROVED) */}
-                              {session.status !== "APPROVED" && (
+                              {/* Edit Button - Only show for SUBMITTED status */}
+                              {session.status === "SUBMITTED" && (
                                 <Button
                                   onClick={() => handleEditEntry(session)}
                                   variant="outline"
                                   size="sm"
-                                  className="w-full sm:w-auto"
+                                  className="w-full sm:w-auto flex-shrink-0"
                                 >
                                   <Edit2 className="w-4 h-4 mr-2" />
                                   Edit
                                 </Button>
                               )}
                               {session.status === "APPROVED" && (
-                                <span className="text-xs text-muted-foreground italic">
+                                <span className="text-xs text-muted-foreground italic flex-shrink-0">
                                   Cannot edit approved entries
                                 </span>
                               )}
@@ -521,39 +545,68 @@ export default function Dashboard() {
                           {session.items && session.items.length > 0 && (
                             <Accordion type="single" collapsible className="w-full">
                               <AccordionItem value={session.id} className="border-none">
-                                <AccordionTrigger className="py-2 text-sm text-muted-foreground hover:no-underline">
+                                <AccordionTrigger 
+                                  className="py-2 text-sm text-muted-foreground hover:no-underline"
+                                >
                                   View {session.items.length} item(s)
                                 </AccordionTrigger>
                                 <AccordionContent>
                                   <div className="space-y-2 pt-2 border-t border-border">
-                                    {session.items.map((item: any, idx: number) => (
-                                      <div
-                                        key={idx}
-                                        className="p-3 bg-muted/50 rounded text-sm"
-                                      >
-                                        <div className="flex justify-between items-start mb-1">
-                                          <div className="flex-1">
-                                            <p className="font-semibold text-foreground">
-                                              {item.subcategory}
-                                            </p>
-                                            {item.description && (
-                                              <p className="text-xs text-muted-foreground mt-1">
-                                                {item.description}
+                                    {session.items.map((item: any, idx: number) => {
+                                      // For custom category items (no subcategory), the category field contains the item name
+                                      const isCustomCategory = item.category && !item.subcategory;
+                                      const itemName = isCustomCategory 
+                                        ? item.category 
+                                        : (item.description || item.subcategory || item.category || "Unknown Item");
+                                      
+                                      return (
+                                        <div
+                                          key={idx}
+                                          className="p-3 sm:p-4 bg-muted/50 rounded-lg text-sm border border-border/50"
+                                        >
+                                          <div className="flex justify-between items-start mb-2">
+                                            <div className="flex-1">
+                                              <p className="font-semibold text-foreground text-sm sm:text-base">
+                                                {itemName}
                                               </p>
-                                            )}
-                                          </div>
-                                          <span className="font-bold text-primary ml-2">
+                                              {!isCustomCategory && item.category && item.subcategory && (
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                  {item.category} → {item.subcategory}
+                                                </p>
+                                              )}
+                                              {isCustomCategory && (
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                  Unlisted Item
+                                                </p>
+                                              )}
+                                            </div>
+                                          <span className="font-bold text-primary ml-2 text-base sm:text-lg">
                                             {item.totalWeight?.toFixed(2) || "0.00"} kg
                                           </span>
                                         </div>
-                                        <div className="text-xs text-muted-foreground flex gap-3 mt-2">
-                                          <span>
-                                            Package: {item.packageSize?.toFixed(2) || "0.00"} kg
-                                          </span>
-                                          <span>Units: {item.units || 0}</span>
+                                        <div className="text-xs text-muted-foreground flex flex-wrap gap-3 mt-2">
+                                          {item.packageSize && (
+                                            <span>
+                                              UOM: {item.packageSize?.toFixed(3) || "0.000"} kg
+                                            </span>
+                                          )}
+                                          {item.units && (
+                                            <span>Qty: {item.units || 0}</span>
+                                          )}
+                                          {item.stockType && (
+                                            <span className="capitalize">
+                                              Type: {item.stockType}
+                                            </span>
+                                          )}
+                                          {item.itemType && (
+                                            <span className="uppercase">
+                                              {item.itemType}
+                                            </span>
+                                          )}
                                         </div>
                                       </div>
-                                    ))}
+                                    );
+                                    })}
                                   </div>
                                 </AccordionContent>
                               </AccordionItem>
@@ -565,6 +618,9 @@ export default function Dashboard() {
                   })}
                 </div>
               )}
+                  </>
+                );
+              })()}
             </div>
           )}
 
