@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -37,6 +37,98 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [userSessions, setUserSessions] = useState<FloorSession[]>([]);
+
+  // Memoized submitted sessions calculations
+  const { submittedSessions, submittedItems, submittedWeight } = useMemo(() => {
+    const filteredSessions = userSessions.filter(
+      session => session.status === "SUBMITTED" || session.status === "APPROVED"
+    );
+    
+    const totalItems = filteredSessions.reduce(
+      (sum, session) => sum + (session.items?.length || 0),
+      0
+    );
+    
+    const totalWeight = filteredSessions.reduce((sum, session) => {
+      const sessionWeight = session.items?.reduce(
+        (itemSum: number, item: any) => itemSum + (item.totalWeight || 0),
+        0
+      ) || 0;
+      return sum + sessionWeight;
+    }, 0);
+
+    return {
+      submittedSessions: filteredSessions,
+      submittedItems: totalItems,
+      submittedWeight: totalWeight
+    };
+  }, [userSessions]);
+
+  // Memoized function to render individual items
+  const renderItem = useCallback((item: any, idx: number, sessionId: string) => {
+    try {
+      // For custom category items (no subcategory), the category field contains the item name
+      const isCustomCategory = item.category && !item.subcategory;
+      const itemName = isCustomCategory 
+        ? item.category 
+        : (item.description || item.subcategory || item.category || "Unknown Item");
+      
+      return (
+        <div
+          key={`${sessionId}-item-${idx}`}
+          className="p-3 sm:p-4 bg-muted/50 rounded-lg text-sm border border-border/50"
+        >
+          <div className="flex justify-between items-start mb-2">
+            <div className="flex-1">
+              <p className="font-semibold text-foreground text-sm sm:text-base">
+                {itemName}
+              </p>
+              {!isCustomCategory && item.category && item.subcategory && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {item.category} → {item.subcategory}
+                </p>
+              )}
+              {isCustomCategory && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Unlisted Item
+                </p>
+              )}
+            </div>
+            <span className="font-bold text-primary ml-2 text-base sm:text-lg">
+              {item.totalWeight?.toFixed(2) || "0.00"} kg
+            </span>
+          </div>
+          <div className="text-xs text-muted-foreground flex flex-wrap gap-3 mt-2">
+            {item.packageSize && (
+              <span>
+                UOM: {item.packageSize?.toFixed(3) || "0.000"} kg
+              </span>
+            )}
+            {item.units && (
+              <span>Qty: {item.units || 0}</span>
+            )}
+            {item.stockType && (
+              <span className="capitalize">
+                Type: {item.stockType}
+              </span>
+            )}
+            {item.itemType && (
+              <span className="uppercase">
+                {item.itemType}
+              </span>
+            )}
+          </div>
+        </div>
+      );
+    } catch (error) {
+      console.error('Error rendering item:', error, item);
+      return (
+        <div key={`${sessionId}-error-${idx}`} className="p-2 bg-red-50 text-red-600 rounded">
+          Error rendering item {idx + 1}
+        </div>
+      );
+    }
+  }, []);
 
   const loadUserSessions = () => {
     const userStr = localStorage.getItem("user");
@@ -402,26 +494,9 @@ export default function Dashboard() {
               </div>
 
               {/* Filter sessions to show only submitted/approved entries */}
-              {(() => {
-                const submittedSessions = userSessions.filter(
-                  session => session.status === "SUBMITTED" || session.status === "APPROVED"
-                );
-                const submittedItems = submittedSessions.reduce(
-                  (sum, session) => sum + (session.items?.length || 0),
-                  0
-                );
-                const submittedWeight = submittedSessions.reduce((sum, session) => {
-                  const sessionWeight = session.items?.reduce(
-                    (itemSum: number, item: any) => itemSum + (item.totalWeight || 0),
-                    0
-                  ) || 0;
-                  return sum + sessionWeight;
-                }, 0);
-
-                return (
-                  <>
-                    {/* Summary Stats */}
-                    {submittedSessions.length > 0 && (
+              <>
+                {/* Summary Stats */}
+                {submittedSessions.length > 0 && (
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-6">
                         <Card className="p-4 sm:p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
                           <p className="text-xs sm:text-sm text-muted-foreground mb-2">
@@ -543,74 +618,45 @@ export default function Dashboard() {
 
                           {/* Items List */}
                           {session.items && session.items.length > 0 && (
-                            <Accordion type="single" collapsible className="w-full">
-                              <AccordionItem value={session.id} className="border-none">
-                                <AccordionTrigger 
-                                  className="py-2 text-sm text-muted-foreground hover:no-underline"
+                            <div className="w-full">
+                              <details className="w-full">
+                                <summary 
+                                  className="py-2 text-sm text-muted-foreground hover:text-foreground cursor-pointer list-none flex items-center justify-between"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    const details = e.currentTarget.parentElement as HTMLDetailsElement;
+                                    const wasOpen = details.open;
+                                    details.open = !wasOpen;
+                                    
+                                    // Rotate arrow
+                                    const arrow = e.currentTarget.querySelector('svg');
+                                    if (arrow) {
+                                      arrow.style.transform = details.open ? 'rotate(180deg)' : 'rotate(0deg)';
+                                    }
+                                  }}
                                 >
-                                  View {session.items.length} item(s)
-                                </AccordionTrigger>
-                                <AccordionContent>
-                                  <div className="space-y-2 pt-2 border-t border-border">
-                                    {session.items.map((item: any, idx: number) => {
-                                      // For custom category items (no subcategory), the category field contains the item name
-                                      const isCustomCategory = item.category && !item.subcategory;
-                                      const itemName = isCustomCategory 
-                                        ? item.category 
-                                        : (item.description || item.subcategory || item.category || "Unknown Item");
-                                      
-                                      return (
-                                        <div
-                                          key={idx}
-                                          className="p-3 sm:p-4 bg-muted/50 rounded-lg text-sm border border-border/50"
-                                        >
-                                          <div className="flex justify-between items-start mb-2">
-                                            <div className="flex-1">
-                                              <p className="font-semibold text-foreground text-sm sm:text-base">
-                                                {itemName}
-                                              </p>
-                                              {!isCustomCategory && item.category && item.subcategory && (
-                                                <p className="text-xs text-muted-foreground mt-1">
-                                                  {item.category} → {item.subcategory}
-                                                </p>
-                                              )}
-                                              {isCustomCategory && (
-                                                <p className="text-xs text-muted-foreground mt-1">
-                                                  Unlisted Item
-                                                </p>
-                                              )}
-                                            </div>
-                                          <span className="font-bold text-primary ml-2 text-base sm:text-lg">
-                                            {item.totalWeight?.toFixed(2) || "0.00"} kg
-                                          </span>
-                                        </div>
-                                        <div className="text-xs text-muted-foreground flex flex-wrap gap-3 mt-2">
-                                          {item.packageSize && (
-                                            <span>
-                                              UOM: {item.packageSize?.toFixed(3) || "0.000"} kg
-                                            </span>
-                                          )}
-                                          {item.units && (
-                                            <span>Qty: {item.units || 0}</span>
-                                          )}
-                                          {item.stockType && (
-                                            <span className="capitalize">
-                                              Type: {item.stockType}
-                                            </span>
-                                          )}
-                                          {item.itemType && (
-                                            <span className="uppercase">
-                                              {item.itemType}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    );
-                                    })}
-                                  </div>
-                                </AccordionContent>
-                              </AccordionItem>
-                            </Accordion>
+                                  View {session.items?.length || 0} item(s)
+                                  <svg
+                                    className="w-4 h-4 transition-transform duration-200"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth={2}
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    style={{ transform: 'rotate(0deg)' }}
+                                  >
+                                    <polyline points="6 9 12 15 18 9" />
+                                  </svg>
+                                </summary>
+                                <div className="space-y-2 pt-2 border-t border-border">
+                                  {session.items?.slice(0, 100)?.map((item: any, idx: number) => 
+                                    renderItem(item, idx, session.id)
+                                  )}
+                                </div>
+                              </details>
+                            </div>
                           )}
                         </div>
                       </Card>
@@ -618,9 +664,7 @@ export default function Dashboard() {
                   })}
                 </div>
               )}
-                  </>
-                );
-              })()}
+              </>
             </div>
           )}
 
