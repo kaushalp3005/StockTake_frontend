@@ -35,12 +35,21 @@ export default function SubmissionSuccess() {
   const hasAutoDownloadedRef = useRef(false);
 
   useEffect(() => {
-    // Get the submitted session from localStorage
-    const sessionStr = localStorage.getItem("currentFloorSession");
+    // Get the submitted session from localStorage (temporary storage for download)
+    let sessionStr = localStorage.getItem("submittedFloorSession");
+    
+    // Fallback to currentFloorSession if submittedFloorSession doesn't exist (for backward compatibility)
+    if (!sessionStr) {
+      sessionStr = localStorage.getItem("currentFloorSession");
+    }
+    
     if (sessionStr) {
       try {
         const session = JSON.parse(sessionStr);
         setFloorSession(session);
+        
+        // Clean up the temporary storage after we've loaded it
+        localStorage.removeItem("submittedFloorSession");
       } catch (error) {
         console.error("Error parsing session:", error);
       }

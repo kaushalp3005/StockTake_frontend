@@ -120,7 +120,7 @@ export default function ManagerReview() {
       clearTimeout(scrollTimeoutRef.current);
       scrollTimeoutRef.current = setTimeout(() => {
         isScrollingRef.current = false;
-      }, 150); // 150ms delay after scroll stops
+      }, 200); // Increased from 150ms to 200ms for better stability
     };
     
     const handleTouchStart = (e: TouchEvent) => {
@@ -138,8 +138,9 @@ export default function ManagerReview() {
         const deltaX = Math.abs(touch.clientX - touchStartRef.current.x);
         const deltaY = Math.abs(touch.clientY - touchStartRef.current.y);
         
-        // If moved more than 10px in any direction, consider it scrolling
-        if (deltaX > 10 || deltaY > 10) {
+        // If moved more than 8px in any direction, consider it scrolling
+        // Reduced threshold for more sensitive scroll detection
+        if (deltaX > 8 || deltaY > 8) {
           isScrollingRef.current = true;
         }
       }
@@ -282,6 +283,11 @@ export default function ManagerReview() {
   };
 
   const handleEntryCheck = (entryId: string, checked: boolean) => {
+    // Prevent actions during scrolling
+    if (isScrollingRef.current) {
+      return;
+    }
+    
     setCheckedEntries((prev) => {
       const updated = {
         ...prev,
@@ -319,6 +325,10 @@ export default function ManagerReview() {
   };
 
   const handleSaveData = async () => {
+    // Prevent clicks during scrolling
+    if (isScrollingRef.current) {
+      return;
+    }
     console.log("=== SAVE BUTTON CLICKED ===");
     console.log("Timestamp:", new Date().toISOString());
     setSavingData(true);
@@ -573,6 +583,11 @@ export default function ManagerReview() {
   };
 
   const handleClearEntries = async () => {
+    // Prevent clicks during scrolling
+    if (isScrollingRef.current) {
+      return;
+    }
+    
     // Confirm before clearing
     const confirmed = window.confirm(
       "Are you sure you want to delete ALL entries from the stocktake_entries table? This action cannot be undone."
@@ -652,6 +667,11 @@ export default function ManagerReview() {
   const handleDeleteWarehouseEntries = async (warehouse: string, event: React.MouseEvent) => {
     // Stop propagation to prevent opening the warehouse drawer
     event.stopPropagation();
+    
+    // Prevent clicks during scrolling
+    if (isScrollingRef.current) {
+      return;
+    }
 
     // Confirm before deleting
     const confirmed = window.confirm(
@@ -1039,7 +1059,11 @@ export default function ManagerReview() {
           </div>
           <Button
             variant="ghost"
-            onClick={() => navigate("/dashboard")}
+            onClick={() => {
+              if (!isScrollingRef.current) {
+                navigate("/dashboard");
+              }
+            }}
             size="sm"
             className="text-xs sm:text-sm touch-manipulation"
             style={{ touchAction: 'manipulation' }}
@@ -1082,7 +1106,11 @@ export default function ManagerReview() {
                 >
                   <Card
                     className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.02] hover:border-primary touch-manipulation"
-                    onClick={() => handleWarehouseClick(warehouse)}
+                    onClick={() => {
+                      if (!isScrollingRef.current) {
+                        handleWarehouseClick(warehouse);
+                      }
+                    }}
                     style={{ touchAction: 'manipulation' }}
                   >
                     <div className="flex items-center gap-3 sm:gap-4 mb-4">
@@ -1102,8 +1130,10 @@ export default function ManagerReview() {
                       <Button
                         onClick={(e) => {
                           e.stopPropagation();
-                          // Handle upload sheet functionality
-                          alert(`Upload sheet for ${warehouse} - Feature coming soon!`);
+                          if (!isScrollingRef.current) {
+                            // Handle upload sheet functionality
+                            alert(`Upload sheet for ${warehouse} - Feature coming soon!`);
+                          }
                         }}
                         className="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white"
                         size="sm"
@@ -1229,7 +1259,11 @@ export default function ManagerReview() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setDrawerOpen(false)}
+                onClick={() => {
+                  if (!isScrollingRef.current) {
+                    setDrawerOpen(false);
+                  }
+                }}
                 className="mr-auto"
               >
                 <ArrowLeft className="w-4 h-4 mr-2" />
@@ -1263,7 +1297,11 @@ export default function ManagerReview() {
                   >
                     <Card
                       className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation"
-                      onClick={() => handleFloorClick(floor.floorName)}
+                      onClick={() => {
+                        if (!isScrollingRef.current) {
+                          handleFloorClick(floor.floorName);
+                        }
+                      }}
                       style={{ touchAction: 'manipulation' }}
                     >
                       <div className="flex items-center justify-between relative">
@@ -1322,10 +1360,12 @@ export default function ManagerReview() {
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  setItemsDrawerOpen(false);
-                  setTimeout(() => {
-                    setDrawerOpen(true);
-                  }, 200);
+                  if (!isScrollingRef.current) {
+                    setItemsDrawerOpen(false);
+                    setTimeout(() => {
+                      setDrawerOpen(true);
+                    }, 200);
+                  }
                 }}
                 className="mr-auto"
               >
@@ -1374,26 +1414,21 @@ export default function ManagerReview() {
                       onMouseUp={(e) => {
                         e.preventDefault();
                         handleLongPressEnd();
-                        if (!editingItemName && !longPressDetectedRef.current) {
+                        if (!editingItemName && !longPressDetectedRef.current && !isScrollingRef.current) {
                           setTimeout(() => {
-                            if (!longPressDetectedRef.current) {
+                            if (!longPressDetectedRef.current && !isScrollingRef.current) {
                               handleItemClick(groupedItem.description);
                             }
                           }, 150);
                         }
                       }}
                       onMouseLeave={() => handleLongPressEnd()}
-                      onTouchStart={() => {
-                        if (!editingItemName) {
-                          handleItemNameLongPressStart(groupedItem.description);
-                        }
-                      }}
                       onTouchEnd={(e) => {
                         e.preventDefault();
                         handleLongPressEnd();
-                        if (!editingItemName && !longPressDetectedRef.current) {
+                        if (!editingItemName && !longPressDetectedRef.current && !isScrollingRef.current) {
                           setTimeout(() => {
-                            if (!longPressDetectedRef.current) {
+                            if (!longPressDetectedRef.current && !isScrollingRef.current) {
                               handleItemClick(groupedItem.description);
                             }
                           }, 150);
@@ -1692,9 +1727,9 @@ export default function ManagerReview() {
                                       onMouseUp={(e) => {
                                         e.preventDefault();
                                         handleLongPressEnd();
-                                        if (!editingQuantity && !longPressDetectedRef.current) {
+                                        if (!editingQuantity && !longPressDetectedRef.current && !isScrollingRef.current) {
                                           setTimeout(() => {
-                                            if (!longPressDetectedRef.current) {
+                                            if (!longPressDetectedRef.current && !isScrollingRef.current) {
                                               handleEntryCheck(entry.id, !isChecked);
                                             }
                                           }, 150);
@@ -1709,9 +1744,9 @@ export default function ManagerReview() {
                                       onTouchEnd={(e) => {
                                         e.preventDefault();
                                         handleLongPressEnd();
-                                        if (!editingQuantity && !longPressDetectedRef.current) {
+                                        if (!editingQuantity && !longPressDetectedRef.current && !isScrollingRef.current) {
                                           setTimeout(() => {
-                                            if (!longPressDetectedRef.current) {
+                                            if (!longPressDetectedRef.current && !isScrollingRef.current) {
                                               handleEntryCheck(entry.id, !isChecked);
                                             }
                                           }, 150);

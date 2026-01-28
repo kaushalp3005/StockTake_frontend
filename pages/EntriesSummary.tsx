@@ -147,6 +147,9 @@ export default function EntriesSummary() {
       allSessions.push(updatedSession);
       localStorage.setItem("floorSessions", JSON.stringify(allSessions));
 
+      // Store the submitted session temporarily for the success page download functionality
+      localStorage.setItem("submittedFloorSession", JSON.stringify(updatedSession));
+
       // Clear the current session after successful submission
       // This removes the auto-save session so user won't see "resume session" option
       localStorage.removeItem("currentFloorSession");
