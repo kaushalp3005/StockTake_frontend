@@ -738,6 +738,8 @@ export default function ManagerReview() {
     longPressTimerRef.current = timer;
   };
 
+
+
   const handleSaveEditedQuantity = async (entryId: string, newValue: number) => {
     if (isNaN(newValue) || newValue <= 0) {
       alert("Please enter a valid positive number (decimals allowed, e.g., 55.6)");
@@ -1298,7 +1300,7 @@ export default function ManagerReview() {
                     <Card
                       className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation"
                       onClick={() => {
-                        if (!isScrollingRef.current) {
+                        if (!isScrollingRef.current && !longPressDetectedRef.current) {
                           handleFloorClick(floor.floorName);
                         }
                       }}
@@ -1316,6 +1318,9 @@ export default function ManagerReview() {
                             <h3 className="font-semibold text-foreground">
                               {floor.floorName}
                             </h3>
+                            <p className="text-xs text-blue-600 dark:text-blue-400 opacity-70">
+                              Long press to edit name
+                            </p>
                             <p className="text-sm text-muted-foreground">
                               {floor.itemCount} items • {floor.totalWeight.toFixed(2)} kg
                             </p>
@@ -1761,6 +1766,14 @@ export default function ManagerReview() {
                                       <p className="text-[9px] text-muted-foreground mb-0.5">
                                         Long press to edit
                                       </p>
+                                      {(entry as any).floorName && (
+                                        <div 
+                                          className="text-[8px] text-blue-600 dark:text-blue-400 mb-1 cursor-pointer hover:underline"
+
+                                        >
+                                          Floor: {(entry as any).floorName}
+                                        </div>
+                                      )}
                                       <p className="text-xl font-bold text-black dark:text-white">
                                         {entry.units % 1 === 0 ? entry.units : entry.units.toFixed(1)}
                                       </p>
@@ -1826,6 +1839,8 @@ export default function ManagerReview() {
           </div>
         </DrawerContent>
       </Drawer>
+
+
     </motion.div>
   );
 }

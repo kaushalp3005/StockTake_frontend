@@ -147,8 +147,9 @@ export default function FloorSelection() {
                   if (userStr) {
                     try {
                       const user = JSON.parse(userStr);
-                      if (user.role === "SUPERUSER") {
-                        isLocked = false; // SUPERUSER can edit everything
+                      // SUPERUSER and INVENTORY_MANAGER can edit floor names, others follow existing logic
+                      if (user.role === "SUPERUSER" || user.role === "INVENTORY_MANAGER" || user.role === "superuser" || user.role ==="manager") {
+                        isLocked = false; // SUPERUSER and INVENTORY_MANAGER can edit everything
                       } else if (user.warehouse && (user.dbRole === "floorhead" || user.role === "FLOOR_MANAGER")) {
                         isLocked = true;
                         lockedWarehouse = user.warehouse;
