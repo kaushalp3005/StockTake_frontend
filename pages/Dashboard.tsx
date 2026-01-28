@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loader, LogOut, Package, FileText, Calendar, Warehouse, Edit2, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight } from "lucide-react";
+import { Loader, LogOut, Package, FileText, Calendar, Warehouse, Edit2, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight, Trash2 } from "lucide-react";
 import {
   Accordion,
   AccordionContent,
@@ -462,8 +462,8 @@ export default function Dashboard() {
             ))}
           </div>
 
-          {/* StockTake Overview - Only for INVENTORY_MANAGER */}
-          {user?.role === "INVENTORY_MANAGER" && (
+          {/* StockTake Overview - Only for INVENTORY_MANAGER and SUPERUSER */}
+          {(user?.role === "INVENTORY_MANAGER" || user?.role === "SUPERUSER") && (
             <div className="mt-8 sm:mt-12 space-y-6">
               <div className="mb-6">
                 <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2 flex items-center gap-2">
@@ -570,8 +570,8 @@ export default function Dashboard() {
 
 
 
-          {/* My Entries Section - Only show for FLOOR_MANAGER */}
-          {user?.role === "FLOOR_MANAGER" && (
+          {/* My Entries Section - Only show for FLOOR_MANAGER and SUPERUSER */}
+          {(user?.role === "FLOOR_MANAGER" || user?.role === "SUPERUSER") && (
             <div className="mt-8 sm:mt-12">
               <div className="mb-6">
                 <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2 flex items-center gap-2">
@@ -688,6 +688,14 @@ export default function Dashboard() {
                               className="bg-orange-600 hover:bg-orange-700 text-white"
                             >
                               Resume Work
+                            </Button>
+                            <Button
+                              onClick={handleDiscardSession}
+                              variant="outline"
+                              size="sm"
+                              className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/20 dark:hover:text-red-300"
+                            >
+                              <Trash2 className="w-4 h-4" />
                             </Button>
                           </div>
                         </div>
@@ -849,7 +857,7 @@ export default function Dashboard() {
           )}
 
           {/* Info Card for other roles */}
-          {user?.role !== "FLOOR_MANAGER" && (
+          {user?.role !== "FLOOR_MANAGER" && user?.role !== "INVENTORY_MANAGER" && user?.role !== "SUPERUSER" && (
             <Card className="p-4 sm:p-6 md:p-8 mt-8 sm:mt-12 bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
               <h3 className="text-base sm:text-lg font-semibold text-blue-900 dark:text-blue-100 mb-2">
               Getting Started

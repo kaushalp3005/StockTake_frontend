@@ -39,6 +39,7 @@ export default function FloorSelection() {
       try {
         const user = JSON.parse(userStr);
         // If user has warehouse and role is floorhead (mapped to FLOOR_MANAGER), lock warehouse
+        // SUPERUSER has same authority as manager but can edit floor names
         if (user.warehouse && (user.dbRole === "floorhead" || user.role === "FLOOR_MANAGER")) {
           setWarehouse(user.warehouse);
         }
@@ -146,7 +147,9 @@ export default function FloorSelection() {
                   if (userStr) {
                     try {
                       const user = JSON.parse(userStr);
-                      if (user.warehouse && (user.dbRole === "floorhead" || user.role === "FLOOR_MANAGER")) {
+                      if (user.role === "SUPERUSER") {
+                        isLocked = false; // SUPERUSER can edit everything
+                      } else if (user.warehouse && (user.dbRole === "floorhead" || user.role === "FLOOR_MANAGER")) {
                         isLocked = true;
                         lockedWarehouse = user.warehouse;
                       }

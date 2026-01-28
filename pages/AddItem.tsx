@@ -546,52 +546,11 @@ export default function AddItem() {
     e.preventDefault();
     setError("");
 
-    // Validation
     const isOtherCategory = category === "OTHER";
     const isOtherItem = description === "OTHER";
-    
-    if (!stockType || !itemType) {
-      setError("Stock type and item type are required");
-      return;
-    }
-    
-    // Check category
-    if (!category) {
-      setError("Category is required");
-      return;
-    }
-    if (isOtherCategory && !customCategory) {
-      setError("Please enter unlisted item name");
-      return;
-    }
-    
-    if (isOtherItem) {
-      // For Other items, only custom item name, UOM, and units are required
-      if (!customItemName || !packageSize || !units) {
-        setError("Custom item name, UOM and units are required for Other items");
-        return;
-      }
-    } else if (!isOtherCategory) {
-      // For regular items (not Other category), all fields are required
-      if (!category || !subcategory || !description || !packageSize || !units) {
-        setError("All fields are required");
-        return;
-      }
-    } else {
-      // For Other category items, only UOM and units are required
-      if (!packageSize || !units) {
-        setError("UOM and units are required");
-        return;
-      }
-    }
 
-    const pkgSizeNum = parseFloat(packageSize);
-    const unitsNum = parseFloat(units);
-
-    if (isNaN(pkgSizeNum) || isNaN(unitsNum) || pkgSizeNum <= 0 || unitsNum <= 0) {
-      setError("UOM and units must be valid positive numbers (decimals allowed, e.g., 450.25)");
-      return;
-    }
+    const pkgSizeNum = parseFloat(packageSize) || 0;
+    const unitsNum = parseFloat(units) || 0;
 
     const totalWeight = calculateTotalWeight(pkgSizeNum, unitsNum);
     
@@ -1168,13 +1127,20 @@ export default function AddItem() {
                       placeholder="e.g., 0.250"
                       value={packageSize}
                       onChange={(e) => {
-                        // Only allow editing if field is empty (manual entry)
-                        if (!packageSize) {
-                          const value = e.target.value;
-                          if (value === '') {
-                            setPackageSize('');
-                            return;
+                        const value = e.target.value;
+                        if (value === '') {
+                          setPackageSize('');
+                          return;
+                        }
+                        // For "OTHER" category, always allow editing regardless of existing value
+                        if (category === "OTHER") {
+                          const numValue = parseFloat(value);
+                          if (!isNaN(numValue) && numValue >= 0) {
+                            setPackageSize(value);
                           }
+                        }
+                        // For other categories, only allow editing if field is empty (manual entry)
+                        else if (!packageSize) {
                           const numValue = parseFloat(value);
                           if (!isNaN(numValue) && numValue >= 0) {
                             setPackageSize(value);
@@ -1182,6 +1148,13 @@ export default function AddItem() {
                         }
                       }}
                       onKeyDown={(e) => {
+                        // For "OTHER" category, allow editing always
+                        if (category === "OTHER") {
+                          if (e.key === '-' || e.key === 'Minus') {
+                            e.preventDefault();
+                          }
+                          return;
+                        }
                         // Prevent editing if already has value from search
                         if (packageSize) {
                           e.preventDefault();
@@ -1192,9 +1165,9 @@ export default function AddItem() {
                           e.preventDefault();
                         }
                       }}
-                      className={`bg-input border-input ${packageSize ? 'cursor-not-allowed opacity-70' : ''}`}
-                      readOnly={!!packageSize}
-                      title={packageSize ? "UOM is auto-filled from search and cannot be edited" : "Enter UOM value"}
+                      className={`bg-input border-input ${(packageSize && category !== "OTHER") ? 'cursor-not-allowed opacity-70' : ''}`}
+                      readOnly={!!(packageSize && category !== "OTHER")}
+                      title={category === "OTHER" ? "Enter UOM manually for custom category" : (packageSize ? "UOM is auto-filled from search and cannot be edited" : "Enter UOM value")}
                     />
                     {packageSize && !isNaN(parseFloat(packageSize)) && parseFloat(packageSize) > 0 && (
                       <p className="text-xs text-muted-foreground">
