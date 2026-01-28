@@ -93,6 +93,10 @@ export default function ManagerReview() {
   const [editingItemName, setEditingItemName] = useState<{ itemName: string; newName: string } | null>(null);
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const longPressDetectedRef = useRef<boolean>(false);
+  
+  // Touch sensitivity improvement
+  const isScrollingRef = useRef<boolean>(false);
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
   useEffect(() => {
     // Initialize with hardcoded warehouses (always show these on frontend)
@@ -110,10 +114,68 @@ export default function ManagerReview() {
       setCheckedEntries(JSON.parse(savedCheckedEntries));
     }
     
+    // Add scroll detection to prevent accidental clicks during scroll
+    const handleScroll = () => {
+      isScrollingRef.current = true;
+      clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = setTimeout(() => {
+        isScrollingRef.current = false;
+      }, 150); // 150ms delay after scroll stops
+    };
+    
+    const handleTouchStart = (e: TouchEvent) => {
+      const touch = e.touches[0];
+      touchStartRef.current = {
+        x: touch.clientX,
+        y: touch.clientY,
+        time: Date.now()
+      };
+    };
+    
+    const handleTouchMove = (e: TouchEvent) => {
+      if (touchStartRef.current) {
+        const touch = e.touches[0];
+        const deltaX = Math.abs(touch.clientX - touchStartRef.current.x);
+        const deltaY = Math.abs(touch.clientY - touchStartRef.current.y);
+        
+        // If moved more than 10px in any direction, consider it scrolling
+        if (deltaX > 10 || deltaY > 10) {
+          isScrollingRef.current = true;
+        }
+      }
+    };
+    
+    const handleTouchEnd = () => {
+      setTimeout(() => {
+        isScrollingRef.current = false;
+        touchStartRef.current = null;
+      }, 100);
+    };
+    
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    window.addEventListener('touchend', handleTouchEnd, { passive: true });
+    
     setIsLoading(false);
+    
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+      clearTimeout(scrollTimeoutRef.current);
+    };
   }, []);
+  
+  const scrollTimeoutRef = useRef<NodeJS.Timeout>();
 
   const handleWarehouseClick = async (warehouse: string) => {
+    // Prevent clicks during scrolling
+    if (isScrollingRef.current) {
+      return;
+    }
+    
     setSelectedWarehouse(warehouse);
     setLoadingFloors(true);
     setDrawerOpen(true);
@@ -155,6 +217,11 @@ export default function ManagerReview() {
   };
 
   const handleFloorClick = (floor: string) => {
+    // Prevent clicks during scrolling
+    if (isScrollingRef.current) {
+      return;
+    }
+    
     setSelectedFloor(floor);
     setSelectedItemName(null);
     setConfirmed(false); // Reset confirmation when changing floors
@@ -169,6 +236,11 @@ export default function ManagerReview() {
   };
 
   const handleItemClick = (itemName: string) => {
+    // Prevent clicks during scrolling
+    if (isScrollingRef.current) {
+      return;
+    }
+    
     setSelectedItemName(itemName);
     setConfirmed(false); // Reset confirmation when changing items
     
@@ -952,6 +1024,7 @@ export default function ManagerReview() {
   return (
     <motion.div
       className="min-h-screen bg-gradient-to-b from-background to-muted/30"
+      style={{ touchAction: 'pan-y' }}
       variants={pageVariants}
       initial="initial"
       animate="animate"
@@ -968,7 +1041,8 @@ export default function ManagerReview() {
             variant="ghost"
             onClick={() => navigate("/dashboard")}
             size="sm"
-            className="text-xs sm:text-sm"
+            className="text-xs sm:text-sm touch-manipulation"
+            style={{ touchAction: 'manipulation' }}
           >
             <ArrowLeft className="w-4 h-4 sm:mr-2" />
             <span className="hidden sm:inline">Back</span>
@@ -1007,8 +1081,9 @@ export default function ManagerReview() {
                   }}
                 >
                   <Card
-                    className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.02] hover:border-primary"
+                    className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.02] hover:border-primary touch-manipulation"
                     onClick={() => handleWarehouseClick(warehouse)}
+                    style={{ touchAction: 'manipulation' }}
                   >
                     <div className="flex items-center gap-3 sm:gap-4 mb-4">
                       <div className="p-2 sm:p-3 bg-primary/10 rounded-lg">
@@ -1187,8 +1262,9 @@ export default function ManagerReview() {
                     }}
                   >
                     <Card
-                      className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary"
+                      className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation"
                       onClick={() => handleFloorClick(floor.floorName)}
+                      style={{ touchAction: 'manipulation' }}
                     >
                       <div className="flex items-center justify-between relative">
                         {hasUncheckedEntriesInFloor(floor.floorName) && (
@@ -1283,9 +1359,15 @@ export default function ManagerReview() {
                     }}
                   >
                     <Card
-                      className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary"
+                      className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation"
+                      style={{ touchAction: 'manipulation' }}
                       onMouseDown={(e) => {
                         if (e.button === 0 && !editingItemName) {
+                          handleItemNameLongPressStart(groupedItem.description);
+                        }
+                      }}
+                      onTouchStart={(e) => {
+                        if (!editingItemName) {
                           handleItemNameLongPressStart(groupedItem.description);
                         }
                       }}

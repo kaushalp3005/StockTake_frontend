@@ -112,9 +112,14 @@ export default function AddItem() {
   
   // Description dropdown search
   const [descriptionSearchQuery, setDescriptionSearchQuery] = useState("");
+  const [showDescriptionDropdown, setShowDescriptionDropdown] = useState(false);
   
   // Pending search selection (for auto-fill after categorialData loads)
   const [pendingSelection, setPendingSelection] = useState<{group: string; subgroup: string; particulars: string; uom: number | null} | null>(null);
+
+  // Lock fields after search auto-fill
+  const [isGroupLocked, setIsGroupLocked] = useState(false);
+  const [isSubgroupLocked, setIsSubgroupLocked] = useState(false);
 
   useEffect(() => {
     // Get floor session from localStorage
@@ -135,7 +140,85 @@ export default function AddItem() {
     if (parsedSession.items && parsedSession.items.length > 0) {
       setAddedItems(parsedSession.items);
     }
+    
+    // Restore current form state if it exists
+    if (parsedSession.currentFormState) {
+      const formState = parsedSession.currentFormState;
+      console.log("Restoring form state:", formState);
+      
+      // Restore all form fields
+      if (formState.stockType) setStockType(formState.stockType);
+      if (formState.itemType) setItemType(formState.itemType);
+      if (formState.category) setCategory(formState.category);
+      if (formState.customCategory) setCustomCategory(formState.customCategory);
+      if (formState.subcategory) setSubcategory(formState.subcategory);
+      if (formState.description) setDescription(formState.description);
+      if (formState.customItemName) setCustomItemName(formState.customItemName);
+      if (formState.packageSize) setPackageSize(formState.packageSize);
+      if (formState.units) setUnits(formState.units);
+      if (formState.descriptionSearchQuery) setDescriptionSearchQuery(formState.descriptionSearchQuery);
+    }
   }, [navigate]);
+
+  // Handle click outside to close description dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('[data-description-dropdown]')) {
+        setShowDescriptionDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Handle browser back button and page unload to save state
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      // Save current state before page unloads
+      if (floorSession) {
+        const currentFormState = {
+          stockType,
+          itemType,
+          category,
+          customCategory,
+          subcategory,
+          description,
+          customItemName,
+          packageSize,
+          units,
+          descriptionSearchQuery,
+          lastFormUpdate: new Date().toISOString()
+        };
+        
+        const updatedSession = {
+          ...floorSession,
+          items: addedItems,
+          currentFormState,
+          lastModified: new Date().toISOString(),
+          savedOnUnload: true
+        };
+        
+        localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
+      }
+    };
+
+    const handlePopState = () => {
+      // Handle browser back button
+      handleBeforeUnload({} as BeforeUnloadEvent);
+    };
+
+    // Add event listeners
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('popstate', handlePopState);
+
+    // Cleanup event listeners
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [floorSession, addedItems, stockType, itemType, category, customCategory, subcategory, description, customItemName, packageSize, units]);
 
   // Auto-save items to localStorage whenever addedItems changes
   useEffect(() => {
@@ -144,6 +227,7 @@ export default function AddItem() {
         ...floorSession,
         itemType: itemType || floorSession.itemType || "",
         items: addedItems,
+        lastModified: new Date().toISOString(), // Add timestamp for better tracking
       };
       localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
       
@@ -160,6 +244,33 @@ export default function AddItem() {
       }
     }
   }, [addedItems, floorSession, itemType]);
+
+  // Auto-save current form state whenever form fields change
+  useEffect(() => {
+    if (floorSession) {
+      const currentFormState = {
+        stockType,
+        itemType,
+        category,
+        customCategory,
+        subcategory,
+        description,
+        customItemName,
+        packageSize,
+        units,
+        lastFormUpdate: new Date().toISOString()
+      };
+      
+      const updatedSession = {
+        ...floorSession,
+        items: addedItems,
+        currentFormState,
+        lastModified: new Date().toISOString()
+      };
+      
+      localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
+    }
+  }, [floorSession, addedItems, stockType, itemType, category, customCategory, subcategory, description, customItemName, packageSize, units]);
 
   // Fetch categorial inventory data when item type is selected
   useEffect(() => {
@@ -506,6 +617,8 @@ export default function AddItem() {
     setCustomItemName("");
     setPackageSize("");
     setUnits("");
+
+    // Reset locks (removed UOM lock as it's now permanently read-only when auto-filled)
   };
 
   const handleRemoveItem = (id: string) => {
@@ -542,18 +655,37 @@ export default function AddItem() {
     setExpandedCategories(newExpanded);
   };
 
-  // Group items by category
+  // Group items by category, then by item (subcategory + description), then collect quantity entries
   const groupedItems = addedItems.reduce((acc, item) => {
     const category = item.category;
+    const itemKey = `${item.subcategory}|${item.description}`; // Unique item identifier
+    
     if (!acc[category]) {
-      acc[category] = [];
+      acc[category] = {};
     }
-    acc[category].push(item);
+    if (!acc[category][itemKey]) {
+      acc[category][itemKey] = {
+        itemInfo: {
+          subcategory: item.subcategory,
+          description: item.description,
+          packageSize: item.packageSize,
+          category: item.category,
+          itemType: item.itemType,
+          stockType: item.stockType
+        },
+        quantities: []
+      };
+    }
+    acc[category][itemKey].quantities.push({
+      id: item.id,
+      units: item.units,
+      totalWeight: item.totalWeight
+    });
     return acc;
-  }, {} as Record<string, AddedItem[]>);
+  }, {} as Record<string, Record<string, { itemInfo: any; quantities: Array<{id: string, units: number, totalWeight: number}> }>>);
 
-  const handleAddMoreQt = (itemId: string) => {
-    setAddingQuantityTo(itemId);
+  const handleAddMoreQt = (itemKey: string) => {
+    setAddingQuantityTo(itemKey);
     setNewQuantity("");
     setError("");
   };
@@ -563,13 +695,18 @@ export default function AddItem() {
     setNewQuantity("");
   };
 
-  const handleSubmitAddQt = (itemId: string) => {
+  const handleSubmitAddQt = (itemKey: string) => {
     if (!newQuantity || isNaN(parseFloat(newQuantity)) || parseFloat(newQuantity) <= 0) {
       setError("Please enter a valid quantity (decimals allowed, e.g., 450.25)");
       return;
     }
 
-    const existingItem = addedItems.find((item) => item.id === itemId);
+    // Find existing item from the same group using itemKey
+    const [subcategory, description] = itemKey.split('|');
+    const existingItem = addedItems.find((item) => 
+      `${item.subcategory}|${item.description}` === itemKey
+    );
+    
     if (!existingItem) {
       setError("Item not found");
       return;
@@ -581,6 +718,7 @@ export default function AddItem() {
     const newItem: AddedItem = {
       id: `item-${Date.now()}`,
       itemType: existingItem.itemType,
+      stockType: existingItem.stockType,
       category: existingItem.category,
       subcategory: existingItem.subcategory,
       description: existingItem.description,
@@ -909,28 +1047,86 @@ export default function AddItem() {
                       {isLoadingData ? "Loading descriptions..." : "Select sub-category first..."}
                     </div>
                   ) : (
-                    <FixedSelect 
-                      value={description || ""} 
-                      onValueChange={(value) => {
-                        setDescription(value);
-                        setDescriptionSearchQuery(""); // Clear search when item is selected
-                        if (value === "OTHER") {
-                          setPackageSize(""); // Clear UOM for manual entry
-                        }
-                      }}
-                      placeholder="Select description..."
-                      options={[
-                        ...(categorialData
-                          .find((g) => g.name === category)
-                          ?.subgroups.find((sg) => sg.name === subcategory)
-                          ?.particulars.map((particular) => ({
-                            value: particular.name,
-                            label: particular.name
-                          })) || []),
-                        { value: "OTHER", label: "Other (Custom Item)" }
-                      ]}
-                      className="bg-input border-input"
-                    />
+                    <div className="relative" data-description-dropdown>
+                      {/* Search Input */}
+                      <div className="relative">
+                        <Input
+                          type="text"
+                          placeholder="Search or select description..."
+                          value={descriptionSearchQuery || (description && description !== "OTHER" ? description : "")}
+                          onChange={(e) => {
+                            setDescriptionSearchQuery(e.target.value);
+                            if (e.target.value === "" && description) {
+                              // Clear selection if search is cleared
+                              setDescription("");
+                            }
+                          }}
+                          onFocus={() => setShowDescriptionDropdown(true)}
+                          className="bg-input border-input pr-8"
+                        />
+                        <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      </div>
+                      
+                      {/* Dropdown Results */}
+                      {showDescriptionDropdown && (
+                        <div className="absolute z-50 w-full mt-1 bg-background border border-input rounded-md shadow-lg max-h-48 overflow-y-auto">
+                          {(() => {
+                            const allOptions = [
+                              ...(categorialData
+                                .find((g) => g.name === category)
+                                ?.subgroups.find((sg) => sg.name === subcategory)
+                                ?.particulars.map((particular) => ({
+                                  value: particular.name,
+                                  label: particular.name,
+                                  uom: particular.uom
+                                })) || []),
+                              { value: "OTHER", label: "Other (Custom Item)", uom: null }
+                            ];
+                            
+                            const filteredOptions = allOptions.filter(option =>
+                              option.label.toLowerCase().includes(descriptionSearchQuery.toLowerCase())
+                            );
+                            
+                            if (filteredOptions.length === 0) {
+                              return (
+                                <div className="px-3 py-2 text-sm text-muted-foreground">
+                                  No items found
+                                </div>
+                              );
+                            }
+                            
+                            return filteredOptions.map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                className="w-full px-3 py-2 text-left text-sm hover:bg-muted focus:bg-muted focus:outline-none"
+                                onClick={() => {
+                                  setDescription(option.value);
+                                  setDescriptionSearchQuery("");
+                                  setShowDescriptionDropdown(false);
+                                  
+                                  // Auto-fill UOM if available
+                                  if (option.value !== "OTHER" && option.uom !== null && option.uom !== undefined) {
+                                    setPackageSize(option.uom.toString());
+                                  } else if (option.value === "OTHER") {
+                                    setPackageSize(""); // Clear UOM for manual entry
+                                  }
+                                }}
+                              >
+                                <div className="flex justify-between items-center">
+                                  <span>{option.label}</span>
+                                  {option.uom !== null && option.uom !== undefined && (
+                                    <span className="text-xs text-muted-foreground">
+                                      {formatUOM(option.uom)}
+                                    </span>
+                                  )}
+                                </div>
+                              </button>
+                            ));
+                          })()}
+                        </div>
+                      )}
+                    </div>
                   )}
                   
                   {/* Custom Item Name Input - shown when Other is selected */}
@@ -961,16 +1157,44 @@ export default function AddItem() {
                       htmlFor="packageSize"
                       className="text-foreground font-semibold text-sm sm:text-base"
                     >
-                      UOM
+                      UOM {packageSize && <span className="text-xs text-blue-600 dark:text-blue-400"></span>}
                     </Label>
+                    
                     <Input
                       id="packageSize"
                       type="number"
                       step="0.001"
+                      min="0"
                       placeholder="e.g., 0.250"
                       value={packageSize}
-                      onChange={(e) => setPackageSize(e.target.value)}
-                      className="bg-input border-input"
+                      onChange={(e) => {
+                        // Only allow editing if field is empty (manual entry)
+                        if (!packageSize) {
+                          const value = e.target.value;
+                          if (value === '') {
+                            setPackageSize('');
+                            return;
+                          }
+                          const numValue = parseFloat(value);
+                          if (!isNaN(numValue) && numValue >= 0) {
+                            setPackageSize(value);
+                          }
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        // Prevent editing if already has value from search
+                        if (packageSize) {
+                          e.preventDefault();
+                          return;
+                        }
+                        // Prevent entering minus sign
+                        if (e.key === '-' || e.key === 'Minus') {
+                          e.preventDefault();
+                        }
+                      }}
+                      className={`bg-input border-input ${packageSize ? 'cursor-not-allowed opacity-70' : ''}`}
+                      readOnly={!!packageSize}
+                      title={packageSize ? "UOM is auto-filled from search and cannot be edited" : "Enter UOM value"}
                     />
                     {packageSize && !isNaN(parseFloat(packageSize)) && parseFloat(packageSize) > 0 && (
                       <p className="text-xs text-muted-foreground">
@@ -993,9 +1217,29 @@ export default function AddItem() {
                       id="units"
                       type="number"
                       step="0.01"
+                      min="0"
                       placeholder="e.g., 450.25"
                       value={units}
-                      onChange={(e) => setUnits(e.target.value)}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        // Allow empty value for editing
+                        if (value === '') {
+                          setUnits('');
+                          return;
+                        }
+                        // Parse the value and check if it's non-negative
+                        const numValue = parseFloat(value);
+                        if (!isNaN(numValue) && numValue >= 0) {
+                          setUnits(value);
+                        }
+                        // If negative or invalid, don't update the state (effectively blocks the input)
+                      }}
+                      onKeyDown={(e) => {
+                        // Prevent entering minus sign
+                        if (e.key === '-' || e.key === 'Minus') {
+                          e.preventDefault();
+                        }
+                      }}
                       className="bg-input border-input"
                     />
                   </div>
@@ -1063,7 +1307,7 @@ export default function AddItem() {
                   ) : (
                     Object.entries(groupedItems).map(([category, items]) => {
                       const isExpanded = expandedCategories.has(category);
-                      const itemCount = items.length;
+                      const totalItemsInCategory = Object.values(items).reduce((sum, item) => sum + item.quantities.length, 0);
                       return (
                         <div key={category} className="space-y-1">
                           {/* Category Header - Clickable */}
@@ -1081,108 +1325,156 @@ export default function AddItem() {
                                 {category}
                               </span>
                               <span className="text-xs text-blue-600 dark:text-blue-400 bg-blue-200 dark:bg-blue-800 px-2 py-0.5 rounded-full">
-                                {itemCount} {itemCount === 1 ? 'entry' : 'entries'}
+                                {totalItemsInCategory} {totalItemsInCategory === 1 ? 'entry' : 'entries'}
                               </span>
                             </div>
                           </button>
 
                           {/* Category Items - Expandable */}
                           {isExpanded && (
-                            <div className="space-y-2 ml-4 pl-2 border-l-2 border-blue-200 dark:border-blue-800">
-                              {items.map((item) => {
-                                const isAddingQt = addingQuantityTo === item.id;
+                            <div className="space-y-2 sm:space-y-3 ml-2 sm:ml-4 pl-2 border-l-2 border-blue-200 dark:border-blue-800">
+                              {Object.entries(items).map(([itemKey, itemData]) => {
+                                const { itemInfo, quantities } = itemData;
+                                const isAddingQt = addingQuantityTo === itemKey;
+                                const totalWeight = quantities.reduce((sum, qty) => sum + qty.totalWeight, 0);
+                                
                                 return (
-                                  <Card key={item.id} className="p-3 bg-white dark:bg-slate-950">
-                                    <div className="flex justify-between items-start gap-2">
-                                      <div className="flex-1 min-w-0">
-                                        {item.stockType && (
-                                          <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold mb-1 ${
-                                            item.stockType === "Fresh Stock" 
-                                              ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
-                                              : "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300"
-                                          }`}>
-                                            {item.stockType}
-                                          </span>
-                                        )}
-                                        <p className="font-semibold text-xs sm:text-sm text-foreground">
-                                          {item.subcategory}
-                                        </p>
-                                        <p className="text-xs text-muted-foreground mt-1">
-                                          {item.description}
-                                        </p>
-                                        <div className="flex items-center gap-2 mt-2">
-                                          <p className="text-xs text-muted-foreground">
-                                            UOM: {formatUOM(item.packageSize)} × {item.units % 1 === 0 ? item.units : item.units.toFixed(2)} units
-                                          </p>
+                                  <div key={itemKey} className="bg-white dark:bg-slate-950 border border-border rounded-lg overflow-hidden">
+                                    {/* Item Header */}
+                                    <div className="p-2 sm:p-4 bg-gray-50 dark:bg-slate-800 border-b border-border">
+                                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                                        <div className="flex-1 min-w-0">
+                                          <div className="flex flex-col sm:flex-row sm:items-start gap-2">
+                                            <div className="flex-1">
+                                              <h4 className="font-semibold text-xs sm:text-base text-foreground uppercase leading-tight">
+                                                {itemInfo.subcategory}
+                                              </h4>
+                                              <p className="text-2xs sm:text-sm text-muted-foreground line-clamp-2">
+                                                {itemInfo.description}
+                                              </p>
+                                            </div>
+                                            {itemInfo.stockType && (
+                                              <span className={`shrink-0 px-1.5 py-0.5 sm:px-2 sm:py-1 rounded text-2xs sm:text-xs font-semibold ${
+                                                itemInfo.stockType === "Fresh Stock" 
+                                                  ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+                                                  : "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300"
+                                              }`}>
+                                                {itemInfo.stockType}
+                                              </span>
+                                            )}
+                                          </div>
                                         </div>
-                                        <p className="text-xs font-semibold text-primary mt-1">
-                                          Total: {item.totalWeight.toFixed(2)} kg
-                                        </p>
+                                        
+                                        {/* Mobile: Stack total and buttons vertically */}
+                                        <div className="flex flex-row sm:flex-col items-center justify-between sm:justify-end gap-2 sm:gap-2">
+                                          <div className="text-left sm:text-right">
+                                            <p className="text-2xs sm:text-xs text-muted-foreground">Total Weight</p>
+                                            <p className="font-bold text-primary text-xs sm:text-base">{totalWeight.toFixed(2)} kg</p>
+                                          </div>
+                                          
+                                          <div className="flex items-center gap-2">
+                                            {!isAddingQt && (
+                                              <button
+                                                onClick={() => handleAddMoreQt(itemKey)}
+                                                className="flex items-center justify-center w-8 h-8 sm:w-auto sm:h-8 sm:px-3 bg-primary text-white text-xs sm:text-sm font-medium rounded-md hover:bg-primary/90 transition-colors touch-manipulation"
+                                                title="Add more quantity"
+                                              >
+                                                <Plus className="w-4 h-4 sm:w-4 sm:h-4" />
+                                                <span className="hidden sm:inline ml-1">Add</span>
+                                              </button>
+                                            )}
+                                            <button
+                                              onClick={() => {
+                                                // Remove all quantities for this item
+                                                const idsToRemove = quantities.map(q => q.id);
+                                                setAddedItems(prev => prev.filter(item => !idsToRemove.includes(item.id)));
+                                              }}
+                                              className="flex items-center justify-center w-8 h-8 sm:w-8 sm:h-8 text-destructive hover:bg-destructive/10 rounded-md transition-colors touch-manipulation"
+                                              title="Delete all quantities of this item"
+                                            >
+                                              <Trash2 className="w-4 h-4 sm:w-3 sm:h-3" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
 
-                                        {/* Inline Quantity Input */}
-                                        {isAddingQt && (
-                                          <div className="mt-3 p-2 bg-primary/5 rounded-md border border-primary/20">
-                                            <div className="flex items-center gap-2">
-                                              <Input
-                                                type="number"
-                                                step="0.01"
-                                                placeholder="Enter quantity (e.g., 450.25)"
-                                                value={newQuantity}
-                                                onChange={(e) => setNewQuantity(e.target.value)}
-                                                className="h-8 text-xs flex-1 bg-background"
-                                                autoFocus
-                                                onKeyDown={(e) => {
-                                                  if (e.key === "Enter") {
-                                                    e.preventDefault();
-                                                    handleSubmitAddQt(item.id);
-                                                  } else if (e.key === "Escape") {
-                                                    handleCancelAddQt();
-                                                  }
-                                                }}
-                                              />
+                                    {/* Quantity Rows */}
+                                    <div className="divide-y divide-border">
+                                      {quantities.map((qty, index) => (
+                                        <div key={qty.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-1.5 sm:p-4 hover:bg-muted/30 gap-1 sm:gap-3">
+                                          <div className="flex items-center gap-2 sm:gap-3 flex-1">
+                                            <span className="w-5 h-5 sm:w-7 sm:h-7 bg-primary/10 text-primary text-2xs sm:text-sm font-bold rounded-full flex items-center justify-center shrink-0">
+                                              {index + 1}
+                                            </span>
+                                            <div className="flex-1 min-w-0">
+                                              <p className="text-xs sm:text-base font-medium text-foreground">
+                                                {qty.units % 1 === 0 ? qty.units : qty.units.toFixed(2)} units
+                                              </p>
+                                            </div>
+                                          </div>
+                                          
+                                          <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3">
+                                            <span className="text-xs sm:text-base font-semibold text-foreground">
+                                              [{qty.totalWeight.toFixed(2)} kg]
+                                            </span>
+                                            <button
+                                              onClick={() => handleRemoveItem(qty.id)}
+                                              className="flex items-center justify-center w-8 h-8 sm:w-7 sm:h-7 text-destructive hover:bg-destructive/10 rounded-md transition-colors touch-manipulation shrink-0"
+                                              title="Delete this quantity"
+                                            >
+                                              <Trash2 className="w-4 h-4 sm:w-3 sm:h-3" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                      
+                                      {/* Add Quantity Input Row */}
+                                      {isAddingQt && (
+                                        <div className="p-1.5 sm:p-4 bg-primary/5 border-t-2 border-primary/20">
+                                          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 sm:gap-3">
+                                            <Input
+                                              type="number"
+                                              step="0.01"
+                                              placeholder="Enter quantity (e.g., 450.25)"
+                                              value={newQuantity}
+                                              onChange={(e) => setNewQuantity(e.target.value)}
+                                              className="h-9 sm:h-9 text-xs sm:text-sm flex-1 bg-background"
+                                              autoFocus
+                                              onKeyDown={(e) => {
+                                                if (e.key === "Enter") {
+                                                  e.preventDefault();
+                                                  handleSubmitAddQt(itemKey);
+                                                } else if (e.key === "Escape") {
+                                                  handleCancelAddQt();
+                                                }
+                                              }}
+                                            />
+                                            <div className="flex gap-2">
                                               <Button
                                                 size="sm"
-                                                onClick={() => handleSubmitAddQt(item.id)}
-                                                className="h-8 px-2 bg-green-600 hover:bg-green-700"
+                                                onClick={() => handleSubmitAddQt(itemKey)}
+                                                className="h-9 sm:h-9 px-3 sm:px-3 bg-green-600 hover:bg-green-700 text-white touch-manipulation flex-1 sm:flex-none text-xs sm:text-sm"
                                                 disabled={!newQuantity || parseFloat(newQuantity) <= 0 || isNaN(parseFloat(newQuantity))}
                                               >
-                                                <Check className="w-3 h-3" />
+                                                <Check className="w-3 h-3 sm:w-3 sm:h-3 sm:mr-1" />
+                                                <span className="sm:hidden text-2xs">Add</span>
                                               </Button>
                                               <Button
                                                 size="sm"
                                                 variant="ghost"
                                                 onClick={handleCancelAddQt}
-                                                className="h-8 px-2"
+                                                className="h-9 sm:h-9 px-3 sm:px-3 touch-manipulation flex-1 sm:flex-none text-xs sm:text-sm"
                                               >
-                                                <X className="w-3 h-3" />
+                                                <X className="w-3 h-3 sm:w-3 sm:h-3 sm:mr-1" />
+                                                <span className="sm:hidden text-2xs">Cancel</span>
                                               </Button>
                                             </div>
                                           </div>
-                                        )}
-                                      </div>
-                                      <div className="flex flex-col gap-2 flex-shrink-0">
-                                        {!isAddingQt && (
-                                          <button
-                                            onClick={() => handleAddMoreQt(item.id)}
-                                            className="text-xs px-2 py-1 bg-primary/10 hover:bg-primary/20 text-primary rounded-md transition-colors font-medium"
-                                            aria-label="Add more quantity"
-                                            title="Add more quantity"
-                                          >
-                                            Add more qt
-                                          </button>
-                                        )}
-                                        <button
-                                          onClick={() => handleRemoveItem(item.id)}
-                                          className="text-destructive hover:text-destructive/80 transition-colors p-1.5 rounded-md hover:bg-destructive/10 mt-auto"
-                                          aria-label="Remove item"
-                                          title="Remove item"
-                                          disabled={isAddingQt}
-                                        >
-                                          <Trash2 className="w-4 h-4" />
-                                        </button>
-                                      </div>
+                                        </div>
+                                      )}
                                     </div>
-                                  </Card>
+                                  </div>
                                 );
                               })}
                             </div>

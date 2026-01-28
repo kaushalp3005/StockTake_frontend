@@ -139,7 +139,6 @@ export default function EntriesSummary() {
         userEmail: user?.email || floorSession.userEmail || "",
         userName: user?.name || floorSession.userName || "",
       };
-      localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
 
       // Store the session in a list of all sessions (for backward compatibility)
       const allSessions = JSON.parse(
@@ -147,6 +146,10 @@ export default function EntriesSummary() {
       );
       allSessions.push(updatedSession);
       localStorage.setItem("floorSessions", JSON.stringify(allSessions));
+
+      // Clear the current session after successful submission
+      // This removes the auto-save session so user won't see "resume session" option
+      localStorage.removeItem("currentFloorSession");
 
       // Clear loading state before navigation
       setIsLoading(false);

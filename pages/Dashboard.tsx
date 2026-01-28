@@ -37,6 +37,7 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [userSessions, setUserSessions] = useState<FloorSession[]>([]);
+  const [pendingSession, setPendingSession] = useState<any>(null);
 
   // Memoized submitted sessions calculations
   const { submittedSessions, submittedItems, submittedWeight } = useMemo(() => {
@@ -136,6 +137,16 @@ export default function Dashboard() {
       try {
         const parsedUser = JSON.parse(userStr);
 
+        // Also check for pending session when loading sessions
+        const currentSession = localStorage.getItem("currentFloorSession");
+        if (currentSession) {
+          const sessionData = JSON.parse(currentSession);
+          if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
+            console.log("Loading sessions - found pending session:", sessionData);
+            setPendingSession(sessionData);
+          }
+        }
+
         // Get all floor sessions and filter by current user
         const allSessions = JSON.parse(
           localStorage.getItem("floorSessions") || "[]"
@@ -181,6 +192,18 @@ export default function Dashboard() {
       try {
         const parsedUser = JSON.parse(userStr);
         setUser(parsedUser);
+        
+        // Check for pending session with unsaved items
+        const currentSession = localStorage.getItem("currentFloorSession");
+        if (currentSession) {
+          const sessionData = JSON.parse(currentSession);
+          // Check if session has unsaved items (items exist but session is not submitted)
+          if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
+            console.log("Found pending session:", sessionData);
+            setPendingSession(sessionData);
+          }
+        }
+        
         loadUserSessions();
       } catch (err) {
         console.error("Failed to parse user", err);
@@ -193,10 +216,57 @@ export default function Dashboard() {
   // Refresh sessions when component comes into focus (e.g., returning from edit page)
   useEffect(() => {
     const handleFocus = () => {
+      // Check for pending session when returning to dashboard
+      const currentSession = localStorage.getItem("currentFloorSession");
+      if (currentSession) {
+        try {
+          const sessionData = JSON.parse(currentSession);
+          // Check if session has unsaved items (items exist but session is not submitted)
+          if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
+            console.log("Updated pending session on focus:", sessionData);
+            setPendingSession(sessionData);
+          } else {
+            // Clear pending session if it's been submitted
+            setPendingSession(null);
+          }
+        } catch (err) {
+          console.error("Error parsing session on focus:", err);
+        }
+      } else {
+        // No current session exists, clear pending
+        setPendingSession(null);
+      }
+      
       loadUserSessions();
     };
+    
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
+  }, []);
+
+  // Listen for localStorage changes (for real-time pending session updates)
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "currentFloorSession") {
+        if (e.newValue) {
+          try {
+            const sessionData = JSON.parse(e.newValue);
+            if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
+              console.log("Storage change detected - pending session:", sessionData);
+              setPendingSession(sessionData);
+            }
+          } catch (err) {
+            console.error("Error parsing storage change:", err);
+          }
+        } else {
+          // Session was removed
+          setPendingSession(null);
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
   const handleLogout = () => {
@@ -210,6 +280,23 @@ export default function Dashboard() {
     localStorage.setItem("currentFloorSession", JSON.stringify(session));
     // Navigate to add-item page where user can edit
     navigate("/audit/add-item");
+  };
+
+  const handleResumeSession = () => {
+    // Session is already in localStorage, just navigate
+    navigate("/audit/add-item");
+  };
+
+  const handleDiscardSession = () => {
+    // Remove the pending session
+    localStorage.removeItem("currentFloorSession");
+    setPendingSession(null);
+  };
+
+  const handleViewEntries = () => {
+    // Don't clear pending session when just viewing entries
+    // Session will only be cleared after actual submission
+    navigate("/audit/entries");
   };
 
   if (isLoading) {
@@ -481,52 +568,75 @@ export default function Dashboard() {
             </div>
           )}
 
+
+
           {/* My Entries Section - Only show for FLOOR_MANAGER */}
           {user?.role === "FLOOR_MANAGER" && (
             <div className="mt-8 sm:mt-12">
               <div className="mb-6">
-                <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2">
+                <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2 flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-primary" />
                   My Entries
                 </h2>
                 <p className="text-sm sm:text-base text-muted-foreground">
-                  Properly submitted stock entries
+                  All stock entries - submitted and in progress
                 </p>
+              </div>
+
+              {/* Entry Status Tabs */}
+              <div className="flex gap-1 mb-6 p-1 bg-muted rounded-lg w-fit">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="data-[active=true]:bg-background data-[active=true]:shadow-sm"
+                  data-active={true}
+                >
+                  All Entries
+                </Button>
               </div>
 
               {/* Filter sessions to show only submitted/approved entries */}
               <>
                 {/* Summary Stats */}
-                {submittedSessions.length > 0 && (
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-6">
-                        <Card className="p-4 sm:p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
-                          <p className="text-xs sm:text-sm text-muted-foreground mb-2">
-                            Submitted Sessions
-                          </p>
-                          <p className="text-2xl sm:text-3xl font-bold text-primary">
-                            {submittedSessions.length}
-                          </p>
-                        </Card>
-                        <Card className="p-4 sm:p-6 bg-gradient-to-br from-blue-500/10 to-blue-500/5 border-blue-500/20">
-                          <p className="text-xs sm:text-sm text-muted-foreground mb-2">
-                            Total Items
-                          </p>
-                          <p className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">
-                            {submittedItems}
-                          </p>
-                        </Card>
-                        <Card className="p-4 sm:p-6 bg-gradient-to-br from-green-500/10 to-green-500/5 border-green-500/20">
-                          <p className="text-xs sm:text-sm text-muted-foreground mb-2">
-                            Total Weight
-                          </p>
-                          <p className="text-2xl sm:text-3xl font-bold text-green-600 dark:text-green-400">
-                            {submittedWeight.toFixed(2)} kg
-                          </p>
-                        </Card>
-                      </div>
-                    )}
-
+              {(submittedSessions.length > 0 || pendingSession) && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-6">
+                  <Card className="p-4 sm:p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
+                    <p className="text-xs sm:text-sm text-muted-foreground mb-2">
+                      Total Sessions
+                    </p>
+                    <p className="text-2xl sm:text-3xl font-bold text-primary">
+                      {submittedSessions.length + (pendingSession ? 1 : 0)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {submittedSessions.length} submitted + {pendingSession ? 1 : 0} pending
+                    </p>
+                  </Card>
+                  <Card className="p-4 sm:p-6 bg-gradient-to-br from-blue-500/10 to-blue-500/5 border-blue-500/20">
+                    <p className="text-xs sm:text-sm text-muted-foreground mb-2">
+                      Total Items
+                    </p>
+                    <p className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">
+                      {submittedItems + (pendingSession?.items?.length || 0)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {submittedItems} submitted + {pendingSession?.items?.length || 0} pending
+                    </p>
+                  </Card>
+                  <Card className="p-4 sm:p-6 bg-gradient-to-br from-green-500/10 to-green-500/5 border-green-500/20">
+                    <p className="text-xs sm:text-sm text-muted-foreground mb-2">
+                      Total Weight
+                    </p>
+                    <p className="text-2xl sm:text-3xl font-bold text-green-600 dark:text-green-400">
+                      {(submittedWeight + (pendingSession?.items?.reduce((sum, item) => sum + (item.totalWeight || 0), 0) || 0)).toFixed(2)} kg
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {submittedWeight.toFixed(2)} submitted + {(pendingSession?.items?.reduce((sum, item) => sum + (item.totalWeight || 0), 0) || 0).toFixed(2)} pending
+                    </p>
+                  </Card>
+                </div>
+              )}
                     {/* Entries List */}
-                    {submittedSessions.length === 0 ? (
+                    {submittedSessions.length === 0 && !pendingSession ? (
                 <Card className="p-6 sm:p-12 text-center bg-muted/50">
                   <FileText className="w-10 h-10 sm:w-12 sm:h-12 text-muted-foreground mx-auto mb-4" />
                   <p className="text-base sm:text-lg font-semibold text-foreground mb-1">
@@ -544,6 +654,76 @@ export default function Dashboard() {
                 </Card>
               ) : (
                 <div className="space-y-4 lg:space-y-6">
+                  {/* Pending Session Card - Show first if exists */}
+                  {pendingSession && (
+                    <Card
+                      className="p-4 sm:p-6 lg:p-8 border-orange-200 dark:border-orange-800 bg-gradient-to-r from-orange-50/50 to-yellow-50/50 dark:from-orange-950/10 dark:to-yellow-950/10 hover:shadow-md transition-all duration-200"
+                    >
+                      <div className="space-y-4">
+                        {/* Pending Session Header */}
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-orange-600" />
+                              <h3 className="text-base sm:text-lg font-bold text-foreground">
+                                {pendingSession.warehouse} - {pendingSession.floorName || 'Floor'}
+                              </h3>
+                              <span className="px-2 py-1 bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300 rounded text-xs font-semibold">
+                                IN PROGRESS
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
+                              <div className="flex items-center gap-1">
+                                <Calendar className="w-3 h-3 sm:w-4 sm:h-4" />
+                                <span>
+                                  {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleDateString()} at {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleTimeString()}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              onClick={handleResumeSession}
+                              size="sm"
+                              className="bg-orange-600 hover:bg-orange-700 text-white"
+                            >
+                              Resume Work
+                            </Button>
+                          </div>
+                        </div>
+
+                        {/* Pending Session Stats */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+                          <div className="text-center p-3 bg-orange-100/50 dark:bg-orange-900/20 rounded">
+                            <p className="text-xs text-muted-foreground">Items</p>
+                            <p className="text-lg font-bold text-orange-800 dark:text-orange-200">
+                              {pendingSession.items?.length || 0}
+                            </p>
+                          </div>
+                          <div className="text-center p-3 bg-orange-100/50 dark:bg-orange-900/20 rounded">
+                            <p className="text-xs text-muted-foreground">Weight</p>
+                            <p className="text-lg font-bold text-orange-800 dark:text-orange-200">
+                              {(pendingSession.items?.reduce((sum, item) => sum + (item.totalWeight || 0), 0) || 0).toFixed(1)} kg
+                            </p>
+                          </div>
+                          <div className="text-center p-3 bg-orange-100/50 dark:bg-orange-900/20 rounded">
+                            <p className="text-xs text-muted-foreground">Form Status</p>
+                            <p className="text-lg font-bold text-orange-800 dark:text-orange-200">
+                              {pendingSession.currentFormState?.category ? 'Filling' : 'Ready'}
+                            </p>
+                          </div>
+                          <div className="text-center p-3 bg-orange-100/50 dark:bg-orange-900/20 rounded">
+                            <p className="text-xs text-muted-foreground">Auto-Saved</p>
+                            <p className="text-lg font-bold text-orange-800 dark:text-orange-200">
+                              ✓
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  )}
+
+                  {/* Submitted Sessions */}
                   {submittedSessions.map((session) => {
                     const sessionWeight = session.items?.reduce(
                       (sum: number, item: any) => sum + (item.totalWeight || 0),

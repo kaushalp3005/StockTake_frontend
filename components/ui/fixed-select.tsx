@@ -13,6 +13,7 @@ interface FixedSelectProps {
   placeholder?: string;
   options: Option[];
   className?: string;
+  disabled?: boolean;
 }
 
 export function FixedSelect({ 
@@ -20,7 +21,8 @@ export function FixedSelect({
   onValueChange, 
   placeholder = "Select an option", 
   options, 
-  className 
+  className,
+  disabled = false
 }: FixedSelectProps) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [selectedValue, setSelectedValue] = React.useState(value || "");
@@ -89,13 +91,16 @@ export function FixedSelect({
       <button
         ref={triggerRef}
         type="button"
+        disabled={disabled}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
+          if (disabled) return;
           isOpen ? handleClose() : handleOpen();
         }}
         className={cn(
           "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+          disabled && "cursor-not-allowed opacity-50",
           className
         )}
       >
@@ -105,7 +110,7 @@ export function FixedSelect({
         <ChevronDown className={cn("h-4 w-4 opacity-50 transition-transform", isOpen && "rotate-180")} />
       </button>
 
-      {isOpen && (
+      {isOpen && !disabled && (
         <div
           ref={dropdownRef}
           className="absolute z-[9999] mt-1 w-full rounded-md border bg-popover text-popover-foreground shadow-lg animate-in fade-in-0 zoom-in-95"
