@@ -2,13 +2,15 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loader, LogOut, Package, FileText, Calendar, Warehouse, Edit2, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight, Trash2 } from "lucide-react";
+import { Loader, LogOut, Package, FileText, Calendar, Warehouse, Edit2, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight, Trash2, Download } from "lucide-react";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { stocktakeEntriesAPI } from "@/utils/api";
+import { useToast } from "@/hooks/use-toast";
 
 interface User {
   id: string;
@@ -30,14 +32,19 @@ interface FloorSession {
   status?: string;
   createdAt: string;
   submittedAt?: string;
+  isEditing?: boolean;
+  originalSessionId?: string;
+  originalStatus?: string;
 }
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [userSessions, setUserSessions] = useState<FloorSession[]>([]);
   const [pendingSession, setPendingSession] = useState<any>(null);
+  const [downloadingSession, setDownloadingSession] = useState<string | null>(null);
 
   // Memoized submitted sessions calculations
   const { submittedSessions, submittedItems, submittedWeight } = useMemo(() => {
@@ -277,7 +284,13 @@ export default function Dashboard() {
 
   const handleEditEntry = (session: FloorSession) => {
     // Load the session into currentFloorSession for editing
-    localStorage.setItem("currentFloorSession", JSON.stringify(session));
+    const editSession = {
+      ...session,
+      isEditing: true,
+      originalSessionId: session.id,
+      originalStatus: session.status
+    };
+    localStorage.setItem("currentFloorSession", JSON.stringify(editSession));
     // Navigate to add-item page where user can edit
     navigate("/audit/add-item");
   };
@@ -297,6 +310,192 @@ export default function Dashboard() {
     // Don't clear pending session when just viewing entries
     // Session will only be cleared after actual submission
     navigate("/audit/entries");
+  };
+
+  const handleDownloadEntries = async (session: FloorSession) => {
+    // Download the items from this specific session (same items shown in view details)
+    // Segregates Fresh Stock and Off Grade/Rejection items into separate Excel sheets
+    if (!session.warehouse || !session.floorName || !session.items || session.items.length === 0) {
+      toast({
+        title: "Error",
+        description: "Session missing required information or has no items",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setDownloadingSession(session.id);
+    try {
+      // Dynamic import of exceljs
+      const ExcelJS = (await import("exceljs")).default;
+      const workbook = new ExcelJS.Workbook();
+      
+      // Separate items by stock type for different sheets
+      const freshStockItems = session.items.filter(
+        (item: any) => item.stockType === "Fresh Stock" || !item.stockType
+      );
+      const offGradeItems = session.items.filter(
+        (item: any) => item.stockType === "Off Grade/Rejection"
+      );
+
+      // Helper function to create a worksheet with items
+      const createWorksheet = (ws: any, items: any[], sheetTitle: string) => {
+        // Add title
+        ws.mergeCells('A1:H1');
+        const titleCell = ws.getCell('A1');
+        titleCell.value = sheetTitle;
+        titleCell.font = { bold: true, size: 16, color: { argb: 'FF1e3a8a' } };
+        titleCell.alignment = { horizontal: 'center' };
+        titleCell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFf8fafc' }
+        };
+
+        // Add headers
+        const headers = [
+          "Category",
+          "Subcategory", 
+          "Description",
+          "Package Size (kg)",
+          "Units",
+          "Total Weight (kg)",
+          "Date Submitted",
+          "Submitted By"
+        ];
+        
+        ws.getRow(3).values = headers;
+        ws.getRow(3).font = { bold: true, color: { argb: 'FF1e3a8a' } };
+        ws.getRow(3).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFe0f2fe' }
+        };
+
+        // Add data
+        items.forEach((item: any, index: number) => {
+          const row = ws.getRow(4 + index);
+          // For custom category items (no subcategory), the category field contains the item name
+          const isCustomCategory = item.category && !item.subcategory;
+          const itemName = isCustomCategory ? item.category : (item.description || item.subcategory || item.category || "Unknown Item");
+          
+          row.values = [
+            isCustomCategory ? "Unlisted Item" : item.category,
+            isCustomCategory ? "" : item.subcategory,
+            itemName,
+            item.packageSize?.toFixed(3) || "0.000",
+            item.units || 0,
+            item.totalWeight?.toFixed(2) || "0.00",
+            session.submittedAt ? new Date(session.submittedAt).toLocaleString() : 
+              (session.createdAt ? new Date(session.createdAt).toLocaleString() : "N/A"),
+            session.userName || session.userEmail || "N/A"
+          ];
+          
+          if (index % 2 === 0) {
+            row.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFfcfcfd' }
+            };
+          }
+        });
+
+        // Auto-fit columns
+        headers.forEach((_, index) => {
+          const column = ws.getColumn(index + 1);
+          let maxLength = headers[index].length;
+          
+          items.forEach((item: any) => {
+            const rowData = [
+              item.category,
+              item.subcategory,
+              item.description,
+              item.packageSize?.toFixed(3),
+              item.units,
+              item.totalWeight?.toFixed(2),
+              session.submittedAt || session.createdAt,
+              session.userName || session.userEmail
+            ];
+            const cellValue = String(rowData[index] || "");
+            maxLength = Math.max(maxLength, cellValue.length);
+          });
+          
+          column.width = Math.min(Math.max(maxLength + 2, 10), 50);
+        });
+
+        // Add summary row
+        const summaryRowIndex = 4 + items.length + 1;
+        const summaryRow = ws.getRow(summaryRowIndex);
+        const totalWeight = items.reduce((sum: number, item: any) => sum + (item.totalWeight || 0), 0);
+        const totalUnits = items.reduce((sum: number, item: any) => sum + (item.units || 0), 0);
+        
+        summaryRow.values = ["", "", "TOTAL:", "", totalUnits, totalWeight.toFixed(2), "", ""];
+        summaryRow.font = { bold: true };
+        summaryRow.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFe0f2fe' }
+        };
+      };
+
+      // Create worksheets based on available stock types
+      if (freshStockItems.length > 0) {
+        const freshStockWs = workbook.addWorksheet("Fresh Stock");
+        createWorksheet(freshStockWs, freshStockItems, `Fresh Stock - ${session.warehouse} - ${session.floorName}`);
+      }
+
+      if (offGradeItems.length > 0) {
+        const offGradeWs = workbook.addWorksheet("Off Grade Rejection");
+        createWorksheet(offGradeWs, offGradeItems, `Off Grade Rejection - ${session.warehouse} - ${session.floorName}`);
+      }
+
+      // If no items or all items are fresh stock, create a single sheet
+      if (freshStockItems.length === 0 && offGradeItems.length === 0) {
+        throw new Error("No items found in session");
+      }
+
+      // Generate Excel file
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      document.body.appendChild(link);
+      link.href = url;
+      
+      // Generate filename
+      const dateStr = session.submittedAt
+        ? new Date(session.submittedAt).toISOString().split("T")[0]
+        : new Date(session.createdAt).toISOString().split("T")[0];
+      const warehouse = session.warehouse.replace(/[\\s]/g, "_");
+      const floor = session.floorName.replace(/[\\s]/g, "_");
+      link.download = `StockTakeEntries_${warehouse}_${floor}_${dateStr}.xlsx`;
+      
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      // Use timeout to prevent toast blocking
+      setTimeout(() => {
+        toast({
+          title: "Success",
+          description: `Entries exported successfully${offGradeItems.length > 0 ? " with separate sheets for Fresh Stock and Off Grade items" : ""}`,
+        });
+      }, 100);
+
+    } catch (error: any) {
+      console.error("Download error:", error);
+      setTimeout(() => {
+        toast({
+          title: "Export Failed",
+          description: error.message || "Failed to export entries",
+          variant: "destructive",
+        });
+      }, 100);
+    } finally {
+      setDownloadingSession(null);
+    }
   };
 
   if (isLoading) {
@@ -377,9 +576,48 @@ export default function Dashboard() {
         },
       ],
     },
+    SUPERUSER: {
+      title: "Super User Dashboard",
+      description: "Full access to all system features",
+      actions: [
+        {
+          label: "Start Audit Session",
+          icon: Package,
+          action: () => navigate("/review"),
+        },
+        {
+          label: "Enter Stock for Floor",
+          icon: Package,
+          action: () => navigate("/audit/floor-selection"),
+        },
+        {
+          label: "Manage Users",
+          icon: Package,
+          action: () => navigate("/admin/users"),
+        },
+        {
+          label: "Manage Floors",
+          icon: Package,
+          action: () => navigate("/admin/floors"),
+        },
+        {
+          label: "View Summary",
+          icon: Package,
+          action: () => navigate("/summary"),
+        },
+        {
+          label: "View Resultsheet",
+          icon: Package,
+          action: () => navigate("/resultsheet"),
+        },
+      ],
+    },
   };
 
-  const content = roleContent[user?.role || "FLOOR_MANAGER"];
+  // Debug: log user role to help troubleshoot
+  console.log("Dashboard - User role:", user?.role, "Content found:", !!roleContent[user?.role || "FLOOR_MANAGER"]);
+
+  const content = roleContent[user?.role || "FLOOR_MANAGER"] || roleContent["FLOOR_MANAGER"];
 
   // Calculate total items and weight for all user sessions
   const totalItems = userSessions.reduce(
@@ -426,14 +664,14 @@ export default function Dashboard() {
         <div className="max-w-5xl mx-auto">
           <div className="mb-6 sm:mb-8">
             <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mb-2">
-              {content.title}
+              {content?.title || "Dashboard"}
             </h1>
-            <p className="text-base sm:text-lg text-muted-foreground">{content.description}</p>
+            <p className="text-base sm:text-lg text-muted-foreground">{content?.description || "Welcome to your dashboard"}</p>
           </div>
 
           {/* Action Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 mb-8">
-            {content.actions.map((action: any, idx: number) => (
+            {(content?.actions || []).map((action: any, idx: number) => (
               <Card
                 key={idx}
                 className="p-5 sm:p-6 hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-border/50 active:scale-[0.97] hover:scale-[1.02] group bg-white/80 backdrop-blur-sm"
@@ -661,31 +899,34 @@ export default function Dashboard() {
                     >
                       <div className="space-y-4">
                         {/* Pending Session Header */}
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-orange-600" />
-                              <h3 className="text-base sm:text-lg font-bold text-foreground">
-                                {pendingSession.warehouse} - {pendingSession.floorName || 'Floor'}
-                              </h3>
-                              <span className="px-2 py-1 bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300 rounded text-xs font-semibold">
-                                IN PROGRESS
-                              </span>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
-                              <div className="flex items-center gap-1">
-                                <Calendar className="w-3 h-3 sm:w-4 sm:h-4" />
-                                <span>
-                                  {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleDateString()} at {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleTimeString()}
+                        <div className="flex flex-col gap-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-orange-600" />
+                                <h3 className="text-base sm:text-lg font-bold text-foreground truncate">
+                                  {pendingSession.warehouse} - {pendingSession.floorName || 'Floor'}
+                                </h3>
+                                <span className="px-2 py-1 bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300 rounded text-xs font-semibold">
+                                  IN PROGRESS
                                 </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
+                                <div className="flex items-center gap-1">
+                                  <Calendar className="w-3 h-3 sm:w-4 sm:h-4" />
+                                  <span>
+                                    {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleDateString()} at {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleTimeString()}
+                                  </span>
+                                </div>
                               </div>
                             </div>
                           </div>
-                          <div className="flex gap-2">
+                          {/* Action Buttons Row */}
+                          <div className="flex flex-wrap gap-2 justify-end border-t pt-4">
                             <Button
                               onClick={handleResumeSession}
                               size="sm"
-                              className="bg-orange-600 hover:bg-orange-700 text-white"
+                              className="bg-orange-600 hover:bg-orange-700 text-white min-w-[120px]"
                             >
                               Resume Work
                             </Button>
@@ -693,9 +934,10 @@ export default function Dashboard() {
                               onClick={handleDiscardSession}
                               variant="outline"
                               size="sm"
-                              className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/20 dark:hover:text-red-300"
+                              className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/20 dark:hover:text-red-300 min-w-[100px]"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="w-4 h-4 mr-2" />
+                              Discard
                             </Button>
                           </div>
                         </div>
@@ -732,7 +974,7 @@ export default function Dashboard() {
                   )}
 
                   {/* Submitted Sessions */}
-                  {submittedSessions.map((session) => {
+                  {submittedSessions.map((session, sessionIndex) => {
                     const sessionWeight = session.items?.reduce(
                       (sum: number, item: any) => sum + (item.totalWeight || 0),
                       0
@@ -742,62 +984,85 @@ export default function Dashboard() {
 
                     return (
                       <Card
-                        key={session.id}
+                        key={`${session.id}-${sessionIndex}`}
                         className="p-4 sm:p-6 lg:p-8 border-border hover:shadow-md transition-all duration-200"
                       >
                         <div className="space-y-4">
                           {/* Session Header */}
-                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Warehouse className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
-                                <h3 className="text-base sm:text-lg font-bold text-foreground">
-                                  {session.warehouse} - {session.floorName || 'Floor'}
-                                </h3>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
-                                <div className="flex items-center gap-1">
-                                  <Calendar className="w-3 h-3 sm:w-4 sm:h-4" />
-                                  <span>{sessionDate} at {sessionTime}</span>
+                          <div className="flex flex-col gap-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <Warehouse className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
+                                  <h3 className="text-base sm:text-lg font-bold text-foreground truncate">
+                                    {session.warehouse} - {session.floorName || 'Floor'}
+                                  </h3>
                                 </div>
-                                {session.status && (
-                                  <span
-                                    className={`px-2 py-1 rounded text-xs font-semibold ${
-                                      session.status === "SUBMITTED"
-                                        ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
-                                        : session.status === "APPROVED"
-                                        ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
-                                        : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                                    }`}
-                                  >
-                                    {session.status}
-                                  </span>
-                                )}
+                                <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
+                                  <div className="flex items-center gap-1">
+                                    <Calendar className="w-3 h-3 sm:w-4 sm:h-4" />
+                                    <span>{sessionDate} at {sessionTime}</span>
+                                  </div>
+                                  {session.status && (
+                                    <span
+                                      className={`px-2 py-1 rounded text-xs font-semibold ${
+                                        session.status === "SUBMITTED"
+                                          ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                                          : session.status === "APPROVED"
+                                          ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+                                          : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                                      }`}
+                                    >
+                                      {session.status}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-4 sm:gap-6 mt-4 sm:mt-0">
-                              <div className="text-right flex-shrink-0">
+                              <div className="text-center sm:text-right flex-shrink-0">
                                 <p className="text-xs sm:text-sm text-muted-foreground">
                                   Total Weight
                                 </p>
-                                <p className="text-2xl sm:text-3xl font-bold text-primary whitespace-nowrap">
+                                <p className="text-xl sm:text-2xl font-bold text-primary">
                                   {sessionWeight.toFixed(2)} kg
                                 </p>
                               </div>
+                            </div>
+                            {/* Action Buttons Row */}
+                            <div className="flex flex-wrap gap-2 justify-end border-t pt-4">
+                              {/* Download Button - Show for both SUBMITTED and APPROVED */}
+                              <Button
+                                onClick={() => handleDownloadEntries(session)}
+                                disabled={downloadingSession === session.id}
+                                variant="outline"
+                                size="sm"
+                                className="min-w-[120px]"
+                              >
+                                {downloadingSession === session.id ? (
+                                  <>
+                                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                                    Exporting...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Download className="w-4 h-4 mr-2" />
+                                    Download
+                                  </>
+                                )}
+                              </Button>
                               {/* Edit Button - Only show for SUBMITTED status */}
                               {session.status === "SUBMITTED" && (
                                 <Button
                                   onClick={() => handleEditEntry(session)}
                                   variant="outline"
                                   size="sm"
-                                  className="w-full sm:w-auto flex-shrink-0"
+                                  className="min-w-[100px]"
                                 >
                                   <Edit2 className="w-4 h-4 mr-2" />
                                   Edit
                                 </Button>
                               )}
                               {session.status === "APPROVED" && (
-                                <span className="text-xs text-muted-foreground italic flex-shrink-0">
+                                <span className="text-xs text-muted-foreground italic self-center">
                                   Cannot edit approved entries
                                 </span>
                               )}
