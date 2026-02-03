@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 
 interface User {
   id: string;
+  username: string;
   name: string;
   email: string;
   role: string;
@@ -37,6 +38,26 @@ interface FloorSession {
   originalStatus?: string;
 }
 
+interface RecentEntry {
+  id: number;
+  entryId: string | null;
+  itemName: string;
+  itemType: string;
+  itemCategory: string;
+  itemSubcategory: string;
+  floorName: string;
+  warehouse: string;
+  totalQuantity: number;
+  unitUom: number;
+  totalWeight: number;
+  enteredBy: string;
+  enteredByEmail: string;
+  authority: string;
+  stockType: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -45,6 +66,8 @@ export default function Dashboard() {
   const [userSessions, setUserSessions] = useState<FloorSession[]>([]);
   const [pendingSession, setPendingSession] = useState<any>(null);
   const [downloadingSession, setDownloadingSession] = useState<string | null>(null);
+  const [recentEntries, setRecentEntries] = useState<RecentEntry[]>([]);
+  const [loadingRecentEntries, setLoadingRecentEntries] = useState(false);
 
   // Memoized submitted sessions calculations
   const { submittedSessions, submittedItems, submittedWeight } = useMemo(() => {
@@ -107,6 +130,11 @@ export default function Dashboard() {
             </span>
           </div>
           <div className="text-xs text-muted-foreground flex flex-wrap gap-3 mt-2">
+            {item.entryId && (
+              <span className="font-medium text-primary">
+                ID: {item.entryId}
+              </span>
+            )}
             {item.packageSize && (
               <span>
                 UOM: {item.packageSize?.toFixed(3) || "0.000"} kg
@@ -138,7 +166,7 @@ export default function Dashboard() {
     }
   }, []);
 
-  const loadUserSessions = () => {
+  const loadUserSessions = async () => {
     const userStr = localStorage.getItem("user");
     if (userStr) {
       try {
@@ -154,34 +182,97 @@ export default function Dashboard() {
           }
         }
 
-        // Get all floor sessions and filter by current user
-        const allSessions = JSON.parse(
-          localStorage.getItem("floorSessions") || "[]"
-        ) as FloorSession[];
-
-        console.log("All sessions:", allSessions);
-        console.log("Current user:", parsedUser);
-
-        // Filter sessions by user email or user ID
-        const filteredSessions = allSessions.filter(
-          (session) =>
-            session.userEmail === parsedUser.email ||
-            session.userId === parsedUser.id ||
-            session.userId === parsedUser.email
-        );
-
-        console.log("Filtered sessions for user:", filteredSessions);
-
+        // Fetch entries from database API instead of localStorage cache
+        const userIdentifier = parsedUser.username || parsedUser.email;
+        console.log("Fetching entries from database for user:", userIdentifier);
+        
+        const response = await stocktakeEntriesAPI.getEntries({
+          enteredBy: userIdentifier
+        });
+        
+        console.log("Fetched entries from database:", response);
+        
+        // API returns { success: true, entries: [...], count: number }
+        const entries = response?.entries || [];
+        
+        if (entries.length === 0) {
+          console.log("No entries found for user");
+          setUserSessions([]);
+          return;
+        }
+        
+        console.log(`✅ Found ${entries.length} entries for user`);
+        
+        // Group entries by session (warehouse + floor + date)
+        const sessionsMap = new Map<string, FloorSession>();
+        
+        entries.forEach((entry: any) => {
+          const sessionDate = entry.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0];
+          const sessionKey = `${entry.warehouse}-${entry.floorName}-${entry.enteredBy}-${sessionDate}`;
+          
+          if (!sessionsMap.has(sessionKey)) {
+            sessionsMap.set(sessionKey, {
+              id: `session-${Date.parse(entry.createdAt || new Date().toISOString())}`,
+              warehouse: entry.warehouse,
+              floorName: entry.floorName,
+              floor: entry.floorName,
+              authority: entry.authority || parsedUser.role || "FLOOR_MANAGER",
+              userId: parsedUser.id || parsedUser.email,
+              userEmail: entry.enteredByEmail || parsedUser.email,
+              userName: entry.enteredBy || parsedUser.name,
+              items: [],
+              status: "SUBMITTED",
+              createdAt: entry.createdAt,
+              submittedAt: entry.updatedAt || entry.createdAt
+            });
+          }
+          
+          const session = sessionsMap.get(sessionKey)!;
+          session.items.push({
+            id: `item-${entry.id}-${Date.now()}`, // Local ID for UI
+            databaseId: entry.id.toString(), // Store database ID for updates
+            entryId: entry.entryId || null, // Batch entry ID (YYMM0001 format)
+            category: entry.itemCategory,
+            subcategory: entry.itemSubcategory,
+            description: entry.itemName,
+            packageSize: entry.unitUom,
+            units: entry.totalQuantity,
+            totalWeight: entry.totalWeight,
+            stockType: entry.stockType || entry.stock_type, // Fallback for safety
+            itemType: entry.itemType
+          });
+        });
+        
+        const sessions = Array.from(sessionsMap.values());
+        
         // Sort by creation date (newest first)
-        filteredSessions.sort(
+        sessions.sort(
           (a, b) =>
             new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
-
-        setUserSessions(filteredSessions);
+        
+        console.log("Grouped sessions from database:", sessions);
+        setUserSessions(sessions);
+        
       } catch (err) {
-        console.error("Failed to parse user or sessions", err);
+        console.error("Failed to fetch entries from database:", err);
       }
+    }
+  };
+
+  // Load recent entries for managers (INVENTORY_MANAGER and SUPERUSER)
+  const loadRecentEntries = async () => {
+    setLoadingRecentEntries(true);
+    try {
+      const response = await stocktakeEntriesAPI.getRecentEntries(10);
+      console.log("Recent entries loaded:", response);
+      if (response?.entries) {
+        setRecentEntries(response.entries);
+      }
+    } catch (err) {
+      console.error("Failed to fetch recent entries:", err);
+    } finally {
+      setLoadingRecentEntries(false);
     }
   };
 
@@ -199,7 +290,7 @@ export default function Dashboard() {
       try {
         const parsedUser = JSON.parse(userStr);
         setUser(parsedUser);
-        
+
         // Check for pending session with unsaved items
         const currentSession = localStorage.getItem("currentFloorSession");
         if (currentSession) {
@@ -210,8 +301,13 @@ export default function Dashboard() {
             setPendingSession(sessionData);
           }
         }
-        
+
         loadUserSessions();
+
+        // Load recent entries for INVENTORY_MANAGER and SUPERUSER
+        if (parsedUser.role === "INVENTORY_MANAGER" || parsedUser.role === "SUPERUSER") {
+          loadRecentEntries();
+        }
       } catch (err) {
         console.error("Failed to parse user", err);
       }
@@ -283,12 +379,18 @@ export default function Dashboard() {
   };
 
   const handleEditEntry = (session: FloorSession) => {
+    // Get the entry_id from the first item (all items in a session should have same entry_id)
+    const entryId = session.items?.[0]?.entryId || null;
+
     // Load the session into currentFloorSession for editing
     const editSession = {
       ...session,
       isEditing: true,
+      entryId: entryId, // Track the batch entry_id for this edit session
       originalSessionId: session.id,
-      originalStatus: session.status
+      originalStatus: session.status,
+      // Store original item IDs to track deletions
+      originalItemIds: session.items?.map((item: any) => item.databaseId).filter(Boolean) || []
     };
     localStorage.setItem("currentFloorSession", JSON.stringify(editSession));
     // Navigate to add-item page where user can edit
@@ -548,6 +650,11 @@ export default function Dashboard() {
           icon: Package,
           action: () => navigate("/resultsheet"),
         },
+        {
+          label: "Update Sku",
+          icon: Package,
+          action: () => navigate("/update-sku"),
+        },
       ],
     },
     ADMIN: {
@@ -574,6 +681,11 @@ export default function Dashboard() {
           icon: Package,
           action: () => navigate("/reports"),
         },
+        {
+          label: "Update Sku",
+          icon: Package,
+          action: () => navigate("/update-sku"),
+        },
       ],
     },
     SUPERUSER: {
@@ -596,11 +708,6 @@ export default function Dashboard() {
           action: () => navigate("/admin/users"),
         },
         {
-          label: "Manage Floors",
-          icon: Package,
-          action: () => navigate("/admin/floors"),
-        },
-        {
           label: "View Summary",
           icon: Package,
           action: () => navigate("/summary"),
@@ -609,6 +716,11 @@ export default function Dashboard() {
           label: "View Resultsheet",
           icon: Package,
           action: () => navigate("/resultsheet"),
+        },
+        {
+          label: "Update Sku",
+          icon: Package,
+          action: () => navigate("/update-sku"),
         },
       ],
     },
@@ -647,8 +759,8 @@ export default function Dashboard() {
             </span>
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
-            <div className="text-right hidden sm:block">
-              <p className="font-semibold text-foreground text-sm">{user?.name}</p>
+            <div className="text-right">
+              <p className="font-semibold text-foreground text-sm">{user?.username}</p>
               <p className="text-xs text-muted-foreground">{user?.role}</p>
             </div>
             <Button variant="ghost" onClick={handleLogout} size="sm" className="text-xs sm:text-sm">
@@ -700,18 +812,9 @@ export default function Dashboard() {
             ))}
           </div>
 
-          {/* StockTake Overview - Only for INVENTORY_MANAGER and SUPERUSER */}
+          {/* Analytics and Stats - Only for INVENTORY_MANAGER and SUPERUSER */}
           {(user?.role === "INVENTORY_MANAGER" || user?.role === "SUPERUSER") && (
             <div className="mt-8 sm:mt-12 space-y-6">
-              <div className="mb-6">
-                <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2 flex items-center gap-2">
-                  <BarChart3 className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
-                  StockTake Overview
-                </h2>
-                <p className="text-sm sm:text-base text-muted-foreground">
-                  Real-time insights and analytics for your inventory management
-                </p>
-              </div>
 
               {/* Statistics Cards with Animation */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
@@ -771,36 +874,72 @@ export default function Dashboard() {
                     <Activity className="w-5 h-5 text-primary" />
                     Recent Activity
                   </h3>
+                  <span className="text-xs text-muted-foreground">Last 10 entries</span>
                 </div>
-                <div className="space-y-4">
-                  {[
-                    { type: "approved", user: "John Doe", floor: "Floor 3", warehouse: "W202", time: "2 minutes ago", icon: CheckCircle2, color: "text-green-600" },
-                    { type: "submitted", user: "Jane Smith", floor: "Floor 5", warehouse: "A185", time: "15 minutes ago", icon: Clock, color: "text-blue-600" },
-                    { type: "approved", user: "Mike Johnson", floor: "Floor 2", warehouse: "F53", time: "1 hour ago", icon: CheckCircle2, color: "text-green-600" },
-                    { type: "pending", user: "Sarah Williams", floor: "Floor 1", warehouse: "A68", time: "2 hours ago", icon: AlertCircle, color: "text-amber-600" },
-                    { type: "approved", user: "David Brown", floor: "Floor 4", warehouse: "Savla", time: "3 hours ago", icon: CheckCircle2, color: "text-green-600" },
-                  ].map((activity, idx) => {
-                    const Icon = activity.icon;
-                    return (
-                      <div 
-                        key={idx} 
-                        className="flex items-center gap-4 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors animate-in fade-in slide-in-from-left-4"
-                        style={{ animationDelay: `${idx * 100}ms` }}
-                      >
-                        <div className={`p-2 rounded-lg bg-background ${activity.color}`}>
-                          <Icon className="w-4 h-4" />
+                <div className="space-y-3">
+                  {loadingRecentEntries ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader className="w-6 h-6 animate-spin text-primary" />
+                    </div>
+                  ) : recentEntries.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Package className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No recent entries found</p>
+                    </div>
+                  ) : (
+                    recentEntries.map((entry, idx) => {
+                      // Calculate relative time
+                      const entryDate = new Date(entry.createdAt);
+                      const now = new Date();
+                      const diffMs = now.getTime() - entryDate.getTime();
+                      const diffMins = Math.floor(diffMs / 60000);
+                      const diffHours = Math.floor(diffMs / 3600000);
+                      const diffDays = Math.floor(diffMs / 86400000);
+
+                      let timeAgo = "";
+                      if (diffMins < 1) timeAgo = "Just now";
+                      else if (diffMins < 60) timeAgo = `${diffMins} min${diffMins > 1 ? "s" : ""} ago`;
+                      else if (diffHours < 24) timeAgo = `${diffHours} hour${diffHours > 1 ? "s" : ""} ago`;
+                      else timeAgo = `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
+
+                      // Determine icon and color based on stock type
+                      const isFreshStock = entry.stockType === "Fresh Stock";
+                      const Icon = isFreshStock ? CheckCircle2 : AlertCircle;
+                      const iconColor = isFreshStock ? "text-green-600" : "text-amber-600";
+
+                      return (
+                        <div
+                          key={entry.id}
+                          className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors animate-in fade-in slide-in-from-left-4"
+                          style={{ animationDelay: `${idx * 50}ms` }}
+                        >
+                          <div className={`p-2 rounded-lg bg-background ${iconColor}`}>
+                            <Icon className="w-4 h-4" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-foreground truncate">
+                              {entry.itemName}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {entry.floorName} - {entry.warehouse} • {entry.totalQuantity} units • {entry.totalWeight.toFixed(2)} kg
+                            </p>
+                            <p className="text-xs text-muted-foreground/70">
+                              By {entry.enteredBy} • {timeAgo}
+                            </p>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <span className={`text-xs px-2 py-1 rounded ${
+                              isFreshStock
+                                ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                                : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                            }`}>
+                              {entry.itemType}
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-foreground">
-                            {activity.user} {activity.type === "approved" ? "approved" : activity.type === "submitted" ? "submitted" : "has pending"} session
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {activity.floor} - {activity.warehouse} • {activity.time}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
               </Card>
             </div>

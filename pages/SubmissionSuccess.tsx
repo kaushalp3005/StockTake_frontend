@@ -250,15 +250,17 @@ export default function SubmissionSuccess() {
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [floorSession, isExporting, toast]);
+  }, [floorSession]); // Removed toast and isExporting from dependencies
 
   const handleDownloadRecord = async () => {
     if (!floorSession || !floorSession.items || floorSession.items.length === 0) {
-      toast({
-        title: "Error",
-        description: "No submitted entries found to download",
-        variant: "destructive",
-      });
+      setTimeout(() => {
+        toast({
+          title: "Error",
+          description: "No submitted entries found to download",
+          variant: "destructive",
+        });
+      }, 100);
       return;
     }
 
@@ -430,18 +432,24 @@ export default function SubmissionSuccess() {
       link.download = `Submitted_Entries_${warehouse}_${floor}_${dateStr}.xlsx`;
       link.click();
       window.URL.revokeObjectURL(url);
+      document.body.removeChild(link);
 
-      toast({
-        title: "Success",
-        description: "Submitted entries exported to Excel successfully",
-      });
+      // Use timeout to prevent blocking
+      setTimeout(() => {
+        toast({
+          title: "Success",
+          description: "Submitted entries exported to Excel successfully",
+        });
+      }, 100);
     } catch (err) {
       console.error("Failed to export:", err);
-      toast({
-        title: "Error",
-        description: "Failed to export to Excel",
-        variant: "destructive",
-      });
+      setTimeout(() => {
+        toast({
+          title: "Error",
+          description: "Failed to export to Excel",
+          variant: "destructive",
+        });
+      }, 100);
     } finally {
       setIsExporting(false);
     }

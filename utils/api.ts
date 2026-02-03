@@ -266,6 +266,7 @@ export const stocktakeEntriesAPI = {
     itemType?: string;
     startDate?: string;
     endDate?: string;
+    limit?: number;
   }) => {
     const queryParams = new URLSearchParams();
     if (params?.warehouse) queryParams.append("warehouse", params.warehouse);
@@ -275,9 +276,15 @@ export const stocktakeEntriesAPI = {
     if (params?.itemType) queryParams.append("itemType", params.itemType);
     if (params?.startDate) queryParams.append("startDate", params.startDate);
     if (params?.endDate) queryParams.append("endDate", params.endDate);
-    
+    if (params?.limit) queryParams.append("limit", params.limit.toString());
+
     const queryString = queryParams.toString();
     return apiFetch(`/stocktake-entries${queryString ? `?${queryString}` : ""}`);
+  },
+
+  // Get recent entries (shorthand for getEntries with limit)
+  getRecentEntries: (limit: number = 10) => {
+    return apiFetch(`/stocktake-entries?limit=${limit}`);
   },
 
   getGroupedEntries: (warehouse: string, floorName: string) =>
@@ -293,6 +300,23 @@ export const stocktakeEntriesAPI = {
     apiFetch(`/stocktake-entries/${entryId}`, {
       method: "DELETE",
     }),
+
+  deleteEntriesBySession: (params: {
+    warehouse: string;
+    floorName: string;
+    enteredBy: string;
+    sessionId?: string;
+  }) => {
+    const queryParams = new URLSearchParams();
+    queryParams.append("warehouse", params.warehouse);
+    queryParams.append("floorName", params.floorName);
+    queryParams.append("enteredBy", params.enteredBy);
+    if (params.sessionId) queryParams.append("sessionId", params.sessionId);
+    
+    return apiFetch(`/stocktake-entries/delete-session?${queryParams.toString()}`, {
+      method: "DELETE",
+    });
+  },
 
   getAuditStatus: (warehouse: string) =>
     apiFetch(`/stocktake-entries/audit-status?warehouse=${encodeURIComponent(warehouse)}`),
@@ -317,6 +341,36 @@ export const stocktakeEntriesAPI = {
     apiFetch(`/stocktake-entries/warehouse/${encodeURIComponent(warehouse)}/floor/${encodeURIComponent(floor)}`, {
       method: "DELETE",
     }),
+
+  exportEntries: async (filters: {
+    warehouse?: string;
+    floorName?: string;
+    startDate?: string;
+    endDate?: string;
+    enteredBy?: string;
+  }) => {
+    const token = localStorage.getItem("token");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_BASE}/export/stocktake-entries`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(filters),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || "Export failed");
+    }
+
+    return response; // Return the response for blob handling
+  },
 };
 
 // Stocktake Resultsheet API
@@ -336,7 +390,7 @@ export const auditsAPI = {
   startAudit: (warehouseIdOrName: string, auditDate: string, auditTime?: string, isName: boolean = false) =>
     apiFetch("/audits/start", {
       method: "POST",
-      body: isName 
+      body: isName
         ? { warehouseName: warehouseIdOrName, auditDate, auditTime }
         : { warehouseId: warehouseIdOrName, auditDate, auditTime },
     }),
@@ -345,4 +399,39 @@ export const auditsAPI = {
 
   getWarehouseAudits: (warehouseId: string) =>
     apiFetch(`/audits/warehouse/${warehouseId}`),
+};
+
+// SKU Upload API
+export const skuAPI = {
+  uploadFile: async (file: File): Promise<{
+    success: boolean;
+    message: string;
+    processedItems: number;
+    insertedItems: number;
+    skippedItems: number;
+    errors: number;
+    errorDetails?: string[];
+  }> => {
+    const token = localStorage.getItem("token");
+    const formData = new FormData();
+    formData.append("skuFile", file);
+
+    const response = await fetch(`${API_BASE}/sku/upload`, {
+      method: "POST",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: formData,
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new APIError(response.status, data, data?.error || "Upload failed");
+    }
+
+    return data;
+  },
+
+  getStatus: () => apiFetch("/sku/status"),
 };

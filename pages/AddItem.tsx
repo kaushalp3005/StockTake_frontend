@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 import { FixedSelect } from "@/components/ui/fixed-select";
 import { Trash2, Plus, ArrowLeft, Package, Loader, X, Check, ChevronDown, ChevronRight, Search } from "lucide-react";
-import { categorialInvAPI } from "@/utils/api";
+import { categorialInvAPI, stocktakeEntriesAPI } from "@/utils/api";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +42,8 @@ interface Particular {
 
 interface AddedItem {
   id: string;
+  databaseId?: string; // Database entry ID if this item was loaded from database
+  entryId?: string; // Batch entry ID (YYMM0001 format)
   stockType?: string;
   itemType?: string;
   category: string;
@@ -100,6 +102,9 @@ export default function AddItem() {
   // Delete confirmation dialog state
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+  const [deleteType, setDeleteType] = useState<'single' | 'allQuantities'>('single');
+  const [itemGroupToDelete, setItemGroupToDelete] = useState<{category: string, subcategory: string, description: string} | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Track expanded categories
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
@@ -138,7 +143,15 @@ export default function AddItem() {
     
     // If session has existing items, load them for editing
     if (parsedSession.items && parsedSession.items.length > 0) {
-      setAddedItems(parsedSession.items);
+      // Ensure all items have valid IDs and preserve database IDs and entryIds
+      const itemsWithIds = parsedSession.items.map((item: AddedItem, index: number) => ({
+        ...item,
+        id: item.id || `item-${Date.now()}-${index}`, // Assign ID if missing
+        databaseId: item.databaseId || undefined, // Preserve database ID if it exists
+        entryId: item.entryId || parsedSession.entryId || undefined // Preserve entry ID
+      }));
+      setAddedItems(itemsWithIds);
+      console.log("Loaded items for editing:", itemsWithIds.length, "Entry ID:", parsedSession.entryId);
     }
     
     // Restore current form state if it exists
@@ -546,8 +559,40 @@ export default function AddItem() {
     e.preventDefault();
     setError("");
 
+    // Validation: Check if mandatory fields are filled
+    if (!itemType) {
+      setError("Item type is required. Please select an item type.");
+      return;
+    }
+
+    if (!packageSize || parseFloat(packageSize) <= 0) {
+      setError("UOM is required. Please enter a valid UOM value greater than 0.");
+      return;
+    }
+
+    if (!units || parseFloat(units) <= 0) {
+      setError("Number of units is required. Please enter a valid number of units greater than 0.");
+      return;
+    }
+
+    // Check for item description/name
     const isOtherCategory = category === "OTHER";
     const isOtherItem = description === "OTHER";
+    
+    if (isOtherCategory && !customItemName.trim()) {
+      setError("Custom item name is required when using 'OTHER' category.");
+      return;
+    }
+    
+    if (isOtherItem && !customItemName.trim()) {
+      setError("Custom item name is required when selecting 'Other (Custom Item)'.");
+      return;
+    }
+    
+    if (!isOtherCategory && !isOtherItem && !description) {
+      setError("Item description is required. Please select or enter an item description.");
+      return;
+    }
 
     const pkgSizeNum = parseFloat(packageSize) || 0;
     const unitsNum = parseFloat(units) || 0;
@@ -555,12 +600,13 @@ export default function AddItem() {
     const totalWeight = calculateTotalWeight(pkgSizeNum, unitsNum);
     
     const newItem: AddedItem = {
-      id: `item-${Date.now()}`,
+      id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       stockType: stockType === "fresh" ? "Fresh Stock" : "Off Grade/Rejection",
       itemType: itemType.toUpperCase(),
-      category: isOtherCategory ? customCategory.toUpperCase() : (isOtherItem ? "" : category.toUpperCase()),
-      subcategory: isOtherItem ? "" : subcategory.toUpperCase(),
-      description: isOtherItem ? customItemName.toUpperCase() : description.toUpperCase(),
+      // When category is "OTHER", save as OTHER -> OTHER -> custom item name
+      category: isOtherCategory ? "OTHER" : (isOtherItem ? "" : category.toUpperCase()),
+      subcategory: isOtherCategory ? "OTHER" : (isOtherItem ? "" : subcategory.toUpperCase()),
+      description: isOtherCategory ? customItemName.toUpperCase() : (isOtherItem ? customItemName.toUpperCase() : description.toUpperCase()),
       packageSize: pkgSizeNum,
       units: unitsNum,
       totalWeight,
@@ -581,26 +627,144 @@ export default function AddItem() {
   };
 
   const handleRemoveItem = (id: string) => {
+    console.log("🗑️ Single item delete clicked for ID:", id);
+    console.log("📋 Current addedItems IDs:", addedItems.map(item => item.id));
+    
+    if (!id || id === 'undefined') {
+      console.error("❌ Cannot delete item with invalid ID:", id);
+      setError("Cannot delete item: Invalid item ID");
+      return;
+    }
+    
     setItemToDelete(id);
+    setDeleteType('single');
     setDeleteConfirmOpen(true);
   };
 
-  const confirmDeleteItem = () => {
-    if (itemToDelete) {
-      setAddedItems(addedItems.filter((item) => item.id !== itemToDelete));
-      // If removing item that was being edited, cancel editing
-      if (addingQuantityTo === itemToDelete) {
-        setAddingQuantityTo(null);
-        setNewQuantity("");
+  const handleRemoveAllQuantities = (category: string, subcategory: string, description: string) => {
+    setItemGroupToDelete({category, subcategory, description});
+    setDeleteType('allQuantities');
+    setDeleteConfirmOpen(true);
+  };
+
+  const confirmDeleteItem = async () => {
+    console.log("🗑️ Delete confirmation clicked", { deleteType, itemToDelete, itemGroupToDelete });
+    setIsDeleting(true);
+    let hasErrors = false;
+    
+    try {
+      if (deleteType === 'single' && itemToDelete) {
+        console.log("🔄 Attempting to delete single item:", itemToDelete);
+        
+        // Find the item to get its database ID
+        const itemToDeleteObj = addedItems.find(item => item.id === itemToDelete);
+        const dbId = itemToDeleteObj?.databaseId;
+        
+        // Try to delete from database (if item exists in database)
+        if (dbId) {
+          try {
+            await stocktakeEntriesAPI.deleteEntry(dbId);
+            console.log("✅ Item deleted from database successfully");
+          } catch (error: any) {
+            console.warn("⚠️ Database delete attempt:", error);
+            if (error?.status !== 404) {
+              console.error("❌ Database delete error:", error);
+              setError(`Failed to delete item from database: ${error?.message || 'Unknown error'}`);
+              hasErrors = true;
+            } else {
+              console.log("ℹ️ Item was not found in database");
+            }
+          }
+        } else {
+          console.log("ℹ️ Item is local only, no database deletion needed");
+        }
+        
+        // Only remove from local state if no critical errors occurred
+        if (!hasErrors) {
+          console.log("🔄 Removing item from local state");
+          setAddedItems(prev => {
+            const newItems = prev.filter((item) => item.id !== itemToDelete);
+            console.log("📊 Items before:", prev.length, "after:", newItems.length);
+            return newItems;
+          });
+          // If removing item that was being edited, cancel editing
+          if (addingQuantityTo === itemToDelete) {
+            setAddingQuantityTo(null);
+            setNewQuantity("");
+          }
+          setItemToDelete(null);
+        }
+      } else if (deleteType === 'allQuantities' && itemGroupToDelete) {
+        console.log("🔄 Attempting to delete all quantities for item group:", itemGroupToDelete);
+        // Get all items to delete
+        const itemsToDelete = addedItems.filter(item => 
+          item.category === itemGroupToDelete.category && 
+          item.subcategory === itemGroupToDelete.subcategory && 
+          item.description === itemGroupToDelete.description
+        );
+        
+        console.log(`🎯 Found ${itemsToDelete.length} items to delete:`, itemsToDelete.map(i => i.id));
+        
+        let deleteErrors = 0;
+        // Try to delete each item from database
+        for (const item of itemsToDelete) {
+          const dbId = item.databaseId;
+          if (dbId) {
+            try {
+              await stocktakeEntriesAPI.deleteEntry(dbId);
+              console.log(`✅ Item ${item.id} deleted from database successfully`);
+            } catch (error: any) {
+              console.warn(`⚠️ Database delete attempt for ${item.id}:`, error);
+              if (error?.status !== 404) {
+                console.error(`❌ Database delete error for item ${item.id}:`, error);
+                deleteErrors++;
+              } else {
+                console.log(`ℹ️ Item ${item.id} was not found in database`);
+              }
+            }
+          } else {
+            console.log(`ℹ️ Item ${item.id} is local only, no database deletion needed`);
+          }
+        }
+        
+        // Show error if there were non-404 errors
+        if (deleteErrors > 0) {
+          setError(`Failed to delete ${deleteErrors} item(s) from database. Items removed from local view.`);
+        }
+        
+        // Always remove from local state (even if some DB deletes failed)
+        console.log("🔄 Removing items from local state");
+        setAddedItems(prev => {
+          const newItems = prev.filter(item => 
+            !(item.category === itemGroupToDelete.category && 
+              item.subcategory === itemGroupToDelete.subcategory && 
+              item.description === itemGroupToDelete.description)
+          );
+          console.log("📊 Items before:", prev.length, "after:", newItems.length);
+          return newItems;
+        });
+        // If any of the removed items was being edited, cancel editing
+        if (addingQuantityTo && itemsToDelete.some(item => item.id === addingQuantityTo)) {
+          setAddingQuantityTo(null);
+          setNewQuantity("");
+        }
+        setItemGroupToDelete(null);
       }
-      setItemToDelete(null);
+    } catch (error: any) {
+      console.error("💥 Unexpected error during delete:", error);
+      setError(`Unexpected error: ${error?.message || 'Unknown error'}`);
+    } finally {
+      console.log("🏁 Delete operation completed");
+      setIsDeleting(false);
+      setDeleteConfirmOpen(false);
     }
-    setDeleteConfirmOpen(false);
   };
 
   const cancelDeleteItem = () => {
     setDeleteConfirmOpen(false);
     setItemToDelete(null);
+    setItemGroupToDelete(null);
+    setIsDeleting(false);
   };
 
   // Toggle category expansion
@@ -675,7 +839,7 @@ export default function AddItem() {
     const totalWeight = calculateTotalWeight(existingItem.packageSize, newUnits);
 
     const newItem: AddedItem = {
-      id: `item-${Date.now()}`,
+      id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       itemType: existingItem.itemType,
       stockType: existingItem.stockType,
       category: existingItem.category,
@@ -820,7 +984,7 @@ export default function AddItem() {
                 {/* Item Type */}
                 <div className="space-y-2">
                   <Label htmlFor="itemType" className="text-foreground font-semibold">
-                    Item Type
+                    Item Type <span className="text-destructive">*</span>
                   </Label>
                   <FixedSelect 
                     value={itemType} 
@@ -932,9 +1096,22 @@ export default function AddItem() {
                     </div>
                   ) : (
                     <>
-                      <FixedSelect 
-                        value={category || ""} 
-                        onValueChange={setCategory}
+                      <FixedSelect
+                        value={category || ""}
+                        onValueChange={(value) => {
+                          setCategory(value);
+                          // When OTHER is selected, automatically set subcategory and description to OTHER
+                          if (value === "OTHER") {
+                            setSubcategory("OTHER");
+                            setDescription("OTHER");
+                            setPackageSize(""); // Clear UOM for manual entry
+                          } else {
+                            // Reset subcategory and description when changing to a regular category
+                            setSubcategory("");
+                            setDescription("");
+                            setCustomItemName("");
+                          }
+                        }}
                         placeholder="Select category..."
                         options={[
                           ...categorialData.map(group => ({
@@ -945,61 +1122,67 @@ export default function AddItem() {
                         ]}
                         className="bg-input border-input"
                       />
-                      
+
                       {/* Custom Category Input - shown when Other is selected */}
                       {category === "OTHER" && (
                         <div className="mt-3 space-y-2">
                           <Label htmlFor="customCategory" className="text-foreground font-semibold text-sm">
-                            Unlisted item name
+                            Custom Item Name
                           </Label>
                           <Input
                             id="customCategory"
                             type="text"
-                            placeholder="Enter unlisted item name..."
-                            value={customCategory}
-                            onChange={(e) => setCustomCategory(e.target.value)}
+                            placeholder="Enter custom item name..."
+                            value={customItemName}
+                            onChange={(e) => setCustomItemName(e.target.value)}
                             className="bg-input border-input"
                           />
+                          <p className="text-xs text-muted-foreground">
+                            This item will be saved as: OTHER → OTHER → Your custom name
+                          </p>
                         </div>
                       )}
                     </>
                   )}
                 </div>
 
-                {/* Subcategory (Subgroup) */}
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="subcategory"
-                    className="text-foreground font-semibold"
-                  >
-                    Sub-Category (Subgroup)
-                  </Label>
-                  {(!category || isLoadingData) ? (
-                    <div className="flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground">
-                      {isLoadingData ? "Loading sub-categories..." : "Select category first..."}
-                    </div>
-                  ) : (
-                    <FixedSelect 
-                      value={subcategory || ""} 
-                      onValueChange={setSubcategory}
-                      placeholder="Select sub-category..."
-                      options={
-                        categorialData
-                          .find((g) => g.name === category)
-                          ?.subgroups.map((subgroup) => ({
-                            value: subgroup.name,
-                            label: subgroup.name
-                          })) || []
-                      }
-                      className="bg-input border-input"
-                    />
-                  )}
-                </div>
+                {/* Subcategory (Subgroup) - Hidden when category is OTHER */}
+                {category !== "OTHER" && (
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="subcategory"
+                      className="text-foreground font-semibold"
+                    >
+                      Sub-Category (Subgroup)
+                    </Label>
+                    {(!category || isLoadingData) ? (
+                      <div className="flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground">
+                        {isLoadingData ? "Loading sub-categories..." : "Select category first..."}
+                      </div>
+                    ) : (
+                      <FixedSelect
+                        value={subcategory || ""}
+                        onValueChange={setSubcategory}
+                        placeholder="Select sub-category..."
+                        options={
+                          categorialData
+                            .find((g) => g.name === category)
+                            ?.subgroups.map((subgroup) => ({
+                              value: subgroup.name,
+                              label: subgroup.name
+                            })) || []
+                        }
+                        className="bg-input border-input"
+                      />
+                    )}
+                  </div>
+                )}
 
-                {/* Description (Particulars) */}
+                {/* Description (Particulars) - Hidden when category is OTHER */}
+                {category !== "OTHER" && (
                 <div className="space-y-2">
                   <Label htmlFor="description" className="text-foreground font-semibold">
-                    Item Description (Particulars)
+                    Item Description (Particulars) <span className="text-destructive">*</span>
                   </Label>
                   {(!subcategory || isLoadingData) ? (
                     <div className="flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground">
@@ -1092,7 +1275,7 @@ export default function AddItem() {
                   {description === "OTHER" && (
                     <div className="mt-3 space-y-2">
                       <Label htmlFor="customItemName" className="text-foreground font-semibold text-sm">
-                        Custom Item Name
+                        Custom Item Name <span className="text-destructive">*</span>
                       </Label>
                       <Input
                         id="customItemName"
@@ -1108,6 +1291,7 @@ export default function AddItem() {
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* UOM */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1116,7 +1300,7 @@ export default function AddItem() {
                       htmlFor="packageSize"
                       className="text-foreground font-semibold text-sm sm:text-base"
                     >
-                      UOM {packageSize && <span className="text-xs text-blue-600 dark:text-blue-400"></span>}
+                      UOM <span className="text-destructive">*</span> {packageSize && <span className="text-xs text-blue-600 dark:text-blue-400"></span>}
                     </Label>
                     
                     <Input
@@ -1184,7 +1368,7 @@ export default function AddItem() {
                   {/* Units */}
                   <div className="space-y-2">
                     <Label htmlFor="units" className="text-foreground font-semibold text-sm sm:text-base">
-                      Number of Units/Qty in kg
+                      Number of Units/Qty in kg <span className="text-destructive">*</span>
                     </Label>
                     <Input
                       id="units"
@@ -1314,60 +1498,53 @@ export default function AddItem() {
                                 return (
                                   <div key={itemKey} className="bg-white dark:bg-slate-950 border border-border rounded-lg overflow-hidden">
                                     {/* Item Header */}
-                                    <div className="p-2 sm:p-4 bg-gray-50 dark:bg-slate-800 border-b border-border">
-                                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                                    <div className="p-3 sm:p-4 bg-gray-50 dark:bg-slate-800 border-b border-border">
+                                      {/* Item name and stock type badge */}
+                                      <div className="flex items-start justify-between gap-2 mb-2">
                                         <div className="flex-1 min-w-0">
-                                          <div className="flex flex-col sm:flex-row sm:items-start gap-2">
-                                            <div className="flex-1">
-                                              <h4 className="font-semibold text-xs sm:text-base text-foreground uppercase leading-tight">
-                                                {itemInfo.subcategory}
-                                              </h4>
-                                              <p className="text-2xs sm:text-sm text-muted-foreground line-clamp-2">
-                                                {itemInfo.description}
-                                              </p>
-                                            </div>
-                                            {itemInfo.stockType && (
-                                              <span className={`shrink-0 px-1.5 py-0.5 sm:px-2 sm:py-1 rounded text-2xs sm:text-xs font-semibold ${
-                                                itemInfo.stockType === "Fresh Stock" 
-                                                  ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
-                                                  : "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300"
-                                              }`}>
-                                                {itemInfo.stockType}
-                                              </span>
-                                            )}
-                                          </div>
+                                          <h4 className="font-semibold text-sm sm:text-base text-foreground leading-tight break-words">
+                                            {itemInfo.subcategory}
+                                          </h4>
+                                          <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 break-words">
+                                            {itemInfo.description}
+                                          </p>
                                         </div>
-                                        
-                                        {/* Mobile: Stack total and buttons vertically */}
-                                        <div className="flex flex-row sm:flex-col items-center justify-between sm:justify-end gap-2 sm:gap-2">
-                                          <div className="text-left sm:text-right">
-                                            <p className="text-2xs sm:text-xs text-muted-foreground">Total Weight</p>
-                                            <p className="font-bold text-primary text-xs sm:text-base">{totalWeight.toFixed(2)} kg</p>
-                                          </div>
-                                          
-                                          <div className="flex items-center gap-2">
-                                            {!isAddingQt && (
-                                              <button
-                                                onClick={() => handleAddMoreQt(itemKey)}
-                                                className="flex items-center justify-center w-8 h-8 sm:w-auto sm:h-8 sm:px-3 bg-primary text-white text-xs sm:text-sm font-medium rounded-md hover:bg-primary/90 transition-colors touch-manipulation"
-                                                title="Add more quantity"
-                                              >
-                                                <Plus className="w-4 h-4 sm:w-4 sm:h-4" />
-                                                <span className="hidden sm:inline ml-1">Add</span>
-                                              </button>
-                                            )}
+                                        {itemInfo.stockType && (
+                                          <span className={`shrink-0 px-2 py-1 rounded text-xs font-semibold whitespace-nowrap ${
+                                            itemInfo.stockType === "Fresh Stock"
+                                              ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+                                              : "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300"
+                                          }`}>
+                                            {itemInfo.stockType === "Fresh Stock" ? "Fresh" : "Off Grade"}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {/* Weight and action buttons row */}
+                                      <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/50">
+                                        <div>
+                                          <p className="text-xs text-muted-foreground">Total Weight</p>
+                                          <p className="font-bold text-primary text-base">{totalWeight.toFixed(2)} kg</p>
+                                        </div>
+
+                                        <div className="flex items-center gap-2">
+                                          {!isAddingQt && (
                                             <button
-                                              onClick={() => {
-                                                // Remove all quantities for this item
-                                                const idsToRemove = quantities.map(q => q.id);
-                                                setAddedItems(prev => prev.filter(item => !idsToRemove.includes(item.id)));
-                                              }}
-                                              className="flex items-center justify-center w-8 h-8 sm:w-8 sm:h-8 text-destructive hover:bg-destructive/10 rounded-md transition-colors touch-manipulation"
-                                              title="Delete all quantities of this item"
+                                              onClick={() => handleAddMoreQt(itemKey)}
+                                              className="flex items-center justify-center h-9 px-3 bg-primary text-white text-sm font-medium rounded-md hover:bg-primary/90 transition-colors touch-manipulation"
+                                              title="Add more quantity"
                                             >
-                                              <Trash2 className="w-4 h-4 sm:w-3 sm:h-3" />
+                                              <Plus className="w-4 h-4 mr-1" />
+                                              Add
                                             </button>
-                                          </div>
+                                          )}
+                                          <button
+                                            onClick={() => handleRemoveAllQuantities(itemInfo.category, itemInfo.subcategory, itemInfo.description)}
+                                            className="flex items-center justify-center w-9 h-9 text-destructive hover:bg-destructive/10 rounded-md transition-colors touch-manipulation"
+                                            title="Delete all quantities of this item"
+                                          >
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
                                         </div>
                                       </div>
                                     </div>
@@ -1375,28 +1552,26 @@ export default function AddItem() {
                                     {/* Quantity Rows */}
                                     <div className="divide-y divide-border">
                                       {quantities.map((qty, index) => (
-                                        <div key={qty.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-1.5 sm:p-4 hover:bg-muted/30 gap-1 sm:gap-3">
-                                          <div className="flex items-center gap-2 sm:gap-3 flex-1">
-                                            <span className="w-5 h-5 sm:w-7 sm:h-7 bg-primary/10 text-primary text-2xs sm:text-sm font-bold rounded-full flex items-center justify-center shrink-0">
+                                        <div key={qty.id} className="flex items-center justify-between p-3 hover:bg-muted/30">
+                                          <div className="flex items-center gap-3">
+                                            <span className="w-7 h-7 bg-primary/10 text-primary text-sm font-bold rounded-full flex items-center justify-center shrink-0">
                                               {index + 1}
                                             </span>
-                                            <div className="flex-1 min-w-0">
-                                              <p className="text-xs sm:text-base font-medium text-foreground">
-                                                {qty.units % 1 === 0 ? qty.units : qty.units.toFixed(2)} units
-                                              </p>
-                                            </div>
+                                            <p className="text-sm font-medium text-foreground">
+                                              {qty.units % 1 === 0 ? qty.units : qty.units.toFixed(2)} units
+                                            </p>
                                           </div>
-                                          
-                                          <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3">
-                                            <span className="text-xs sm:text-base font-semibold text-foreground">
-                                              [{qty.totalWeight.toFixed(2)} kg]
+
+                                          <div className="flex items-center gap-3">
+                                            <span className="text-sm font-semibold text-foreground">
+                                              {qty.totalWeight.toFixed(2)} kg
                                             </span>
                                             <button
                                               onClick={() => handleRemoveItem(qty.id)}
-                                              className="flex items-center justify-center w-8 h-8 sm:w-7 sm:h-7 text-destructive hover:bg-destructive/10 rounded-md transition-colors touch-manipulation shrink-0"
+                                              className="flex items-center justify-center w-8 h-8 text-destructive hover:bg-destructive/10 rounded-md transition-colors touch-manipulation"
                                               title="Delete this quantity"
                                             >
-                                              <Trash2 className="w-4 h-4 sm:w-3 sm:h-3" />
+                                              <Trash2 className="w-4 h-4" />
                                             </button>
                                           </div>
                                         </div>
@@ -1404,15 +1579,15 @@ export default function AddItem() {
                                       
                                       {/* Add Quantity Input Row */}
                                       {isAddingQt && (
-                                        <div className="p-1.5 sm:p-4 bg-primary/5 border-t-2 border-primary/20">
-                                          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 sm:gap-3">
+                                        <div className="p-3 bg-primary/5 border-t-2 border-primary/20">
+                                          <div className="flex items-center gap-2">
                                             <Input
                                               type="number"
                                               step="0.01"
-                                              placeholder="Enter quantity (e.g., 450.25)"
+                                              placeholder="Enter quantity"
                                               value={newQuantity}
                                               onChange={(e) => setNewQuantity(e.target.value)}
-                                              className="h-9 sm:h-9 text-xs sm:text-sm flex-1 bg-background"
+                                              className="h-9 text-sm flex-1 bg-background"
                                               autoFocus
                                               onKeyDown={(e) => {
                                                 if (e.key === "Enter") {
@@ -1423,26 +1598,22 @@ export default function AddItem() {
                                                 }
                                               }}
                                             />
-                                            <div className="flex gap-2">
-                                              <Button
-                                                size="sm"
-                                                onClick={() => handleSubmitAddQt(itemKey)}
-                                                className="h-9 sm:h-9 px-3 sm:px-3 bg-green-600 hover:bg-green-700 text-white touch-manipulation flex-1 sm:flex-none text-xs sm:text-sm"
-                                                disabled={!newQuantity || parseFloat(newQuantity) <= 0 || isNaN(parseFloat(newQuantity))}
-                                              >
-                                                <Check className="w-3 h-3 sm:w-3 sm:h-3 sm:mr-1" />
-                                                <span className="sm:hidden text-2xs">Add</span>
-                                              </Button>
-                                              <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                onClick={handleCancelAddQt}
-                                                className="h-9 sm:h-9 px-3 sm:px-3 touch-manipulation flex-1 sm:flex-none text-xs sm:text-sm"
-                                              >
-                                                <X className="w-3 h-3 sm:w-3 sm:h-3 sm:mr-1" />
-                                                <span className="sm:hidden text-2xs">Cancel</span>
-                                              </Button>
-                                            </div>
+                                            <Button
+                                              size="sm"
+                                              onClick={() => handleSubmitAddQt(itemKey)}
+                                              className="h-9 px-3 bg-green-600 hover:bg-green-700 text-white touch-manipulation"
+                                              disabled={!newQuantity || parseFloat(newQuantity) <= 0 || isNaN(parseFloat(newQuantity))}
+                                            >
+                                              <Check className="w-4 h-4" />
+                                            </Button>
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              onClick={handleCancelAddQt}
+                                              className="h-9 px-3 touch-manipulation"
+                                            >
+                                              <X className="w-4 h-4" />
+                                            </Button>
                                           </div>
                                         </div>
                                       )}
@@ -1497,18 +1668,33 @@ export default function AddItem() {
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Item?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deleteType === 'allQuantities' ? 'Delete All Quantities?' : 'Delete Item?'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this item? This action cannot be undone.
+              {deleteType === 'allQuantities' 
+                ? 'Are you sure you want to delete all quantities of this item? This will remove all entries for this item and cannot be undone.'
+                : 'Are you sure you want to delete this item? This action cannot be undone.'
+              }
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={cancelDeleteItem}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel onClick={cancelDeleteItem} disabled={isDeleting}>
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDeleteItem}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
             >
-              Delete
+              {isDeleting ? (
+                <>
+                  <Loader className="w-4 h-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Delete'
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

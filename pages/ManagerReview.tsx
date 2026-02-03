@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Upload, Plus, Search } from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -13,7 +13,14 @@ import {
 } from "@/components/ui/drawer";
 import { Checkbox } from "@/components/ui/checkbox";
 import { motion, AnimatePresence } from "framer-motion";
-import { stocktakeEntriesAPI, warehousesAPI } from "@/utils/api";
+import { stocktakeEntriesAPI, warehousesAPI, categorialInvAPI } from "@/utils/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 
 interface FloorSession {
@@ -34,6 +41,7 @@ interface FloorSession {
 interface ItemEntry {
   id: string;
   description: string;
+  itemType?: string;
   category: string;
   subcategory: string;
   packageSize: number;
@@ -41,6 +49,7 @@ interface ItemEntry {
   totalWeight: number;
   userName: string;
   sessionId: string;
+  stockType?: string;
 }
 
 interface GroupedItem {
@@ -71,6 +80,7 @@ const WAREHOUSES = ["W202", "A185", "F53", "A68", "Savla", "Rishi"];
 export default function ManagerReview() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const [user, setUser] = useState<any>(null);
   const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
   const [warehouseFloors, setWarehouseFloors] = useState<{ floorName: string; itemCount: number; totalWeight: number }[]>([]);
   const [loadingFloors, setLoadingFloors] = useState(false);
@@ -81,9 +91,6 @@ export default function ManagerReview() {
   const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingData, setSavingData] = useState(false);
-  const [clearingEntries, setClearingEntries] = useState(false);
-  const [deletingWarehouse, setDeletingWarehouse] = useState<string | null>(null);
-  const [deletingFloorEntries, setDeletingFloorEntries] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [itemsDrawerOpen, setItemsDrawerOpen] = useState(false);
   const [selectedItemName, setSelectedItemName] = useState<string | null>(null);
@@ -93,12 +100,51 @@ export default function ManagerReview() {
   const [editingItemName, setEditingItemName] = useState<{ itemName: string; newName: string } | null>(null);
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const longPressDetectedRef = useRef<boolean>(false);
+
+  // Add Item state
+  const [addItemDrawerOpen, setAddItemDrawerOpen] = useState(false);
+  const [addingItem, setAddingItem] = useState(false);
+  const [newItemForm, setNewItemForm] = useState({
+    itemType: "" as "pm" | "rm" | "fg" | "",
+    category: "",
+    subcategory: "",
+    description: "",
+    quantity: "",
+    uom: "",
+  });
+  const [addItemCategorialData, setAddItemCategorialData] = useState<Array<{
+    name: string;
+    subgroups: Array<{
+      name: string;
+      particulars: Array<{ name: string; uom: number | null }>;
+    }>;
+  }>>([]);
+  const [loadingCategorialData, setLoadingCategorialData] = useState(false);
+
+  // Search state for Add Item
+  const [addItemSearchQuery, setAddItemSearchQuery] = useState("");
+  const [addItemSearchResults, setAddItemSearchResults] = useState<Array<{
+    name: string;
+    group: string;
+    subgroup: string;
+    uom: number | null;
+  }>>([]);
+  const [addItemIsSearching, setAddItemIsSearching] = useState(false);
+  const [addItemShowSearchResults, setAddItemShowSearchResults] = useState(false);
+  const [isOtherDescription, setIsOtherDescription] = useState(false);
+  const [customDescription, setCustomDescription] = useState("");
   
   // Touch sensitivity improvement
   const isScrollingRef = useRef<boolean>(false);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
   useEffect(() => {
+    // Get user data
+    const userStr = localStorage.getItem("user");
+    if (userStr) {
+      setUser(JSON.parse(userStr));
+    }
+    
     // Initialize with hardcoded warehouses (always show these on frontend)
     setWarehouses(WAREHOUSES.map(name => ({ id: name, name })));
     
@@ -456,6 +502,7 @@ export default function ManagerReview() {
         quantity?: number;
         weight?: number;
         uom?: number;
+        stockType?: string;
       }> = [];
       
       const notFoundIds: string[] = [];
@@ -472,11 +519,13 @@ export default function ManagerReview() {
               warehouse,
               floorName,
               itemName: entry.description,
+              itemType: entry.itemType || "",
               category: entry.category,
               subcategory: entry.subcategory,
               quantity: entry.units,
               weight: entry.totalWeight,
               uom: entry.packageSize,
+              stockType: entry.stockType || "Fresh Stock",
             });
           } else {
             const notFoundKey = `${entryId}@${warehouse}/${floorName}`;
@@ -582,126 +631,11 @@ export default function ManagerReview() {
     }
   };
 
-  const handleClearEntries = async () => {
-    // Prevent clicks during scrolling
-    if (isScrollingRef.current) {
-      return;
-    }
-    
-    // Confirm before clearing
-    const confirmed = window.confirm(
-      "Are you sure you want to delete ALL entries from the stocktake_entries table? This action cannot be undone."
-    );
-    
-    if (!confirmed) {
-      return;
-    }
 
-    setClearingEntries(true);
-    try {
-      const response = await stocktakeEntriesAPI.clearAllEntries();
-      
-      toast({
-        title: "Success",
-        description: `All entries cleared successfully! ${response.deletedCount || 0} entries deleted.`,
-      });
-      
-      // Optionally refresh the page or clear local storage
-      // You might want to reload warehouse floors or reset state here
-      setClearingEntries(false);
-    } catch (err: any) {
-      console.error("Error clearing entries:", err);
-      toast({
-        title: "Error",
-        description: err.message || "Failed to clear entries",
-        variant: "destructive",
-      });
-      setClearingEntries(false);
-    }
-  };
 
-  const handleDeleteFloorEntries = async () => {
-    if (!selectedWarehouse || !selectedFloor) {
-      return;
-    }
 
-    // Confirm before deleting
-    const confirmed = window.confirm(
-      `Are you sure you want to delete ALL entries for ${selectedWarehouse} - ${selectedFloor}? This action cannot be undone.`
-    );
-    
-    if (!confirmed) {
-      return;
-    }
 
-    setDeletingFloorEntries(true);
-    try {
-      const response = await stocktakeEntriesAPI.clearFloorEntries(selectedWarehouse, selectedFloor);
-      
-      toast({
-        title: "Success",
-        description: `Floor entries deleted successfully! ${response.deletedCount || 0} entries removed.`,
-      });
-      
-      // Close the drawer and refresh
-      setItemsDrawerOpen(false);
-      setSelectedFloor(null);
-      
-      // Optionally reload warehouse floors
-      if (selectedWarehouse) {
-        handleWarehouseClick(selectedWarehouse);
-      }
-      
-      setDeletingFloorEntries(false);
-    } catch (err: any) {
-      console.error("Error deleting floor entries:", err);
-      toast({
-        title: "Error",
-        description: err.message || "Failed to delete floor entries",
-        variant: "destructive",
-      });
-      setDeletingFloorEntries(false);
-    }
-  };
 
-  const handleDeleteWarehouseEntries = async (warehouse: string, event: React.MouseEvent) => {
-    // Stop propagation to prevent opening the warehouse drawer
-    event.stopPropagation();
-    
-    // Prevent clicks during scrolling
-    if (isScrollingRef.current) {
-      return;
-    }
-
-    // Confirm before deleting
-    const confirmed = window.confirm(
-      `Are you sure you want to delete ALL entries for warehouse ${warehouse}? This action cannot be undone.`
-    );
-    
-    if (!confirmed) {
-      return;
-    }
-
-    setDeletingWarehouse(warehouse);
-    try {
-      const response = await stocktakeEntriesAPI.clearWarehouseEntries(warehouse);
-      
-      toast({
-        title: "Success",
-        description: `All entries for ${warehouse} cleared successfully! ${response.deletedCount || 0} entries deleted.`,
-      });
-      
-      setDeletingWarehouse(null);
-    } catch (err: any) {
-      console.error("Error clearing warehouse entries:", err);
-      toast({
-        title: "Error",
-        description: err.message || "Failed to clear warehouse entries",
-        variant: "destructive",
-      });
-      setDeletingWarehouse(null);
-    }
-  };
 
   // Long press handlers
   const handleLongPressStart = (entryId: string, currentValue: number, type: 'quantity') => {
@@ -841,6 +775,233 @@ export default function ManagerReview() {
       ...prev,
       [itemId]: checked,
     }));
+  };
+
+  // Search items when query changes for Add Item form
+  useEffect(() => {
+    const searchItems = async () => {
+      if (!newItemForm.itemType || !addItemSearchQuery || addItemSearchQuery.length < 2) {
+        setAddItemSearchResults([]);
+        setAddItemShowSearchResults(false);
+        return;
+      }
+
+      setAddItemIsSearching(true);
+      try {
+        const response = await categorialInvAPI.searchDescriptions(
+          newItemForm.itemType as "pm" | "rm" | "fg",
+          addItemSearchQuery
+        );
+        setAddItemSearchResults(response.results || []);
+        setAddItemShowSearchResults(true);
+      } catch (err) {
+        console.error("Error searching items:", err);
+        setAddItemSearchResults([]);
+      } finally {
+        setAddItemIsSearching(false);
+      }
+    };
+
+    const timeoutId = setTimeout(() => {
+      searchItems();
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [addItemSearchQuery, newItemForm.itemType]);
+
+  // Fetch categorial data when item type changes for add item form
+  const fetchAddItemCategorialData = async (itemType: "pm" | "rm" | "fg") => {
+    setLoadingCategorialData(true);
+    try {
+      const data = await categorialInvAPI.getByItemType(itemType);
+      setAddItemCategorialData(data.groups || []);
+    } catch (err) {
+      console.error("Failed to fetch categorial data:", err);
+      setAddItemCategorialData([]);
+    } finally {
+      setLoadingCategorialData(false);
+    }
+  };
+
+  // Get subcategories for selected category
+  const getSubcategoriesForCategory = () => {
+    const group = addItemCategorialData.find(g => g.name === newItemForm.category);
+    return group?.subgroups || [];
+  };
+
+  // Get descriptions for selected subcategory
+  const getDescriptionsForSubcategory = () => {
+    const group = addItemCategorialData.find(g => g.name === newItemForm.category);
+    const subgroup = group?.subgroups.find(sg => sg.name === newItemForm.subcategory);
+    return subgroup?.particulars || [];
+  };
+
+  // Handle item type change
+  const handleItemTypeChange = (value: "pm" | "rm" | "fg") => {
+    setNewItemForm(prev => ({
+      ...prev,
+      itemType: value,
+      category: "",
+      subcategory: "",
+      description: "",
+      uom: "",
+    }));
+    fetchAddItemCategorialData(value);
+  };
+
+  // Handle category change
+  const handleCategoryChange = (value: string) => {
+    setNewItemForm(prev => ({
+      ...prev,
+      category: value,
+      subcategory: "",
+      description: "",
+      uom: "",
+    }));
+  };
+
+  // Handle subcategory change
+  const handleSubcategoryChange = (value: string) => {
+    setNewItemForm(prev => ({
+      ...prev,
+      subcategory: value,
+      description: "",
+      uom: "",
+    }));
+    // Reset custom description state when subcategory changes
+    setIsOtherDescription(false);
+    setCustomDescription("");
+  };
+
+  // Handle description change
+  const handleDescriptionChange = (value: string) => {
+    if (value === "__OTHER__") {
+      setIsOtherDescription(true);
+      setCustomDescription("");
+      setNewItemForm(prev => ({
+        ...prev,
+        description: "",
+        uom: "", // Allow manual UOM entry for custom items
+      }));
+      return;
+    }
+
+    setIsOtherDescription(false);
+    setCustomDescription("");
+
+    const group = addItemCategorialData.find(g => g.name === newItemForm.category);
+    const subgroup = group?.subgroups.find(sg => sg.name === newItemForm.subcategory);
+    const particular = subgroup?.particulars.find(p => p.name === value);
+
+    setNewItemForm(prev => ({
+      ...prev,
+      description: value,
+      uom: particular?.uom?.toString() || "",
+    }));
+  };
+
+  // Handle search item selection - populate form from search result
+  const handleSearchItemSelect = (result: { name: string; group: string; subgroup: string; uom: number | null }) => {
+    setNewItemForm(prev => ({
+      ...prev,
+      category: result.group,
+      subcategory: result.subgroup,
+      description: result.name,
+      uom: result.uom?.toString() || "",
+    }));
+    setAddItemSearchQuery("");
+    setAddItemShowSearchResults(false);
+    setAddItemSearchResults([]);
+    // Reset custom description state when selecting from search
+    setIsOtherDescription(false);
+    setCustomDescription("");
+  };
+
+  // Handle adding new item
+  const handleAddNewItem = async () => {
+    if (!selectedWarehouse || !selectedFloor) {
+      toast({
+        title: "Error",
+        description: "Please select warehouse and floor first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Get the actual description (custom or selected)
+    const actualDescription = isOtherDescription ? customDescription : newItemForm.description;
+
+    if (!newItemForm.itemType || !newItemForm.category || !newItemForm.subcategory || !actualDescription || !newItemForm.quantity || !newItemForm.uom) {
+      toast({
+        title: "Missing fields",
+        description: "Please fill in all required fields",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setAddingItem(true);
+    try {
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+      const quantity = parseFloat(newItemForm.quantity) || 0;
+      const uom = parseFloat(newItemForm.uom) || 0;
+      const totalWeight = quantity * uom;
+
+      const entry = {
+        item_name: actualDescription.trim().toUpperCase(),
+        item_type: newItemForm.itemType.toUpperCase(),
+        item_category: newItemForm.category.trim().toUpperCase(),
+        item_subcategory: newItemForm.subcategory.trim().toUpperCase(),
+        floor_name: selectedFloor,
+        warehouse: selectedWarehouse,
+        total_quantity: quantity,
+        unit_uom: uom,
+        total_weight: totalWeight,
+        entered_by: user?.name || user?.email || "MANAGER",
+        entered_by_email: user?.email || "",
+        authority: "INVENTORY_MANAGER",
+        stock_type: "Fresh Stock",
+      };
+
+      await stocktakeEntriesAPI.submitEntries([entry]);
+
+      // Refresh grouped items data
+      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor);
+      setGroupedItemsData(data.groups || []);
+
+      // Reset form and close drawer
+      setNewItemForm({
+        itemType: "",
+        category: "",
+        subcategory: "",
+        description: "",
+        quantity: "",
+        uom: "",
+      });
+      setAddItemCategorialData([]);
+      // Reset search state
+      setAddItemSearchQuery("");
+      setAddItemSearchResults([]);
+      setAddItemShowSearchResults(false);
+      // Reset custom description state
+      setIsOtherDescription(false);
+      setCustomDescription("");
+      setAddItemDrawerOpen(false);
+
+      toast({
+        title: "Success",
+        description: `Item "${entry.item_name}" added successfully`,
+      });
+    } catch (err: any) {
+      console.error("Error adding item:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to add item",
+        variant: "destructive",
+      });
+    } finally {
+      setAddingItem(false);
+    }
   };
 
   const handleSaveStatus = () => {
@@ -1059,20 +1220,28 @@ export default function ManagerReview() {
             <Package className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
             <span className="text-lg sm:text-xl font-bold text-foreground">StockTake</span>
           </div>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              if (!isScrollingRef.current) {
-                navigate("/dashboard");
-              }
-            }}
-            size="sm"
-            className="text-xs sm:text-sm touch-manipulation"
-            style={{ touchAction: 'manipulation' }}
-          >
-            <ArrowLeft className="w-4 h-4 sm:mr-2" />
-            <span className="hidden sm:inline">Back</span>
-          </Button>
+          <div className="flex items-center gap-2 sm:gap-4">
+            {user && (
+              <div className="text-right">
+                <p className="font-semibold text-foreground text-sm">{user.username}</p>
+                <p className="text-xs text-muted-foreground">{user.role}</p>
+              </div>
+            )}
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (!isScrollingRef.current) {
+                  navigate("/dashboard");
+                }
+              }}
+              size="sm"
+              className="text-xs sm:text-sm touch-manipulation"
+              style={{ touchAction: 'manipulation' }}
+            >
+              <ArrowLeft className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Back</span>
+            </Button>
+          </div>
         </div>
       </nav>
 
@@ -1145,23 +1314,7 @@ export default function ManagerReview() {
                       </Button>
                     )}
                     
-                    {/* Delete Warehouse Entries Button */}
-                    <div className="flex justify-end mt-2">
-                      <Button
-                        onClick={(e) => handleDeleteWarehouseEntries(warehouse, e)}
-                        disabled={deletingWarehouse === warehouse}
-                        variant="destructive"
-                        className="bg-red-600 hover:bg-red-700 text-white h-7 w-7 p-0 disabled:opacity-50 disabled:cursor-not-allowed rounded-md"
-                        size="sm"
-                        title="Delete all warehouse entries"
-                      >
-                        {deletingWarehouse === warehouse ? (
-                          <Loader className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-3.5 h-3.5" />
-                        )}
-                      </Button>
-                    </div>
+
                   </Card>
                 </motion.div>
               );
@@ -1203,39 +1356,7 @@ export default function ManagerReview() {
             </Card>
           </motion.div>
 
-          {/* Clear Entries Section */}
-          <motion.div
-            className="mt-6 sm:mt-8"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.4 }}
-          >
-            <Card className="p-4 sm:p-6 border-border bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div className="flex-1">
-                  <p className="text-sm sm:text-base font-medium text-foreground mb-1">
-                    Clear All Entries
-                  </p>
-                  <p className="text-xs sm:text-sm text-muted-foreground">
-                    Delete all entries from the stocktake_entries database table. This action cannot be undone.
-                  </p>
-                </div>
-                <Button
-                  onClick={handleClearEntries}
-                  disabled={clearingEntries}
-                  variant="destructive"
-                  className="bg-red-600 hover:bg-red-700 text-white h-9 w-9 p-0 disabled:opacity-50 disabled:cursor-not-allowed rounded-md flex-shrink-0"
-                  title="Delete all entries"
-                >
-                  {clearingEntries ? (
-                    <Loader className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-4 h-4" />
-                  )}
-                </Button>
-              </div>
-            </Card>
-          </motion.div>
+
         </div>
       </div>
 
@@ -1393,6 +1514,26 @@ export default function ManagerReview() {
               </div>
             ) : getGroupedItems().length > 0 ? (
               <div className="space-y-3">
+                {/* Add Item Card */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <Card
+                    className="p-4 border-2 border-dashed border-primary/50 hover:border-primary hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] bg-primary/5 touch-manipulation"
+                    onClick={() => setAddItemDrawerOpen(true)}
+                    style={{ touchAction: 'manipulation' }}
+                  >
+                    <div className="flex items-center justify-center gap-3">
+                      <div className="p-2 bg-primary/20 rounded-full">
+                        <Plus className="w-5 h-5 text-primary" />
+                      </div>
+                      <span className="font-semibold text-primary">Add New Item</span>
+                    </div>
+                  </Card>
+                </motion.div>
+
                 {getGroupedItems().map((groupedItem, index) => (
                   <motion.div
                     key={groupedItem.description}
@@ -1404,7 +1545,11 @@ export default function ManagerReview() {
                     }}
                   >
                     <Card
-                      className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation"
+                      className={`p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation ${
+                        groupedItem.entries.some((e: any) => e.stockType === "Off Grade/Rejection" || e.stockType === "Rejection")
+                          ? "border-l-4 border-l-red-500"
+                          : "border-l-4 border-l-green-500"
+                      }`}
                       style={{ touchAction: 'manipulation' }}
                       onMouseDown={(e) => {
                         if (e.button === 0 && !editingItemName) {
@@ -1525,6 +1670,27 @@ export default function ManagerReview() {
                               {groupedItem.totalWeight.toFixed(2)} kg
                             </span>
                           </div>
+                          {/* Stock Type Badges */}
+                          <div className="flex items-center gap-2 mt-2">
+                            {(() => {
+                              const freshCount = groupedItem.entries.filter((e: any) => e.stockType === "Fresh Stock" || !e.stockType).length;
+                              const rejectionCount = groupedItem.entries.filter((e: any) => e.stockType === "Off Grade/Rejection" || e.stockType === "Rejection").length;
+                              return (
+                                <>
+                                  {freshCount > 0 && (
+                                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 font-medium">
+                                      Fresh: {freshCount}
+                                    </span>
+                                  )}
+                                  {rejectionCount > 0 && (
+                                    <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 font-medium">
+                                      Rejection: {rejectionCount}
+                                    </span>
+                                  )}
+                                </>
+                              );
+                            })()}
+                          </div>
                         </div>
                         {!editingItemName && (
                           <ChevronRight className="w-5 h-5 text-muted-foreground flex-shrink-0 ml-2" />
@@ -1537,30 +1703,311 @@ export default function ManagerReview() {
             ) : (
               <div className="text-center py-8">
                 <Package className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">No items found for this floor</p>
+                <p className="text-muted-foreground mb-4">No items found for this floor</p>
+                <Button
+                  onClick={() => setAddItemDrawerOpen(true)}
+                  className="bg-primary hover:bg-primary/90"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add First Item
+                </Button>
               </div>
             )}
           </div>
           
-          {/* Delete Floor Entries Button */}
-          {getGroupedItems().length > 0 && (
-            <div className="px-4 pb-4 border-t border-border pt-4 bg-background flex justify-end">
+
+        </DrawerContent>
+      </Drawer>
+
+      {/* Add Item Drawer */}
+      <Drawer open={addItemDrawerOpen} onOpenChange={(open) => {
+        setAddItemDrawerOpen(open);
+        if (open) {
+          document.body.style.overflow = 'hidden';
+        } else {
+          document.body.style.overflow = '';
+          // Reset form when closing
+          setNewItemForm({
+            itemType: "",
+            category: "",
+            subcategory: "",
+            description: "",
+            quantity: "",
+            uom: "",
+          });
+          setAddItemCategorialData([]);
+          // Reset search state
+          setAddItemSearchQuery("");
+          setAddItemSearchResults([]);
+          setAddItemShowSearchResults(false);
+          // Reset custom description state
+          setIsOtherDescription(false);
+          setCustomDescription("");
+        }
+      }}>
+        <DrawerContent className="flex flex-col max-h-[85vh]">
+          <DrawerHeader className="flex-shrink-0">
+            <div className="flex items-center gap-2 mb-2">
               <Button
-                onClick={handleDeleteFloorEntries}
-                disabled={deletingFloorEntries}
-                variant="destructive"
+                variant="ghost"
                 size="sm"
-                className="bg-red-600 hover:bg-red-700 text-white h-7 w-7 p-0 disabled:opacity-50 disabled:cursor-not-allowed rounded-md"
-                title="Delete all floor entries"
+                onClick={() => setAddItemDrawerOpen(false)}
+                className="mr-auto"
               >
-                {deletingFloorEntries ? (
-                  <Loader className="w-3.5 h-3.5 animate-spin" />
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back
+              </Button>
+            </div>
+            <DrawerTitle className="text-xl font-bold">
+              Add New Item
+            </DrawerTitle>
+            <DrawerDescription>
+              Add a new item to {selectedWarehouse} - {selectedFloor}
+            </DrawerDescription>
+          </DrawerHeader>
+          <div className="flex-1 overflow-y-auto px-4 pb-4 min-h-0">
+            <div className="space-y-4">
+              {/* Item Type */}
+              <div>
+                <label className="text-sm font-medium text-foreground mb-1.5 block">
+                  Item Type <span className="text-destructive">*</span>
+                </label>
+                <Select
+                  value={newItemForm.itemType}
+                  onValueChange={(value) => handleItemTypeChange(value as "pm" | "rm" | "fg")}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select item type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pm">PM (Packing Material)</SelectItem>
+                    <SelectItem value="rm">RM (Raw Material)</SelectItem>
+                    <SelectItem value="fg">FG (Finished Goods)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Search Input */}
+              {newItemForm.itemType && (
+                <div className="relative">
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">
+                    Quick Search
+                  </label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search item by name..."
+                      value={addItemSearchQuery}
+                      onChange={(e) => setAddItemSearchQuery(e.target.value)}
+                      className="pl-9"
+                    />
+                    {addItemIsSearching && (
+                      <Loader className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-primary" />
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Type at least 2 characters to search
+                  </p>
+
+                  {/* Search Results */}
+                  {addItemShowSearchResults && addItemSearchResults.length > 0 && (
+                    <div className="absolute z-50 w-full mt-1 bg-background border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                      {addItemSearchResults.map((result, index) => (
+                        <div
+                          key={`${result.name}-${index}`}
+                          className="p-3 hover:bg-muted cursor-pointer border-b border-border last:border-b-0"
+                          onClick={() => handleSearchItemSelect(result)}
+                        >
+                          <p className="font-medium text-sm text-foreground truncate">
+                            {result.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {result.group} / {result.subgroup}
+                            {result.uom && ` • ${result.uom.toFixed(3)} kg`}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {addItemShowSearchResults && addItemSearchResults.length === 0 && addItemSearchQuery.length >= 2 && !addItemIsSearching && (
+                    <div className="absolute z-50 w-full mt-1 bg-background border border-border rounded-lg shadow-lg p-3">
+                      <p className="text-sm text-muted-foreground text-center">
+                        No items found
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Divider */}
+              {newItemForm.itemType && (
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-background px-2 text-muted-foreground">or select manually</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Category */}
+              <div>
+                <label className="text-sm font-medium text-foreground mb-1.5 block">
+                  Category <span className="text-destructive">*</span>
+                </label>
+                <Select
+                  value={newItemForm.category}
+                  onValueChange={handleCategoryChange}
+                  disabled={!newItemForm.itemType || loadingCategorialData}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder={loadingCategorialData ? "Loading..." : "Select category"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {addItemCategorialData.map((group) => (
+                      <SelectItem key={group.name} value={group.name}>
+                        {group.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Subcategory */}
+              <div>
+                <label className="text-sm font-medium text-foreground mb-1.5 block">
+                  Subcategory <span className="text-destructive">*</span>
+                </label>
+                <Select
+                  value={newItemForm.subcategory}
+                  onValueChange={handleSubcategoryChange}
+                  disabled={!newItemForm.category}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select subcategory" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {getSubcategoriesForCategory().map((subgroup) => (
+                      <SelectItem key={subgroup.name} value={subgroup.name}>
+                        {subgroup.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Item Description */}
+              <div>
+                <label className="text-sm font-medium text-foreground mb-1.5 block">
+                  Item Description <span className="text-destructive">*</span>
+                </label>
+                <Select
+                  value={isOtherDescription ? "__OTHER__" : newItemForm.description}
+                  onValueChange={handleDescriptionChange}
+                  disabled={!newItemForm.subcategory}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select item" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {getDescriptionsForSubcategory().map((particular) => (
+                      <SelectItem key={particular.name} value={particular.name}>
+                        {particular.name} {particular.uom ? `(${particular.uom.toFixed(3)} kg)` : ""}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="__OTHER__" className="border-t border-border mt-1 pt-1 text-primary font-medium">
+                      + Other (Custom Item)
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+
+                {/* Custom Description Input */}
+                {isOtherDescription && (
+                  <div className="mt-2">
+                    <Input
+                      placeholder="Enter custom item description..."
+                      value={customDescription}
+                      onChange={(e) => setCustomDescription(e.target.value)}
+                      className="w-full"
+                      autoFocus
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Enter a custom item name not in the list
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Quantity and UOM in a row */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">
+                    Quantity <span className="text-destructive">*</span>
+                  </label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder="Units"
+                    value={newItemForm.quantity}
+                    onChange={(e) => setNewItemForm(prev => ({ ...prev, quantity: e.target.value }))}
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">
+                    UOM (kg) <span className="text-destructive">*</span>
+                  </label>
+                  <Input
+                    type="number"
+                    step="0.001"
+                    placeholder="Weight per unit"
+                    value={newItemForm.uom}
+                    onChange={(e) => setNewItemForm(prev => ({ ...prev, uom: e.target.value }))}
+                    className="w-full"
+                    disabled={!isOtherDescription && !!newItemForm.description && parseFloat(newItemForm.uom) > 0}
+                  />
+                  {!isOtherDescription && newItemForm.description && parseFloat(newItemForm.uom) > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">Auto-filled from item</p>
+                  )}
+                  {isOtherDescription && (
+                    <p className="text-xs text-muted-foreground mt-1">Enter weight per unit in kg</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Total Weight Preview */}
+              {newItemForm.quantity && newItemForm.uom && (
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-sm text-muted-foreground">
+                    Total Weight: <span className="font-bold text-primary">
+                      {((parseFloat(newItemForm.quantity) || 0) * (parseFloat(newItemForm.uom) || 0)).toFixed(2)} kg
+                    </span>
+                  </p>
+                </div>
+              )}
+
+              {/* Submit Button */}
+              <Button
+                onClick={handleAddNewItem}
+                disabled={addingItem || !newItemForm.itemType || !newItemForm.category || !newItemForm.subcategory || (!newItemForm.description && !isOtherDescription) || (isOtherDescription && !customDescription.trim()) || !newItemForm.quantity || !newItemForm.uom}
+                className="w-full h-11 bg-primary hover:bg-primary/90 text-white"
+              >
+                {addingItem ? (
+                  <>
+                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                    Adding...
+                  </>
                 ) : (
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Item
+                  </>
                 )}
               </Button>
             </div>
-          )}
+          </div>
         </DrawerContent>
       </Drawer>
 
@@ -1719,10 +2166,14 @@ export default function ManagerReview() {
                                     </div>
                                   ) : (
                                     <div
-                                      className={`relative bg-primary/10 hover:bg-primary/20 border-2 rounded-lg p-2.5 min-w-[90px] text-center transition-all duration-200 hover:scale-105 cursor-pointer ${
-                                        isChecked
-                                          ? "border-primary bg-primary/20 shadow-md"
-                                          : "border-primary/30"
+                                      className={`relative rounded-lg p-2.5 min-w-[90px] text-center transition-all duration-200 hover:scale-105 cursor-pointer border-2 ${
+                                        (entry as any).stockType === "Off Grade/Rejection" || (entry as any).stockType === "Rejection"
+                                          ? isChecked
+                                            ? "bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/40 border-red-500 shadow-md"
+                                            : "bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 border-red-300 dark:border-red-700"
+                                          : isChecked
+                                            ? "bg-primary/20 hover:bg-primary/30 border-primary shadow-md"
+                                            : "bg-primary/10 hover:bg-primary/20 border-primary/30"
                                       }`}
                                       onMouseDown={(e) => {
                                         if (e.button === 0 && !editingQuantity) {
@@ -1780,12 +2231,26 @@ export default function ManagerReview() {
                                       <p className="text-[9px] text-muted-foreground mt-1">
                                         UOM: {entry.packageSize.toFixed(3)}kg
                                       </p>
-                                      <p className="text-[9px] font-semibold text-primary mt-0.5">
+                                      <p className={`text-[9px] font-semibold mt-0.5 ${
+                                        (entry as any).stockType === "Off Grade/Rejection" || (entry as any).stockType === "Rejection"
+                                          ? "text-red-600 dark:text-red-400"
+                                          : "text-primary"
+                                      }`}>
                                         {entry.totalWeight.toFixed(2)}kg
                                       </p>
+                                      {/* Stock Type Badge */}
+                                      {((entry as any).stockType === "Off Grade/Rejection" || (entry as any).stockType === "Rejection") && (
+                                        <p className="text-[8px] font-bold text-red-600 dark:text-red-400 mt-1 uppercase">
+                                          Rejection
+                                        </p>
+                                      )}
                                     </div>
                                   )}
-                                  <div className="absolute -top-1.5 -left-1.5 bg-primary text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <div className={`absolute -top-1.5 -left-1.5 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity ${
+                                    (entry as any).stockType === "Off Grade/Rejection" || (entry as any).stockType === "Rejection"
+                                      ? "bg-red-500"
+                                      : "bg-primary"
+                                  }`}>
                                     {idx + 1}
                                   </div>
                                 </div>

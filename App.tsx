@@ -2,7 +2,6 @@ import "./global.css";
 
 import { Toaster } from "@/components/ui/toaster";
 import { createRoot, Root } from "react-dom/client";
-import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
@@ -17,6 +16,7 @@ import SubmissionSuccess from "./pages/SubmissionSuccess";
 import ManagerReview from "./pages/ManagerReview";
 import AllEntriesSummary from "./pages/AllEntriesSummary";
 import ResultsheetView from "./pages/ResultsheetView";
+import UpdateSku from "./pages/UpdateSku";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,7 +26,6 @@ export function RootApp() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        <Sonner />
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Index />} />
@@ -43,6 +42,7 @@ export function RootApp() {
             <Route path="/summary" element={<AllEntriesSummary />} />
             <Route path="/resultsheet" element={<ResultsheetView />} />
             <Route path="/resultsheet/:date" element={<ResultsheetView />} />
+            <Route path="/update-sku" element={<UpdateSku />} />
 
             {/* Placeholder routes - to be implemented */}
             <Route path="/reports" element={<NotFound />} />

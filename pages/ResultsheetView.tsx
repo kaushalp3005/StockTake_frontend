@@ -34,6 +34,7 @@ interface ResultsheetDataItem {
   item_type: string;
   group: string;
   subgroup: string;
+  stock_type?: string;
 }
 
 interface Warehouse {
@@ -41,11 +42,20 @@ interface Warehouse {
   floors: string[];
 }
 
+interface StockTypeData {
+  items: ResultsheetDataItem[];
+  warehouses: Warehouse[];
+  data: Record<string, Record<string, Record<string, { weight: number; quantity: number; uom: number }>>>;
+}
+
 interface ResultsheetData {
   date: string;
   items: ResultsheetDataItem[];
   warehouses: Warehouse[];
   data: Record<string, Record<string, Record<string, { weight: number; quantity: number; uom: number }>>>;
+  // Separated data by stock type
+  freshStock?: StockTypeData;
+  rejection?: StockTypeData;
 }
 
 export default function ResultsheetView() {
@@ -175,218 +185,231 @@ export default function ResultsheetView() {
 
   const handleExportToExcel = async () => {
     if (!sheetData) return;
-    
+
     setExporting(true);
     try {
       // Dynamic import of exceljs
       const ExcelJS = (await import("exceljs")).default;
       const workbook = new ExcelJS.Workbook();
-      const worksheet = workbook.addWorksheet("Resultsheet");
 
-      // Build header rows
-      // Row 1: Group | Subgroup | Item Name | UOM | Item Type | Warehouse1 (colspan) | Warehouse2 (colspan) | ... | Total Weight
-      const headerRow1 = ["Group", "Subgroup", "Item Name", "UOM (kg)", "Item Type"];
-      sheetData.warehouses.forEach((warehouse) => {
-        // Add warehouse name spanning all its floors (2 cols per floor: weight + qty)
-        for (let i = 0; i < warehouse.floors.length * 2; i++) {
-          if (i === 0) {
-            headerRow1.push(warehouse.name);
-          } else {
-            headerRow1.push(""); // Empty cells for colspan
-          }
-        }
-      });
-      headerRow1.push("Total Weight (kg)"); // Add total column header
-      const row1 = worksheet.addRow(headerRow1);
-      row1.font = { bold: true, size: 12 };
-      row1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
-      row1.alignment = { horizontal: "center", vertical: "middle" };
+      // Helper function to create a worksheet for a given stock type data
+      const createWorksheet = (
+        worksheetName: string,
+        stockData: StockTypeData,
+        headerColor: string,
+        totalHeaderColor: string
+      ) => {
+        if (stockData.items.length === 0) return; // Skip if no data
 
-      // Row 2: Floor names (each spanning 2 columns)
-      const headerRow2 = ["", "", "", "", ""]; // Empty for Group, Subgroup, Item Name, UOM, Item Type
-      sheetData.warehouses.forEach((warehouse) => {
-        warehouse.floors.forEach((floor) => {
-          headerRow2.push(floor);
-          headerRow2.push(""); // Empty for colspan
-        });
-      });
-      headerRow2.push(""); // Empty for total column (spans 3 rows)
-      const row2 = worksheet.addRow(headerRow2);
-      row2.font = { bold: true, size: 11 };
-      row2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
-      row2.alignment = { horizontal: "center", vertical: "middle" };
+        const worksheet = workbook.addWorksheet(worksheetName);
 
-      // Row 3: Qty | Weight labels
-      const headerRow3 = ["", "", "", "", ""]; // Empty for Group, Subgroup, Item Name, UOM, Item Type
-      sheetData.warehouses.forEach((warehouse) => {
-        warehouse.floors.forEach(() => {
-          headerRow3.push("Qty");
-          headerRow3.push("Weight (kg)");
-        });
-      });
-      headerRow3.push(""); // Empty for total column (spans 3 rows)
-      const row3 = worksheet.addRow(headerRow3);
-      row3.font = { bold: true, size: 10 };
-      row3.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7E6E6" } };
-      row3.alignment = { horizontal: "center", vertical: "middle" };
-
-      // Merge cells for UOM column (spans 3 rows)
-      worksheet.mergeCells(1, 4, 3, 4);
-      
-      // Merge cells for Item Type column (spans 3 rows)
-      worksheet.mergeCells(1, 5, 3, 5);
-      
-      // Merge cells for warehouse headers
-      let colIndex = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
-      sheetData.warehouses.forEach((warehouse) => {
-        const colspan = warehouse.floors.length * 2;
-        worksheet.mergeCells(1, colIndex, 1, colIndex + colspan - 1);
-        colIndex += colspan;
-      });
-
-      // Merge cells for floor headers
-      colIndex = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
-      sheetData.warehouses.forEach((warehouse) => {
-        warehouse.floors.forEach(() => {
-          worksheet.mergeCells(2, colIndex, 2, colIndex + 1);
-          colIndex += 2;
-        });
-      });
-      
-      // Merge cells for Total Weight column (spans 3 rows)
-      const totalColIndex = colIndex;
-      worksheet.mergeCells(1, totalColIndex, 3, totalColIndex);
-      const totalHeaderCell = worksheet.getCell(1, totalColIndex);
-      totalHeaderCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF92D050" } }; // Green background
-
-      // Add data rows
-      sheetData.items.forEach((item) => {
-        // Use item_name + item_type as key to match backend data structure
-        const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
-        const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
-        // Get UOM from first available data entry for this item
-        let uom = 0;
-        for (const warehouse of sheetData.warehouses) {
-          for (const floor of warehouse.floors) {
-            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor];
-            if (cellData && cellData.uom) {
-              uom = cellData.uom;
-              break;
+        // Build header rows
+        const headerRow1 = ["Group", "Subgroup", "Item Name", "UOM (kg)", "Item Type"];
+        stockData.warehouses.forEach((warehouse) => {
+          for (let i = 0; i < warehouse.floors.length * 2; i++) {
+            if (i === 0) {
+              headerRow1.push(warehouse.name);
+            } else {
+              headerRow1.push("");
             }
           }
-          if (uom > 0) break;
-        }
-        
-        const row = [item.group, item.subgroup, item.item_name, uom > 0 ? uom.toFixed(3) : "-", (item.item_type && item.item_type.trim()) ? item.item_type : "-"];
-        
-        // Calculate total weight for this item
-        let itemTotalWeight = 0;
-        sheetData.warehouses.forEach((warehouse) => {
-          warehouse.floors.forEach((floor) => {
-            const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
-            row.push(cellData.quantity > 0 ? cellData.quantity.toString() : "-");
-            row.push(cellData.weight > 0 ? cellData.weight.toFixed(2) : "-");
-            itemTotalWeight += cellData.weight || 0;
-          });
         });
-        
-        // Add total weight column
-        row.push(itemTotalWeight > 0 ? itemTotalWeight.toFixed(2) : "-");
-        
-        const dataRow = worksheet.addRow(row);
-        dataRow.alignment = { horizontal: "left", vertical: "middle" };
-        // Center align UOM column
-        dataRow.getCell(4).alignment = { horizontal: "center" };
-        // Center align Item Type column
-        dataRow.getCell(5).alignment = { horizontal: "center" };
-        // Center align qty and weight columns
-        let dataCol = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
-        sheetData.warehouses.forEach((warehouse) => {
-          warehouse.floors.forEach(() => {
-            dataRow.getCell(dataCol).alignment = { horizontal: "center" }; // Qty
-            dataRow.getCell(dataCol + 1).alignment = { horizontal: "center" }; // Weight
-            dataCol += 2;
-          });
-        });
-        // Center align total weight column
-        dataRow.getCell(dataCol).alignment = { horizontal: "center" };
-        dataRow.getCell(dataCol).font = { bold: true };
-        dataRow.getCell(dataCol).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EFDA" } }; // Light green
-      });
+        headerRow1.push("Total Weight (kg)");
+        const row1 = worksheet.addRow(headerRow1);
+        row1.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+        row1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: headerColor } };
+        row1.alignment = { horizontal: "center", vertical: "middle" };
 
-      // Add total row
-      const totalRow = ["TOTAL", "", "", "", ""]; // Group, Subgroup, Item Name, UOM, Item Type
-      let grandTotalWeight = 0;
-        sheetData.warehouses.forEach((warehouse) => {
+        // Row 2: Floor names
+        const headerRow2 = ["", "", "", "", ""];
+        stockData.warehouses.forEach((warehouse) => {
+          warehouse.floors.forEach((floor) => {
+            headerRow2.push(floor);
+            headerRow2.push("");
+          });
+        });
+        headerRow2.push("");
+        const row2 = worksheet.addRow(headerRow2);
+        row2.font = { bold: true, size: 11 };
+        row2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
+        row2.alignment = { horizontal: "center", vertical: "middle" };
+
+        // Row 3: Qty | Weight labels
+        const headerRow3 = ["", "", "", "", ""];
+        stockData.warehouses.forEach((warehouse) => {
+          warehouse.floors.forEach(() => {
+            headerRow3.push("Qty");
+            headerRow3.push("Weight (kg)");
+          });
+        });
+        headerRow3.push("");
+        const row3 = worksheet.addRow(headerRow3);
+        row3.font = { bold: true, size: 10 };
+        row3.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7E6E6" } };
+        row3.alignment = { horizontal: "center", vertical: "middle" };
+
+        // Merge cells
+        worksheet.mergeCells(1, 4, 3, 4);
+        worksheet.mergeCells(1, 5, 3, 5);
+
+        let colIndex = 6;
+        stockData.warehouses.forEach((warehouse) => {
+          const colspan = warehouse.floors.length * 2;
+          if (colspan > 0) {
+            worksheet.mergeCells(1, colIndex, 1, colIndex + colspan - 1);
+          }
+          colIndex += colspan;
+        });
+
+        colIndex = 6;
+        stockData.warehouses.forEach((warehouse) => {
+          warehouse.floors.forEach(() => {
+            worksheet.mergeCells(2, colIndex, 2, colIndex + 1);
+            colIndex += 2;
+          });
+        });
+
+        const totalColIndex = colIndex;
+        worksheet.mergeCells(1, totalColIndex, 3, totalColIndex);
+        const totalHeaderCell = worksheet.getCell(1, totalColIndex);
+        totalHeaderCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: totalHeaderColor } };
+
+        // Add data rows
+        stockData.items.forEach((item) => {
+          // Use same key as backend - item_name + group + subgroup (NOT including item_type)
+          const itemKey = `${item.item_name.toUpperCase()}_${(item.group || "").toUpperCase()}_${(item.subgroup || "").toUpperCase()}`;
+
+          let uom = 0;
+          for (const warehouse of stockData.warehouses) {
+            for (const floor of warehouse.floors) {
+              const cellData = stockData.data[itemKey]?.[warehouse.name]?.[floor];
+              if (cellData && cellData.uom) {
+                uom = cellData.uom;
+                break;
+              }
+            }
+            if (uom > 0) break;
+          }
+
+          const row = [item.group, item.subgroup, item.item_name, uom > 0 ? uom.toFixed(3) : "-", (item.item_type && item.item_type.trim()) ? item.item_type : "-"];
+
+          let itemTotalWeight = 0;
+          stockData.warehouses.forEach((warehouse) => {
+            warehouse.floors.forEach((floor) => {
+              const cellData = stockData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
+              row.push(cellData.quantity > 0 ? cellData.quantity.toString() : "-");
+              row.push(cellData.weight > 0 ? cellData.weight.toFixed(2) : "-");
+              itemTotalWeight += cellData.weight || 0;
+            });
+          });
+
+          row.push(itemTotalWeight > 0 ? itemTotalWeight.toFixed(2) : "-");
+
+          const dataRow = worksheet.addRow(row);
+          dataRow.alignment = { horizontal: "left", vertical: "middle" };
+          dataRow.getCell(4).alignment = { horizontal: "center" };
+          dataRow.getCell(5).alignment = { horizontal: "center" };
+
+          let dataCol = 6;
+          stockData.warehouses.forEach((warehouse) => {
+            warehouse.floors.forEach(() => {
+              dataRow.getCell(dataCol).alignment = { horizontal: "center" };
+              dataRow.getCell(dataCol + 1).alignment = { horizontal: "center" };
+              dataCol += 2;
+            });
+          });
+          dataRow.getCell(dataCol).alignment = { horizontal: "center" };
+          dataRow.getCell(dataCol).font = { bold: true };
+          dataRow.getCell(dataCol).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EFDA" } };
+        });
+
+        // Add total row
+        const totalRow = ["TOTAL", "", "", "", ""];
+        let grandTotalWeight = 0;
+        stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach((floor) => {
             let totalWeight = 0;
             let totalQuantity = 0;
-            sheetData.items.forEach((item) => {
-              // Use item_name + item_type as key to match backend data structure
+            stockData.items.forEach((item) => {
               const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
               const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
-              const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
+              const cellData = stockData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
               totalWeight += cellData.weight || 0;
               totalQuantity += cellData.quantity || 0;
-              grandTotalWeight += cellData.weight || 0;
             });
+            grandTotalWeight += totalWeight;
             totalRow.push(totalQuantity > 0 ? totalQuantity.toString() : "-");
             totalRow.push(totalWeight > 0 ? totalWeight.toFixed(2) : "-");
           });
         });
-      // Add grand total weight
-      totalRow.push(grandTotalWeight > 0 ? grandTotalWeight.toFixed(2) : "-");
-      const totalRowObj = worksheet.addRow(totalRow);
-      totalRowObj.font = { bold: true };
-      totalRowObj.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
-      totalRowObj.alignment = { horizontal: "left", vertical: "middle" };
-      // Center align UOM column (empty in total row)
-      totalRowObj.getCell(4).alignment = { horizontal: "center" };
-      // Center align Item Type column (empty in total row)
-      totalRowObj.getCell(5).alignment = { horizontal: "center" };
-      // Center align total columns
-      let totalCol = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
-      sheetData.warehouses.forEach((warehouse) => {
-        warehouse.floors.forEach(() => {
-          totalRowObj.getCell(totalCol).alignment = { horizontal: "center" };
-          totalRowObj.getCell(totalCol + 1).alignment = { horizontal: "center" };
-          totalCol += 2;
-        });
-      });
-      // Center align grand total weight
-      totalRowObj.getCell(totalCol).alignment = { horizontal: "center" };
-      totalRowObj.getCell(totalCol).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC000" } }; // Darker yellow
+        totalRow.push(grandTotalWeight > 0 ? grandTotalWeight.toFixed(2) : "-");
 
-      // Add borders to all cells
-      worksheet.eachRow((row, rowNumber) => {
-        row.eachCell((cell, colNumber) => {
-          cell.border = {
-            top: { style: "thin", color: { argb: "FF000000" } },
-            left: { style: "thin", color: { argb: "FF000000" } },
-            bottom: { style: "thin", color: { argb: "FF000000" } },
-            right: { style: "thin", color: { argb: "FF000000" } },
-          };
-        });
-      });
+        const totalRowObj = worksheet.addRow(totalRow);
+        totalRowObj.font = { bold: true };
+        totalRowObj.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+        totalRowObj.alignment = { horizontal: "left", vertical: "middle" };
+        totalRowObj.getCell(4).alignment = { horizontal: "center" };
+        totalRowObj.getCell(5).alignment = { horizontal: "center" };
 
-      // Set column widths
-      worksheet.getColumn(1).width = 15; // Group
-      worksheet.getColumn(2).width = 15; // Subgroup
-      worksheet.getColumn(3).width = 30; // Item Name
-      worksheet.getColumn(4).width = 12; // UOM
-      worksheet.getColumn(5).width = 12; // Item Type
-      let widthCol = 6; // Start after Group, Subgroup, Item Name, UOM, Item Type
-      sheetData.warehouses.forEach((warehouse) => {
-        warehouse.floors.forEach(() => {
-          worksheet.getColumn(widthCol).width = 10; // Qty
-          worksheet.getColumn(widthCol + 1).width = 12; // Weight
-          widthCol += 2;
+        let totalCol = 6;
+        stockData.warehouses.forEach((warehouse) => {
+          warehouse.floors.forEach(() => {
+            totalRowObj.getCell(totalCol).alignment = { horizontal: "center" };
+            totalRowObj.getCell(totalCol + 1).alignment = { horizontal: "center" };
+            totalCol += 2;
+          });
         });
-      });
-      worksheet.getColumn(widthCol).width = 15; // Total Weight column
+        totalRowObj.getCell(totalCol).alignment = { horizontal: "center" };
+        totalRowObj.getCell(totalCol).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC000" } };
 
-      // Freeze first 5 columns (Group, Subgroup, Item Name, UOM, Item Type)
-      worksheet.views = [{ state: "frozen", xSplit: 5, ySplit: 3 }];
+        // Add borders
+        worksheet.eachRow((row) => {
+          row.eachCell((cell) => {
+            cell.border = {
+              top: { style: "thin", color: { argb: "FF000000" } },
+              left: { style: "thin", color: { argb: "FF000000" } },
+              bottom: { style: "thin", color: { argb: "FF000000" } },
+              right: { style: "thin", color: { argb: "FF000000" } },
+            };
+          });
+        });
+
+        // Set column widths
+        worksheet.getColumn(1).width = 15;
+        worksheet.getColumn(2).width = 15;
+        worksheet.getColumn(3).width = 30;
+        worksheet.getColumn(4).width = 12;
+        worksheet.getColumn(5).width = 12;
+        let widthCol = 6;
+        stockData.warehouses.forEach((warehouse) => {
+          warehouse.floors.forEach(() => {
+            worksheet.getColumn(widthCol).width = 10;
+            worksheet.getColumn(widthCol + 1).width = 12;
+            widthCol += 2;
+          });
+        });
+        worksheet.getColumn(widthCol).width = 15;
+
+        worksheet.views = [{ state: "frozen", xSplit: 5, ySplit: 3 }];
+      };
+
+      // Create Fresh Stock worksheet (green header)
+      if (sheetData.freshStock && sheetData.freshStock.items.length > 0) {
+        createWorksheet("Fresh Stock", sheetData.freshStock, "FF228B22", "FF92D050");
+      } else {
+        // Fallback to combined data for backwards compatibility (all items assumed fresh)
+        const fallbackData: StockTypeData = {
+          items: sheetData.items,
+          warehouses: sheetData.warehouses,
+          data: sheetData.data,
+        };
+        createWorksheet("Fresh Stock", fallbackData, "FF228B22", "FF92D050");
+      }
+
+      // Create Rejection worksheet (red header)
+      if (sheetData.rejection && sheetData.rejection.items.length > 0) {
+        createWorksheet("Rejection", sheetData.rejection, "FFB22222", "FFFF6B6B");
+      }
 
       // Save file
       const buffer = await workbook.xlsx.writeBuffer();

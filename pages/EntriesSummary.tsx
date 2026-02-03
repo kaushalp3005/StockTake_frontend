@@ -13,12 +13,16 @@ import {
 
 interface Item {
   id: string;
+  databaseId?: string; // Database entry ID if this item was loaded from database
+  entryId?: string; // Batch entry ID (YYMM0001 format)
   category: string;
   subcategory: string;
   description: string;
   packageSize: number;
   units: number;
   totalWeight: number;
+  stockType?: string;
+  itemType?: string;
 }
 
 interface FloorSession {
@@ -32,6 +36,11 @@ interface FloorSession {
   userName?: string;
   userEmail?: string;
   userId?: string;
+  isEditing?: boolean;
+  entryId?: string; // Batch entry ID being edited
+  originalSessionId?: string;
+  originalStatus?: string;
+  originalItemIds?: string[]; // Original database IDs for tracking deletions
 }
 
 export default function EntriesSummary() {
@@ -90,6 +99,17 @@ export default function EntriesSummary() {
       // Get current user info
       const userStr = localStorage.getItem("user");
       const user = userStr ? JSON.parse(userStr) : null;
+      
+      console.log("Current user object:", user);
+      console.log("Using username:", user?.username);
+      console.log("Floor session data:", {
+        userName: floorSession.userName,
+        userEmail: floorSession.userEmail,
+        authority: floorSession.authority
+      });
+
+      // Check if this is an edit operation
+      const isEditing = floorSession.isEditing && floorSession.originalSessionId;
 
       // Prepare entries for database submission
       // Get itemType from session or from first item
@@ -102,49 +122,181 @@ export default function EntriesSummary() {
         const isCustomCategory = item.category && !item.subcategory;
         const itemName = isCustomCategory ? item.category : item.description;
         
+        // Get entered_by value - use username from logged-in user
+        const enteredBy = user?.username || user?.email || floorSession.userName || floorSession.userEmail || "UNKNOWN";
+        
         return {
-          itemName: itemName,
-          description: item.description || "",
-          itemType: (item as any).itemType || sessionItemType || "",
-          category: isCustomCategory ? "" : item.category,
-          itemCategory: isCustomCategory ? "" : item.category,
-          subcategory: item.subcategory,
-          itemSubcategory: item.subcategory,
-          floorName: floorSession.floorName || floorSession.floor || "",
-          floor: floorSession.floor || "",
+          // Use snake_case field names to match database schema
+          item_name: itemName,
+          item_type: (item as any).itemType || sessionItemType || "",
+          item_category: isCustomCategory ? "Unlisted Item" : item.category,
+          item_subcategory: item.subcategory || "",
+          floor_name: floorSession.floorName || floorSession.floor || "",
           warehouse: floorSession.warehouse || "",
-          units: item.units,
-          totalQuantity: item.units,
-          packageSize: item.packageSize,
-          unitUom: item.packageSize,
-          totalWeight: item.totalWeight,
-          enteredBy: user?.name || floorSession.userName || "",
-          userName: user?.name || floorSession.userName || "",
-          enteredByEmail: user?.email || floorSession.userEmail || "",
-          userEmail: user?.email || floorSession.userEmail || "",
-          authority: floorSession.authority || "",
+          total_quantity: item.units,
+          unit_uom: item.packageSize,
+          total_weight: item.totalWeight,
+          entered_by: enteredBy,
+          entered_by_email: user?.email || floorSession.userEmail || "",
+          authority: floorSession.authority || "FLOOR_MANAGER",
+          stock_type: (item as any).stockType || "Fresh Stock",
         };
       });
 
-      // Submit entries to database
-      const result = await stocktakeEntriesAPI.submitEntries(entries);
+      let result;
+      if (isEditing) {
+        // For editing: Delete removed items, update existing, and create new ones
+        console.log("Updating existing session:", floorSession.originalSessionId);
+        console.log("Entry ID being edited:", floorSession.entryId);
+
+        const itemsToUpdate: any[] = [];
+        const itemsToCreate: any[] = [];
+        const itemsToDelete: string[] = [];
+
+        // Get current item database IDs
+        const currentItemDbIds = new Set(
+          floorSession.items
+            .map((item: Item) => item.databaseId)
+            .filter(Boolean)
+        );
+
+        // Find items that were deleted (in original but not in current)
+        const originalItemIds: string[] = floorSession.originalItemIds || [];
+        originalItemIds.forEach((originalId: string) => {
+          if (!currentItemDbIds.has(originalId)) {
+            itemsToDelete.push(originalId);
+          }
+        });
+
+        console.log(`Found ${itemsToDelete.length} items to delete:`, itemsToDelete);
+
+        // Delete removed items from database
+        for (const dbId of itemsToDelete) {
+          try {
+            await stocktakeEntriesAPI.deleteEntry(dbId);
+            console.log(`Deleted entry ${dbId} from database`);
+          } catch (deleteError: any) {
+            // Ignore 404 errors (item already deleted)
+            if (deleteError?.status !== 404) {
+              console.error(`Failed to delete entry ${dbId}:`, deleteError);
+            } else {
+              console.log(`Entry ${dbId} was already deleted`);
+            }
+          }
+        }
+
+        // Separate items into update vs create based on whether they have database IDs
+        floorSession.items.forEach((item: Item) => {
+          if (item.databaseId) {
+            itemsToUpdate.push({
+              databaseId: item.databaseId,
+              itemName: item.description,
+              warehouse: floorSession.warehouse,
+              floorName: floorSession.floorName || floorSession.floor,
+              itemType: (item as any).itemType || floorSession.itemType || "",
+              category: item.category,
+              subcategory: item.subcategory,
+              totalQuantity: item.units,
+              unitUom: item.packageSize,
+              totalWeight: item.totalWeight,
+              stockType: (item as any).stockType,
+            });
+          } else {
+            // New item - will be created with a new entry
+            itemsToCreate.push({
+              warehouse: floorSession.warehouse,
+              floorName: floorSession.floorName || floorSession.floor,
+              itemType: (item as any).itemType || floorSession.itemType || "",
+              category: item.category,
+              subcategory: item.subcategory,
+              description: item.description,
+              packageSize: item.packageSize,
+              units: item.units,
+              totalWeight: item.totalWeight,
+              stockType: (item as any).stockType,
+              enteredBy: floorSession.userName || floorSession.userEmail,
+            });
+          }
+        });
+
+        console.log(`Deleting ${itemsToDelete.length}, updating ${itemsToUpdate.length}, creating ${itemsToCreate.length} items`);
+
+        // Update existing items
+        for (const item of itemsToUpdate) {
+          try {
+            await stocktakeEntriesAPI.updateEntry(item.databaseId, item);
+            console.log(`Updated entry ${item.databaseId}`);
+          } catch (updateError) {
+            console.error(`Failed to update entry ${item.databaseId}:`, updateError);
+            throw updateError;
+          }
+        }
+
+        // Create new items if any (they will get a new entry_id)
+        if (itemsToCreate.length > 0) {
+          // Prepare entries with proper field names
+          const createEntries = itemsToCreate.map((item: any) => ({
+            item_name: item.description,
+            item_type: item.itemType,
+            item_category: item.category,
+            item_subcategory: item.subcategory,
+            floor_name: item.floorName,
+            warehouse: item.warehouse,
+            total_quantity: item.units,
+            unit_uom: item.packageSize,
+            total_weight: item.totalWeight,
+            entered_by: item.enteredBy,
+            entered_by_email: user?.email || floorSession.userEmail || "",
+            authority: floorSession.authority || "FLOOR_MANAGER",
+            stock_type: item.stockType || "Fresh Stock",
+          }));
+          result = await stocktakeEntriesAPI.submitEntries(createEntries);
+          console.log(`Created ${itemsToCreate.length} new entries with new entry_id`);
+        } else {
+          result = { message: "Entries updated successfully" };
+        }
+      } else {
+        // For new entries: Submit normally
+        result = await stocktakeEntriesAPI.submitEntries(entries);
+      }
+      
       console.log("Entries submitted successfully:", result);
 
       // Update floor session status (still keep in localStorage for compatibility)
       const updatedSession = {
         ...floorSession,
+        id: isEditing ? floorSession.originalSessionId : floorSession.id,
         status: "SUBMITTED",
         submittedAt: new Date().toISOString(),
         userId: user?.id || user?.email || floorSession.userId || "",
         userEmail: user?.email || floorSession.userEmail || "",
-        userName: user?.name || floorSession.userName || "",
+        userName: user?.username || user?.email || floorSession.userName || "",
+        // Remove editing flags
+        isEditing: undefined,
+        originalSessionId: undefined,
+        originalStatus: undefined
       };
 
       // Store the session in a list of all sessions (for backward compatibility)
       const allSessions = JSON.parse(
         localStorage.getItem("floorSessions") || "[]"
       );
-      allSessions.push(updatedSession);
+      
+      if (isEditing) {
+        // If editing, replace the existing session instead of adding a new one
+        const existingSessionIndex = allSessions.findIndex(
+          (s: any) => s.id === floorSession.originalSessionId
+        );
+        if (existingSessionIndex >= 0) {
+          allSessions[existingSessionIndex] = updatedSession;
+        } else {
+          allSessions.push(updatedSession);
+        }
+      } else {
+        // For new entries, add normally
+        allSessions.push(updatedSession);
+      }
+      
       localStorage.setItem("floorSessions", JSON.stringify(allSessions));
 
       // Store the submitted session temporarily for the success page download functionality
