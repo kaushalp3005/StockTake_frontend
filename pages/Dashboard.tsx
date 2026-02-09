@@ -816,56 +816,7 @@ export default function Dashboard() {
           {(user?.role === "INVENTORY_MANAGER" || user?.role === "SUPERUSER") && (
             <div className="mt-8 sm:mt-12 space-y-6">
 
-              {/* Statistics Cards with Animation */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                <Card className="p-4 sm:p-6 bg-gradient-to-br from-[#1e3a8a]/10 to-[#1e3a8a]/5 border-2 border-[#1e3a8a]/20 hover:shadow-xl transition-all duration-300 animate-in fade-in slide-in-from-bottom-4 hover:scale-[1.02] bg-white/80 backdrop-blur-sm">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="p-2 bg-[#1e3a8a]/20 rounded-lg">
-                      <Package className="w-5 h-5 text-[#1e3a8a]" />
-                    </div>
-                    <TrendingUp className="w-4 h-4 text-green-500" />
-                  </div>
-                  <p className="text-xs sm:text-sm text-muted-foreground mb-1">Total Sessions</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-[#1e3a8a]">24</p>
-                  <p className="text-xs text-green-600 dark:text-green-400 mt-2">+12% from last week</p>
-                </Card>
-
-                <Card className="p-4 sm:p-6 bg-gradient-to-br from-blue-500/10 to-blue-500/5 border-blue-500/20 hover:shadow-lg transition-all duration-300 animate-in fade-in slide-in-from-bottom-4 delay-100">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="p-2 bg-blue-500/20 rounded-lg">
-                      <FileText className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                    </div>
-                    <TrendingUp className="w-4 h-4 text-green-500" />
-                  </div>
-                  <p className="text-xs sm:text-sm text-muted-foreground mb-1">Pending Reviews</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">8</p>
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">Requires attention</p>
-                </Card>
-
-                <Card className="p-4 sm:p-6 bg-gradient-to-br from-green-500/10 to-green-500/5 border-green-500/20 hover:shadow-lg transition-all duration-300 animate-in fade-in slide-in-from-bottom-4 delay-200">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="p-2 bg-green-500/20 rounded-lg">
-                      <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400" />
-                    </div>
-                    <TrendingUp className="w-4 h-4 text-green-500" />
-                  </div>
-                  <p className="text-xs sm:text-sm text-muted-foreground mb-1">Approved Today</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-green-600 dark:text-green-400">16</p>
-                  <p className="text-xs text-green-600 dark:text-green-400 mt-2">+5 from yesterday</p>
-                </Card>
-
-                <Card className="p-4 sm:p-6 bg-gradient-to-br from-purple-500/10 to-purple-500/5 border-purple-500/20 hover:shadow-lg transition-all duration-300 animate-in fade-in slide-in-from-bottom-4 delay-300">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="p-2 bg-purple-500/20 rounded-lg">
-                      <Warehouse className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                    </div>
-                    <TrendingUp className="w-4 h-4 text-green-500" />
-                  </div>
-                  <p className="text-xs sm:text-sm text-muted-foreground mb-1">Total Weight (kg)</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-purple-600 dark:text-purple-400">12,450</p>
-                  <p className="text-xs text-green-600 dark:text-green-400 mt-2">+8% from last week</p>
-                </Card>
-              </div>
+    
 
               {/* Recent Activity */}
               <Card className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300">

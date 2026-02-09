@@ -331,8 +331,8 @@ export default function ResultsheetView() {
             let totalWeight = 0;
             let totalQuantity = 0;
             stockData.items.forEach((item) => {
-              const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
-              const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
+              // Use correct key format: item_name_group_subgroup (same as backend)
+              const itemKey = `${item.item_name.toUpperCase()}_${(item.group || "").toUpperCase()}_${(item.subgroup || "").toUpperCase()}`;
               const cellData = stockData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
               totalWeight += cellData.weight || 0;
               totalQuantity += cellData.quantity || 0;
@@ -684,9 +684,10 @@ export default function ResultsheetView() {
                   </TableHeader>
                   <TableBody>
                     {sheetData.items.map((item) => {
-                      // Use item_name + item_type as key to match backend data structure
-                      const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
-                      const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
+                      // IMPORTANT: Use the same key format as the backend: item_name_group_subgroup
+                      // Backend uses: `${entry.item_name?.toUpperCase() || ""}_${(entry.group || "").toUpperCase()}_${(entry.subgroup || "").toUpperCase()}`
+                      const itemKey = `${item.item_name.toUpperCase()}_${(item.group || "").toUpperCase()}_${(item.subgroup || "").toUpperCase()}`;
+                      
                       // Calculate total weight for this item across all warehouses and floors
                       let itemTotalWeight = 0;
                       sheetData.warehouses.forEach((warehouse) => {
@@ -695,6 +696,7 @@ export default function ResultsheetView() {
                           itemTotalWeight += cellData.weight || 0;
                         });
                       });
+                      
                       return (
                         <TableRow key={itemKey} className="border-b border-gray-300 hover:bg-gray-50">
                           <TableCell className="sticky left-0 z-10 bg-white border border-gray-400 text-xs py-1 px-2">
@@ -720,6 +722,7 @@ export default function ResultsheetView() {
                                 }
                                 if (uom > 0) break;
                               }
+                              
                               return uom > 0 ? uom.toFixed(3) : "-";
                             })()}
                           </TableCell>
@@ -731,6 +734,7 @@ export default function ResultsheetView() {
                               const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
                               const weight = cellData.weight || 0;
                               const quantity = cellData.quantity || 0;
+                              
                               return (
                                 <React.Fragment key={`${warehouse.name}-${floor}`}>
                                   <TableCell className="text-center font-semibold text-purple-700 bg-white border border-gray-400 text-xs py-1 px-2">
@@ -771,9 +775,8 @@ export default function ResultsheetView() {
                           let totalWeight = 0;
                           let totalQuantity = 0;
                           sheetData.items.forEach((item) => {
-                            // Use item_name + item_type as key to match backend data structure
-                            const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
-                            const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
+                            // Use correct key format: item_name_group_subgroup (same as backend)
+                            const itemKey = `${item.item_name.toUpperCase()}_${(item.group || "").toUpperCase()}_${(item.subgroup || "").toUpperCase()}`;
                             const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
                             totalWeight += cellData.weight || 0;
                             totalQuantity += cellData.quantity || 0;
@@ -794,9 +797,8 @@ export default function ResultsheetView() {
                         {(() => {
                           let grandTotalWeight = 0;
                           sheetData.items.forEach((item) => {
-                            // Use item_name + item_type as key to match backend data structure
-                            const itemType = (item.item_type && item.item_type.trim()) ? item.item_type.toUpperCase() : "";
-                            const itemKey = `${item.item_name.toUpperCase()}_${itemType}`;
+                            // Use correct key format: item_name_group_subgroup (same as backend)
+                            const itemKey = `${item.item_name.toUpperCase()}_${(item.group || "").toUpperCase()}_${(item.subgroup || "").toUpperCase()}`;
                             sheetData.warehouses.forEach((warehouse) => {
                               warehouse.floors.forEach((floor) => {
                                 const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0 };
