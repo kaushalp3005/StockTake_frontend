@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Upload, Plus, Search } from "lucide-react";
+import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Upload, Plus, Search, Download } from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -98,6 +98,7 @@ export default function ManagerReview() {
   const [checkedEntries, setCheckedEntries] = useState<Record<string, boolean>>({});
   const [editingQuantity, setEditingQuantity] = useState<{ entryId: string; value: string } | null>(null);
   const [editingItemName, setEditingItemName] = useState<{ itemName: string; newName: string } | null>(null);
+  const [downloadingWarehouse, setDownloadingWarehouse] = useState(false);
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const longPressDetectedRef = useRef<boolean>(false);
 
@@ -1160,6 +1161,183 @@ export default function ManagerReview() {
     );
   }
 
+  // Download all warehouse floor entries as Excel
+  const handleDownloadWarehouseEntries = async () => {
+    if (!selectedWarehouse) {
+      toast({
+        title: "Error",
+        description: "No warehouse selected",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setDownloadingWarehouse(true);
+    
+    try {
+      // Fetch all entries for the selected warehouse
+      const response = await stocktakeEntriesAPI.getEntries({ warehouse: selectedWarehouse });
+      
+      if (!response?.entries || response.entries.length === 0) {
+        toast({
+          title: "No Data",
+          description: `No entries found for warehouse ${selectedWarehouse}`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Dynamic import of exceljs to avoid bundle size issues
+      const ExcelJS = (await import("exceljs")).default;
+      const workbook = new ExcelJS.Workbook();
+
+      // Separate entries by stock type
+      const freshStockEntries = response.entries.filter((entry: any) => {
+        const stockType = entry.stockType || entry.stock_type || "Fresh Stock";
+        return stockType === "Fresh Stock" || stockType === "fresh stock";
+      });
+
+      const rejectionEntries = response.entries.filter((entry: any) => {
+        const stockType = entry.stockType || entry.stock_type || "Fresh Stock";
+        return stockType === "Off Grade/Rejection" || stockType === "Rejection";
+      });
+
+      // Define headers
+      const headers = [
+        "Entry ID",
+        "Item Name", 
+        "Item Type",
+        "Category", 
+        "Subcategory",
+        "Floor Name",
+        "Warehouse",
+        "Quantity",
+        "UOM (kg)",
+        "Total Weight (kg)",
+        "Stock Type",
+        "Entered By",
+        "Authority",
+        "Date Created",
+        "Date Updated"
+      ];
+
+      // Helper function to create a worksheet with data
+      const createWorksheet = (sheetName: string, entries: any[], headerColor: string) => {
+        if (entries.length === 0) return null;
+
+        const worksheet = workbook.addWorksheet(sheetName);
+
+        // Add headers to worksheet
+        const headerRow = worksheet.addRow(headers);
+        headerRow.font = { bold: true };
+        headerRow.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: headerColor },
+        };
+
+        // Set border for headers
+        headerRow.eachCell((cell) => {
+          cell.border = {
+            top: { style: "thin" },
+            left: { style: "thin" },
+            bottom: { style: "thin" },
+            right: { style: "thin" },
+          };
+        });
+
+        // Add data rows
+        entries.forEach((entry: any) => {
+          const dataRow = [
+            entry.id || "",
+            entry.itemName || entry.item_name || "",
+            entry.itemType || entry.item_type || "",
+            entry.itemCategory || entry.item_category || "",
+            entry.itemSubcategory || entry.item_subcategory || "",
+            entry.floorName || entry.floor_name || "",
+            entry.warehouse || "",
+            entry.totalQuantity || entry.total_quantity || 0,
+            entry.unitUom || entry.unit_uom || 0,
+            entry.totalWeight || entry.total_weight || 0,
+            entry.stockType || entry.stock_type || "Fresh Stock",
+            entry.enteredBy || entry.entered_by || "",
+            entry.authority || "",
+            entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "",
+            entry.updatedAt ? new Date(entry.updatedAt).toLocaleString() : "",
+          ];
+          
+          const row = worksheet.addRow(dataRow);
+          
+          // Add borders to data cells
+          row.eachCell((cell) => {
+            cell.border = {
+              top: { style: "thin" },
+              left: { style: "thin" },
+              bottom: { style: "thin" },
+              right: { style: "thin" },
+            };
+          });
+        });
+
+        // Auto-fit columns
+        worksheet.columns.forEach((column) => {
+          if (column.header === "Item Name") {
+            column.width = 30;
+          } else if (column.header === "Category" || column.header === "Subcategory") {
+            column.width = 20;
+          } else if (column.header === "Date Created" || column.header === "Date Updated") {
+            column.width = 18;
+          } else {
+            column.width = 15;
+          }
+        });
+
+        return worksheet;
+      };
+
+      // Create Fresh Stock worksheet (green header)
+      createWorksheet("Fresh Stock", freshStockEntries, "FFE2EFDA");
+
+      // Create Rejection worksheet (red header)
+      createWorksheet("Rejection", rejectionEntries, "FFFFC0CB");
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+      const filename = `${selectedWarehouse}_All_Entries_${timestamp}.xlsx`;
+
+      // Write to buffer and download
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      toast({
+        title: "Download Complete",
+        description: `Exported ${freshStockEntries.length} fresh stock and ${rejectionEntries.length} rejection entries from ${selectedWarehouse} in separate sheets`,
+      });
+
+    } catch (error: any) {
+      console.error("Download error:", error);
+      toast({
+        title: "Download Failed",
+        description: error.message || "Failed to download warehouse entries",
+        variant: "destructive",
+      });
+    } finally {
+      setDownloadingWarehouse(false);
+    }
+  };
+
 
   // Animation variants
   const pageVariants = {
@@ -1407,52 +1585,76 @@ export default function ManagerReview() {
                 <p className="text-sm text-muted-foreground">Loading floors from database...</p>
               </div>
             ) : warehouseFloors.length > 0 ? (
-              <div className="space-y-3">
-                {warehouseFloors.map((floor, index) => (
-                  <motion.div
-                    key={floor.floorName}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{
-                      duration: 0.3,
-                      delay: index * 0.05,
-                    }}
-                  >
-                    <Card
-                      className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation"
-                      onClick={() => {
-                        if (!isScrollingRef.current && !longPressDetectedRef.current) {
-                          handleFloorClick(floor.floorName);
-                        }
+              <>
+                <div className="space-y-3">
+                  {warehouseFloors.map((floor, index) => (
+                    <motion.div
+                      key={floor.floorName}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{
+                        duration: 0.3,
+                        delay: index * 0.05,
                       }}
-                      style={{ touchAction: 'manipulation' }}
                     >
-                      <div className="flex items-center justify-between relative">
-                        {hasUncheckedEntriesInFloor(floor.floorName) && (
-                          <div className="absolute -top-2 -right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900"></div>
-                        )}
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 bg-primary/10 rounded-lg">
-                            <Package className="w-5 h-5 text-primary" />
+                      <Card
+                        className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation"
+                        onClick={() => {
+                          if (!isScrollingRef.current && !longPressDetectedRef.current) {
+                            handleFloorClick(floor.floorName);
+                          }
+                        }}
+                        style={{ touchAction: 'manipulation' }}
+                      >
+                        <div className="flex items-center justify-between relative">
+                          {hasUncheckedEntriesInFloor(floor.floorName) && (
+                            <div className="absolute -top-2 -right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900"></div>
+                          )}
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-primary/10 rounded-lg">
+                              <Package className="w-5 h-5 text-primary" />
+                            </div>
+                            <div>
+                              <h3 className="font-semibold text-foreground">
+                                {floor.floorName}
+                              </h3>
+                              <p className="text-xs text-blue-600 dark:text-blue-400 opacity-70">
+                                Long press to edit name
+                              </p>
+                              <p className="text-sm text-muted-foreground">
+                                {floor.itemCount} items • {floor.totalWeight.toFixed(2)} kg
+                              </p>
+                            </div>
                           </div>
-                          <div>
-                            <h3 className="font-semibold text-foreground">
-                              {floor.floorName}
-                            </h3>
-                            <p className="text-xs text-blue-600 dark:text-blue-400 opacity-70">
-                              Long press to edit name
-                            </p>
-                            <p className="text-sm text-muted-foreground">
-                              {floor.itemCount} items • {floor.totalWeight.toFixed(2)} kg
-                            </p>
-                          </div>
+                          <ChevronRight className="w-5 h-5 text-muted-foreground" />
                         </div>
-                        <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                      </div>
-                    </Card>
-                  </motion.div>
-                ))}
-              </div>
+                      </Card>
+                    </motion.div>
+                  ))}
+                </div>
+                
+                {/* Download Button */}
+                <div className="sticky bottom-0 bg-background pt-4 border-t border-border mt-6">
+                  <Button
+                    onClick={handleDownloadWarehouseEntries}
+                    disabled={downloadingWarehouse}
+                    className="w-full bg-green-600 hover:bg-green-700 text-white"
+                    size="lg"
+                  >
+                    {downloadingWarehouse ? (
+                      <>
+                        <Loader className="w-4 h-4 mr-2 animate-spin" />
+                        Downloading...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4 mr-2" />
+                        Download All {selectedWarehouse} Entries
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </>
             ) : (
               <p className="text-center text-muted-foreground py-8">
                 No floors available for this warehouse

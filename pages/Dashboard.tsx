@@ -625,7 +625,7 @@ export default function Dashboard() {
       description: "Review and manage floor sessions",
       actions: [
         {
-          label: "Start Audit Session",
+          label: "Start Stock-take ",
           icon: Package,
           action: () => {
             // Add smooth transition effect
@@ -693,7 +693,7 @@ export default function Dashboard() {
       description: "Full access to all system features",
       actions: [
         {
-          label: "Start Audit Session",
+          label: "Start Stock-take ",
           icon: Package,
           action: () => navigate("/review"),
         },
