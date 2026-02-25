@@ -373,6 +373,29 @@
     word-break: break-word;
   }
 
+  /* Calendar popover responsive */
+  @media (max-width: 480px) {
+    [data-radix-popover-content] {
+      max-width: calc(100vw - 1.5rem) !important;
+      transform: translateX(0) !important;
+    }
+
+    .date-filter-calendar {
+      font-size: 0.8rem;
+    }
+
+    .date-filter-calendar .rdp-table {
+      width: 100%;
+    }
+
+    .date-filter-calendar .rdp-cell,
+    .date-filter-calendar .rdp-head_cell,
+    .date-filter-calendar .rdp-day {
+      width: 2rem !important;
+      height: 2rem !important;
+    }
+  }
+
   /* Mobile-first responsive improvements */
   /* Better table responsiveness */
   .table-responsive {
@@ -398,8 +421,9 @@
   }
 
   @media (max-width: 640px) {
-    /* Ensure touch targets are at least 44px for mobile */
-    button, a, input, select, textarea {
+    /* Ensure touch targets are at least 44px for mobile - exclude calendar day buttons */
+    button:not(.rdp-day):not([class*="rdp"]):not([data-radix-popover]),
+    a, input, select, textarea {
       min-height: 44px;
     }
   }

@@ -1072,6 +1072,13 @@ export default function Dashboard() {
                     const sessionDate = session.createdAt ? new Date(session.createdAt).toLocaleDateString() : "N/A";
                     const sessionTime = session.createdAt ? new Date(session.createdAt).toLocaleTimeString() : "";
 
+                    // Floor managers can only edit today's entries; previous dates are view-only
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const entryDateStr = session.createdAt ? new Date(session.createdAt).toISOString().split('T')[0] : "";
+                    const isToday = todayStr === entryDateStr;
+                    const isFloorManager = user?.role === "FLOOR_MANAGER";
+                    const canEdit = session.status === "SUBMITTED" && (!isFloorManager || isToday);
+
                     return (
                       <Card
                         key={`${session.id}-${sessionIndex}`}
@@ -1139,8 +1146,8 @@ export default function Dashboard() {
                                   </>
                                 )}
                               </Button>
-                              {/* Edit Button - Only show for SUBMITTED status */}
-                              {session.status === "SUBMITTED" && (
+                              {/* Edit Button - Only show for SUBMITTED status and today's date for floor managers */}
+                              {canEdit && (
                                 <Button
                                   onClick={() => handleEditEntry(session)}
                                   variant="outline"
@@ -1150,6 +1157,11 @@ export default function Dashboard() {
                                   <Edit2 className="w-4 h-4 mr-2" />
                                   Edit
                                 </Button>
+                              )}
+                              {session.status === "SUBMITTED" && isFloorManager && !isToday && (
+                                <span className="text-xs text-muted-foreground italic self-center">
+                                  View only (previous date)
+                                </span>
                               )}
                               {session.status === "APPROVED" && (
                                 <span className="text-xs text-muted-foreground italic self-center">

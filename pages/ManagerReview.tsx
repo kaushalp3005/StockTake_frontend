@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Upload, Plus, Search, Download } from "lucide-react";
+import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Upload, Plus, Search, Download, CalendarDays, Trash2 } from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -21,6 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 
 interface FloorSession {
@@ -97,8 +99,15 @@ export default function ManagerReview() {
   const [itemDetailsOpen, setItemDetailsOpen] = useState(false);
   const [checkedEntries, setCheckedEntries] = useState<Record<string, boolean>>({});
   const [editingQuantity, setEditingQuantity] = useState<{ entryId: string; value: string } | null>(null);
-  const [editingItemName, setEditingItemName] = useState<{ itemName: string; newName: string } | null>(null);
   const [downloadingWarehouse, setDownloadingWarehouse] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  });
+  const [availableDates, setAvailableDates] = useState<Map<string, number>>(new Map());
+  const [loadingDates, setLoadingDates] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [itemSearchQuery, setItemSearchQuery] = useState("");
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const longPressDetectedRef = useRef<boolean>(false);
 
@@ -134,6 +143,12 @@ export default function ManagerReview() {
   const [addItemShowSearchResults, setAddItemShowSearchResults] = useState(false);
   const [isOtherDescription, setIsOtherDescription] = useState(false);
   const [customDescription, setCustomDescription] = useState("");
+
+  // Manager quick-add entry state (within item details drawer)
+  const [showQuickAddEntry, setShowQuickAddEntry] = useState(false);
+  const [quickAddUnits, setQuickAddUnits] = useState("");
+  const [quickAddStockType, setQuickAddStockType] = useState<"Fresh Stock" | "Off Grade/Rejection">("Fresh Stock");
+  const [submittingQuickAdd, setSubmittingQuickAdd] = useState(false);
   
   // Touch sensitivity improvement
   const isScrollingRef = useRef<boolean>(false);
@@ -148,6 +163,28 @@ export default function ManagerReview() {
     
     // Initialize with hardcoded warehouses (always show these on frontend)
     setWarehouses(WAREHOUSES.map(name => ({ id: name, name })));
+
+    // Fetch available dates for the date picker
+    const fetchAvailableDates = async () => {
+      setLoadingDates(true);
+      try {
+        const response = await stocktakeEntriesAPI.getAvailableDates();
+        console.log("Available dates response:", response);
+        if (response?.dates && response.dates.length > 0) {
+          const dateMap = new Map<string, number>();
+          response.dates.forEach((d: { date: string; count: number }) => {
+            dateMap.set(d.date, d.count);
+          });
+          console.log("Date map:", Array.from(dateMap.entries()));
+          setAvailableDates(dateMap);
+        }
+      } catch (err) {
+        console.error("Error fetching available dates:", err);
+      } finally {
+        setLoadingDates(false);
+      }
+    };
+    fetchAvailableDates();
     
     // Initialize checked items from localStorage if exists (UI state only)
     const savedChecks = localStorage.getItem("checkedItems");
@@ -230,7 +267,13 @@ export default function ManagerReview() {
     
     try {
       // Fetch entries for this warehouse to get unique floors from database
-      const entriesResponse = await stocktakeEntriesAPI.getEntries({ warehouse });
+      const fetchParams: any = { warehouse };
+      if (selectedDate) {
+        // Filter by selected date: start of day to end of day
+        fetchParams.startDate = `${selectedDate}T00:00:00.000Z`;
+        fetchParams.endDate = `${selectedDate}T23:59:59.999Z`;
+      }
+      const entriesResponse = await stocktakeEntriesAPI.getEntries(fetchParams);
       
       if (entriesResponse && entriesResponse.entries && entriesResponse.entries.length > 0) {
         // Group entries by floor name
@@ -380,254 +423,108 @@ export default function ManagerReview() {
     console.log("Timestamp:", new Date().toISOString());
     setSavingData(true);
     try {
-      // Collect all checked entries from ALL warehouses/floors
-      // Structure: Map of warehouse_floor -> Set of checked entry IDs
-      const checkedEntriesByLocation = new Map<string, Set<string>>();
-      const warehouseFloorSet = new Set<string>();
-      
-      // Iterate through ALL localStorage keys to collect checked entries
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith("checkedEntries_")) {
-          try {
-            const checkedEntriesData = JSON.parse(localStorage.getItem(key) || "{}");
-            
-            // Extract warehouse, floor, and itemName from key
-            // Format: checkedEntries_${warehouse}_${floor}_${itemName}
-            const parts = key.replace("checkedEntries_", "").split("_");
-            if (parts.length >= 2) {
-              const itemName = parts.slice(2).join("_"); // Item name might contain underscores
-              const floorName = parts[1];
-              const warehouse = parts[0];
-              const locationKey = `${warehouse}_${floorName}`;
-              
-              warehouseFloorSet.add(locationKey);
-              
-              // Initialize Set for this location if not exists
-              if (!checkedEntriesByLocation.has(locationKey)) {
-                checkedEntriesByLocation.set(locationKey, new Set<string>());
-              }
-              
-              // Add checked entry IDs for this location
-              Object.keys(checkedEntriesData).forEach((entryId) => {
-                if (checkedEntriesData[entryId] === true) {
-                  checkedEntriesByLocation.get(locationKey)!.add(entryId);
-                }
-              });
-            }
-          } catch (e) {
-            console.error("Error parsing localStorage key:", key, e);
-          }
-        }
-      }
-      
-      // If no entries are checked, show error
-      let totalCheckedCount = 0;
-      checkedEntriesByLocation.forEach((ids, location) => {
-        totalCheckedCount += ids.size;
-        console.log(`Location ${location}: ${ids.size} checked entries`, Array.from(ids));
-      });
-      
-      if (totalCheckedCount === 0) {
-        console.warn("No checked entries found in localStorage. Available keys:", 
-          Array.from({length: localStorage.length}, (_, i) => localStorage.key(i)).filter(k => k?.startsWith("checkedEntries_"))
-        );
-        toast({
-          title: "No entries selected",
-          description: "Please check at least one entry before saving. Make sure you have selected entries by clicking on the quantity boxes.",
-          variant: "destructive",
-        });
-        setSavingData(false);
-        return;
-      }
-      
-      console.log(`Found ${totalCheckedCount} checked entries across ${warehouseFloorSet.size} locations`);
-      
-      // First, add entries from current groupedItemsData if available (for current warehouse/floor)
-      const allEntriesMap = new Map<string, ItemEntry>(); // entryId -> entry
-      
-      if (selectedWarehouse && selectedFloor && groupedItemsData.length > 0) {
-        groupedItemsData.forEach((group) => {
-          group.entries.forEach((entry) => {
-            allEntriesMap.set(entry.id, entry);
-          });
-        });
-        console.log(`Added ${allEntriesMap.size} entries from current groupedItemsData`);
-      }
-      
-      // Fetch grouped entries for all warehouse/floor combinations (if not already loaded)
-      const fetchPromises = Array.from(warehouseFloorSet).map(async (locationKey) => {
-        const [warehouse, floorName] = locationKey.split('_');
-        
-        // Skip if this is the current warehouse/floor and we already have data
-        if (selectedWarehouse && selectedFloor &&
-            warehouse.toUpperCase() === selectedWarehouse.toUpperCase() &&
-            floorName.toUpperCase() === selectedFloor.toUpperCase() &&
-            allEntriesMap.size > 0) {
-          console.log(`Skipping fetch for ${warehouse}/${floorName} - already have data from groupedItemsData`);
-          return;
-        }
-        
-        try {
-          console.log(`Fetching entries for ${warehouse}/${floorName}...`);
-          const data = await stocktakeEntriesAPI.getGroupedEntries(warehouse, floorName);
-          let entryCount = 0;
-          if (data.groups) {
-            data.groups.forEach((group: any) => {
-              group.entries.forEach((entry: any) => {
-                // Store entry with its ID as key (overwrite if exists)
-                allEntriesMap.set(entry.id, entry);
-                entryCount++;
-              });
-            });
-          }
-          console.log(`Fetched ${entryCount} entries for ${warehouse}/${floorName}`);
-        } catch (err) {
-          console.error(`Error fetching entries for ${warehouse}/${floorName}:`, err);
-        }
-      });
-      
-      await Promise.all(fetchPromises);
-      
-      console.log(`Total entries available: ${allEntriesMap.size} (from UI state and database)`);
-      
-      // Now collect full entry data for all checked entries
-      const allCheckedEntries: Array<{
-        entryId?: string;
+      // Fetch ALL entries across ALL warehouses and their floors
+      const allEntries: Array<{
+        entryId: string;
         warehouse: string;
         floorName: string;
-        itemName?: string;
-        itemType?: string;
-        category?: string;
-        subcategory?: string;
-        quantity?: number;
-        weight?: number;
-        uom?: number;
-        stockType?: string;
+        itemName: string;
+        itemType: string;
+        category: string;
+        subcategory: string;
+        quantity: number;
+        weight: number;
+        uom: number;
+        stockType: string;
       }> = [];
-      
-      const notFoundIds: string[] = [];
-      
-      checkedEntriesByLocation.forEach((checkedIds, locationKey) => {
-        const [warehouse, floorName] = locationKey.split('_');
-        
-        checkedIds.forEach((entryId) => {
-          const entry = allEntriesMap.get(entryId);
-          if (entry) {
-            // Entry exists in database, use its data
-            allCheckedEntries.push({
-              entryId: entry.id, // Include DB ID for reference
-              warehouse,
-              floorName,
-              itemName: entry.description,
-              itemType: entry.itemType || "",
-              category: entry.category,
-              subcategory: entry.subcategory,
-              quantity: entry.units,
-              weight: entry.totalWeight,
-              uom: entry.packageSize,
-              stockType: entry.stockType || "Fresh Stock",
-            });
-          } else {
-            const notFoundKey = `${entryId}@${warehouse}/${floorName}`;
-            notFoundIds.push(notFoundKey);
-            console.warn(`Entry ${entryId} not found in database for ${warehouse}/${floorName}. Available entry IDs for this location:`, 
-              Array.from(allEntriesMap.keys()).filter(id => allEntriesMap.get(id)?.userName)
-            );
-          }
-        });
-      });
-      
-      if (notFoundIds.length > 0) {
-        console.warn(`${notFoundIds.length} checked entries were not found in database:`, notFoundIds);
-        console.warn(`Total entries in database: ${allEntriesMap.size}`);
-        console.warn(`Checked entry IDs that were not found:`, 
-          Array.from(checkedEntriesByLocation.values()).flatMap(ids => Array.from(ids))
-        );
+
+      // For each warehouse, fetch entries to discover floors, then fetch grouped entries per floor
+      const fetchParams: any = {};
+      if (selectedDate) {
+        fetchParams.startDate = `${selectedDate}T00:00:00.000Z`;
+        fetchParams.endDate = `${selectedDate}T23:59:59.999Z`;
       }
-      
-      if (allCheckedEntries.length === 0) {
-        const message = notFoundIds.length > 0
-          ? `None of the ${totalCheckedCount} checked entries were found in the database. The entry IDs in localStorage may be outdated. Please refresh the page (F5) and re-select the entries you want to save.`
-          : "No valid entries to save. Please check entries before saving.";
-        
+
+      for (const warehouse of WAREHOUSES) {
+        try {
+          console.log(`Fetching entries for warehouse: ${warehouse}`);
+          const entriesResponse = await stocktakeEntriesAPI.getEntries({ warehouse, ...fetchParams });
+
+          if (!entriesResponse?.entries?.length) {
+            console.log(`No entries for ${warehouse}, skipping`);
+            continue;
+          }
+
+          // Get unique floor names from entries
+          const floorNames = new Set<string>();
+          entriesResponse.entries.forEach((entry: any) => {
+            floorNames.add((entry.floorName || "Unknown").toUpperCase());
+          });
+
+          // Fetch grouped entries for each floor
+          for (const floorName of floorNames) {
+            try {
+              const groupedData = await stocktakeEntriesAPI.getGroupedEntries(warehouse, floorName, selectedDate || undefined);
+              if (groupedData?.groups) {
+                groupedData.groups.forEach((group: any) => {
+                  group.entries.forEach((entry: any) => {
+                    allEntries.push({
+                      entryId: entry.id,
+                      warehouse,
+                      floorName,
+                      itemName: entry.description,
+                      itemType: entry.itemType || "",
+                      category: entry.category,
+                      subcategory: entry.subcategory,
+                      quantity: entry.units,
+                      weight: entry.totalWeight,
+                      uom: entry.packageSize,
+                      stockType: entry.stockType || "Fresh Stock",
+                    });
+                  });
+                });
+              }
+              console.log(`  ${warehouse}/${floorName}: ${allEntries.length} entries so far`);
+            } catch (floorErr) {
+              console.error(`Error fetching grouped entries for ${warehouse}/${floorName}:`, floorErr);
+            }
+          }
+        } catch (whErr) {
+          console.error(`Error fetching entries for warehouse ${warehouse}:`, whErr);
+        }
+      }
+
+      if (allEntries.length === 0) {
         toast({
-          title: "No valid entries found",
-          description: message,
+          title: "No entries found",
+          description: "There are no entries to save across any warehouse.",
           variant: "destructive",
         });
         setSavingData(false);
         return;
       }
-      
-      // If some entries were not found, show warning but continue with valid ones
-      if (notFoundIds.length > 0 && allCheckedEntries.length > 0) {
-        toast({
-          title: "Some entries skipped",
-          description: `${notFoundIds.length} checked entries were not found and will be skipped. Saving ${allCheckedEntries.length} valid entries.`,
-          variant: "default",
-        });
-      }
-      
+
       console.log(`=== PREPARING TO SAVE ===`);
-      console.log(`Saving ${allCheckedEntries.length} entries with full entry data`);
-      console.log("Entries to save:", allCheckedEntries.map(e => ({
-        itemName: e.itemName,
-        warehouse: e.warehouse,
-        floorName: e.floorName,
-        quantity: e.quantity,
-        weight: e.weight
-      })));
-      
-      // Filter entries with valid entryId
-      const validEntries = allCheckedEntries.filter(e => e.entryId);
-      
-      // Call API to save - backend will insert new entries
-      console.log("Calling API: stocktakeEntriesAPI.saveResultsheet()...");
-      const response = await stocktakeEntriesAPI.saveResultsheet(validEntries);
+      console.log(`Saving ALL ${allEntries.length} entries across all warehouses`);
+
+      // Send full entry data to API (pass selectedDate so resultsheet uses the reviewed date, not today)
+      const response = await stocktakeEntriesAPI.saveResultsheet(allEntries, selectedDate || undefined);
       console.log("API Response received:", response);
-      
-      // After saving, refresh the grouped entries for current warehouse/floor
-      if (selectedWarehouse && selectedFloor) {
-        try {
-          const refreshedData = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor);
-          setGroupedItemsData(refreshedData.groups || []);
-        } catch (refreshError) {
-          console.error("Error refreshing entries after save:", refreshError);
-        }
-      }
-      
+
       toast({
         title: "Success",
-        description: `Stock take data saved successfully! ${response.savedCount} items saved.`,
+        description: `Stock take data saved successfully! ${response.savedCount || allEntries.length} entries saved to resultsheet.`,
       });
-      
+
       setSavingData(false);
     } catch (err: any) {
       console.error("=== SAVE ERROR ===");
       console.error("Error saving data:", err);
-      console.error("Error status:", err.status);
-      console.error("Error message:", err.message);
-      console.error("Error data:", err.data);
-      
-      // Check if it's a 404 error with ID mismatch
-      if (err.status === 404 && err.data?.existingIds) {
-        const message = err.data.existingIds.length > 0
-          ? `The selected entries no longer exist in the database. Please refresh the page and re-select the entries you want to save. (Found ${err.data.totalEntriesInTable} entries with different IDs)`
-          : `No entries found in the database. Please refresh the page and try again.`;
-        
-        toast({
-          title: "Entries Not Found",
-          description: message,
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Error",
-          description: err.message || "Failed to save stock take data",
-          variant: "destructive",
-        });
-      }
+      toast({
+        title: "Error",
+        description: err.message || "Failed to save stock take data",
+        variant: "destructive",
+      });
       setSavingData(false);
     }
   };
@@ -664,14 +561,6 @@ export default function ManagerReview() {
     }, 100);
   };
 
-  const handleItemNameLongPressStart = (itemName: string) => {
-    longPressDetectedRef.current = false;
-    const timer = setTimeout(() => {
-      longPressDetectedRef.current = true;
-      setEditingItemName({ itemName, newName: itemName });
-    }, 800);
-    longPressTimerRef.current = timer;
-  };
 
 
 
@@ -706,7 +595,7 @@ export default function ManagerReview() {
 
       // Refresh grouped items data
       if (selectedWarehouse && selectedFloor) {
-        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor);
+        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, selectedDate || undefined);
         setGroupedItemsData(data.groups || []);
       }
 
@@ -717,53 +606,37 @@ export default function ManagerReview() {
     }
   };
 
-  const handleSaveEditedItemName = async () => {
-    if (!editingItemName || !editingItemName.newName.trim()) {
-      alert("Please enter a valid item name");
-      return;
-    }
+  const handleDeleteEntry = async (entryId: string) => {
+    if (!confirm("Are you sure you want to delete this entry?")) return;
 
     try {
-      // Find all entries with this item name
-      const entriesToUpdate = groupedItemsData
-        .flatMap((g) => g.entries)
-        .filter((e) => e.description.toUpperCase() === editingItemName.itemName.toUpperCase());
-
-      if (entriesToUpdate.length === 0) {
-        alert("No entries found with this item name");
-        return;
-      }
-
-      // Update all entries in database
-      const updatePromises = entriesToUpdate.map((entry) =>
-        stocktakeEntriesAPI.updateEntry(entry.id, {
-          itemName: editingItemName.newName.trim().toUpperCase(),
-        })
-      );
-
-      await Promise.all(updatePromises);
+      await stocktakeEntriesAPI.deleteEntry(entryId);
 
       // Refresh grouped items data
       if (selectedWarehouse && selectedFloor) {
-        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor);
+        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, selectedDate || undefined);
         setGroupedItemsData(data.groups || []);
       }
 
-      setEditingItemName(null);
-      
-      // Update selectedItemName if it was being edited
-      if (selectedItemName?.toUpperCase() === editingItemName.itemName.toUpperCase()) {
-        setSelectedItemName(editingItemName.newName.trim());
+      setEditingQuantity(null);
+
+      // If the deleted entry's item group is now empty, close the details drawer
+      if (selectedItemName) {
+        const updatedEntries = getItemEntries(selectedItemName);
+        if (updatedEntries.length <= 1) {
+          setItemDetailsOpen(false);
+          setSelectedItemName(null);
+        }
       }
     } catch (err: any) {
-      console.error("Error updating item names:", err);
-      alert(err.message || "Failed to update item names");
+      console.error("Error deleting entry:", err);
+      alert(err.message || "Failed to delete entry");
     }
   };
 
+
   const handleCancelEdit = () => {
     setEditingQuantity(null);
-    setEditingItemName(null);
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
@@ -967,7 +840,7 @@ export default function ManagerReview() {
       await stocktakeEntriesAPI.submitEntries([entry]);
 
       // Refresh grouped items data
-      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor);
+      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, selectedDate || undefined);
       setGroupedItemsData(data.groups || []);
 
       // Reset form and close drawer
@@ -1002,6 +875,59 @@ export default function ManagerReview() {
       });
     } finally {
       setAddingItem(false);
+    }
+  };
+
+  const handleQuickAddEntry = async () => {
+    if (!selectedItemName || !selectedWarehouse || !selectedFloor) return;
+
+    const units = parseFloat(quickAddUnits);
+    if (isNaN(units) || units <= 0) {
+      toast({ title: "Invalid", description: "Enter a valid quantity > 0", variant: "destructive" });
+      return;
+    }
+
+    const itemEntries = getItemEntries(selectedItemName);
+    if (itemEntries.length === 0) return;
+
+    const refEntry = itemEntries[0];
+    const uom = refEntry.packageSize;
+    const totalWeight = units * uom;
+
+    setSubmittingQuickAdd(true);
+    try {
+      const userData = JSON.parse(localStorage.getItem("user") || "{}");
+      const entry = {
+        item_name: refEntry.description.trim().toUpperCase(),
+        item_type: (refEntry.itemType || "").toUpperCase(),
+        item_category: refEntry.category.trim().toUpperCase(),
+        item_subcategory: refEntry.subcategory.trim().toUpperCase(),
+        floor_name: selectedFloor,
+        warehouse: selectedWarehouse,
+        total_quantity: units,
+        unit_uom: uom,
+        total_weight: totalWeight,
+        entered_by: userData?.name || userData?.email || "MANAGER",
+        entered_by_email: userData?.email || "",
+        authority: "INVENTORY_MANAGER",
+        stock_type: quickAddStockType,
+      };
+
+      await stocktakeEntriesAPI.submitEntries([entry]);
+
+      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, selectedDate || undefined);
+      setGroupedItemsData(data.groups || []);
+
+      setQuickAddUnits("");
+      setQuickAddStockType("Fresh Stock");
+      setShowQuickAddEntry(false);
+
+      toast({ title: "Entry added", description: `${units} units added to ${selectedItemName}` });
+    } catch (err: any) {
+      console.error("Error adding quick entry:", err);
+      toast({ title: "Error", description: err.message || "Failed to add entry", variant: "destructive" });
+    } finally {
+      setSubmittingQuickAdd(false);
     }
   };
 
@@ -1047,10 +973,11 @@ export default function ManagerReview() {
         // Fetch from database only - no localStorage fallback
         const data = await stocktakeEntriesAPI.getGroupedEntries(
           selectedWarehouse!,
-          selectedFloor!
+          selectedFloor!,
+          selectedDate || undefined
         );
         setGroupedItemsData(data.groups || []);
-        
+
         // Don't reset checked entries here - they will be loaded when item is clicked
         // Reset confirmation and selected item when loading new floor data
         setConfirmed(false);
@@ -1065,7 +992,7 @@ export default function ManagerReview() {
 
     fetchGroupedItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWarehouse, selectedFloor]);
+  }, [selectedWarehouse, selectedFloor, selectedDate]);
 
   const getGroupedItems = (): GroupedItem[] => {
     return groupedItemsData;
@@ -1175,8 +1102,13 @@ export default function ManagerReview() {
     setDownloadingWarehouse(true);
     
     try {
-      // Fetch all entries for the selected warehouse
-      const response = await stocktakeEntriesAPI.getEntries({ warehouse: selectedWarehouse });
+      // Fetch all entries for the selected warehouse (with optional date filter)
+      const downloadParams: any = { warehouse: selectedWarehouse };
+      if (selectedDate) {
+        downloadParams.startDate = `${selectedDate}T00:00:00.000Z`;
+        downloadParams.endDate = `${selectedDate}T23:59:59.999Z`;
+      }
+      const response = await stocktakeEntriesAPI.getEntries(downloadParams);
       
       if (!response?.entries || response.entries.length === 0) {
         toast({
@@ -1393,16 +1325,16 @@ export default function ManagerReview() {
     >
       {/* Navigation */}
       <nav className="sticky top-0 z-50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
-        <div className="container flex h-16 items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2">
-            <Package className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
-            <span className="text-lg sm:text-xl font-bold text-foreground">StockTake</span>
+        <div className="w-full flex h-12 sm:h-14 md:h-16 items-center justify-between px-3 sm:px-4 md:px-6 lg:px-8">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <Package className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-primary" />
+            <span className="text-base sm:text-lg md:text-xl font-bold text-foreground">StockTake</span>
           </div>
-          <div className="flex items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-3 md:gap-4">
             {user && (
-              <div className="text-right">
-                <p className="font-semibold text-foreground text-sm">{user.username}</p>
-                <p className="text-xs text-muted-foreground">{user.role}</p>
+              <div className="text-right hidden sm:block">
+                <p className="font-semibold text-foreground text-xs sm:text-sm">{user.username}</p>
+                <p className="text-[10px] sm:text-xs text-muted-foreground">{user.role}</p>
               </div>
             )}
             <Button
@@ -1413,10 +1345,10 @@ export default function ManagerReview() {
                 }
               }}
               size="sm"
-              className="text-xs sm:text-sm touch-manipulation"
+              className="text-xs sm:text-sm touch-manipulation h-8 sm:h-9 px-2 sm:px-3"
               style={{ touchAction: 'manipulation' }}
             >
-              <ArrowLeft className="w-4 h-4 sm:mr-2" />
+              <ArrowLeft className="w-4 h-4 sm:mr-1.5" />
               <span className="hidden sm:inline">Back</span>
             </Button>
           </div>
@@ -1424,23 +1356,160 @@ export default function ManagerReview() {
       </nav>
 
       {/* Main Content */}
-      <div className="container py-6 sm:py-12 px-4 sm:px-6">
-        <div className="max-w-5xl mx-auto">
+      <div className="w-full py-4 sm:py-6 md:py-10 px-3 sm:px-4 md:px-6 lg:px-8">
+        <div className="max-w-6xl mx-auto">
           {/* Header */}
           <motion.div
-            className="mb-6 sm:mb-8"
+            className="mb-4 sm:mb-6 md:mb-8"
             variants={cardVariants}
           >
-            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mb-2">
+            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold text-foreground mb-1 sm:mb-2">
               Review Floor Sessions
             </h1>
-            <p className="text-base sm:text-lg text-muted-foreground">
+            <p className="text-sm sm:text-base md:text-lg text-muted-foreground">
               Select a warehouse to review floor entries
             </p>
           </motion.div>
 
+          {/* Date Filter */}
+          <motion.div
+            className="mb-4 sm:mb-6 relative z-10"
+            variants={cardVariants}
+          >
+            <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+              <PopoverTrigger asChild>
+                <Card className={`p-3 sm:p-4 border-border cursor-pointer hover:shadow-md transition-all duration-200 hover:border-primary/50 ${selectedDate ? "border-primary bg-primary/5" : ""}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                      <div className={`p-2 sm:p-2.5 rounded-lg shrink-0 ${selectedDate ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                        <CalendarDays className="w-4 h-4 sm:w-5 sm:h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs sm:text-sm font-medium text-foreground truncate">
+                          {selectedDate
+                            ? new Date(selectedDate + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
+                            : "All Dates"}
+                        </p>
+                        <p className="text-[11px] sm:text-xs text-muted-foreground">
+                          {selectedDate
+                            ? `${availableDates.get(selectedDate) || 0} entries on this day`
+                            : "Tap to filter by date"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                      {selectedDate && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedDate("");
+                            setSelectedWarehouse(null);
+                            setSelectedFloor(null);
+                            setGroupedItemsData([]);
+                            setWarehouseFloors([]);
+                          }}
+                          className="h-7 w-7 sm:h-8 sm:w-8 p-0 text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                        </Button>
+                      )}
+                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                    </div>
+                  </div>
+                </Card>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0 z-[100]" align="start" side="bottom" sideOffset={8} avoidCollisions>
+                {loadingDates ? (
+                  <div className="p-6 flex items-center justify-center">
+                    <Loader className="w-5 h-5 animate-spin text-primary" />
+                    <span className="ml-2 text-sm text-muted-foreground">Loading...</span>
+                  </div>
+                ) : (
+                  <div>
+                    <style>{`
+                      .date-filter-calendar button[disabled] {
+                        opacity: 0.15 !important;
+                        color: #9ca3af !important;
+                        cursor: not-allowed !important;
+                      }
+                      .date-filter-calendar .has-entries {
+                        background: #d1fae5 !important;
+                        color: #065f46 !important;
+                        font-weight: 700 !important;
+                        border-radius: 6px !important;
+                      }
+                      .date-filter-calendar .has-entries:hover {
+                        background: #a7f3d0 !important;
+                      }
+                      @media (prefers-color-scheme: dark) {
+                        .date-filter-calendar .has-entries {
+                          background: rgba(16, 185, 129, 0.25) !important;
+                          color: #6ee7b7 !important;
+                        }
+                        .date-filter-calendar .has-entries:hover {
+                          background: rgba(16, 185, 129, 0.4) !important;
+                        }
+                      }
+                    `}</style>
+                    <div className="date-filter-calendar">
+                      <Calendar
+                        mode="single"
+                        selected={selectedDate ? new Date(selectedDate + "T00:00:00") : undefined}
+                        onSelect={(date) => {
+                          if (date) {
+                            const yyyy = date.getFullYear();
+                            const mm = String(date.getMonth() + 1).padStart(2, "0");
+                            const dd = String(date.getDate()).padStart(2, "0");
+                            setSelectedDate(`${yyyy}-${mm}-${dd}`);
+                          } else {
+                            setSelectedDate("");
+                          }
+                          setSelectedWarehouse(null);
+                          setSelectedFloor(null);
+                          setGroupedItemsData([]);
+                          setWarehouseFloors([]);
+                          setCalendarOpen(false);
+                        }}
+                        disabled={(date) => {
+                          const yyyy = date.getFullYear();
+                          const mm = String(date.getMonth() + 1).padStart(2, "0");
+                          const dd = String(date.getDate()).padStart(2, "0");
+                          return !availableDates.has(`${yyyy}-${mm}-${dd}`);
+                        }}
+                        modifiers={{
+                          hasEntries: (date) => {
+                            const yyyy = date.getFullYear();
+                            const mm = String(date.getMonth() + 1).padStart(2, "0");
+                            const dd = String(date.getDate()).padStart(2, "0");
+                            return availableDates.has(`${yyyy}-${mm}-${dd}`);
+                          },
+                        }}
+                        modifiersClassNames={{
+                          hasEntries: "has-entries",
+                        }}
+                        initialFocus
+                      />
+                    </div>
+                    <div className="px-2 sm:px-3 pb-2 sm:pb-3 pt-1 border-t flex items-center justify-center gap-2 sm:gap-3">
+                      <div className="flex items-center gap-1">
+                        <span className="inline-block w-2.5 h-2.5 sm:w-3 sm:h-3 rounded bg-emerald-200 dark:bg-emerald-800 border border-emerald-400"></span>
+                        <span className="text-[10px] sm:text-[11px] text-muted-foreground">Has entries</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="inline-block w-2.5 h-2.5 sm:w-3 sm:h-3 rounded bg-gray-100 dark:bg-gray-800 border border-gray-300 opacity-30"></span>
+                        <span className="text-[10px] sm:text-[11px] text-muted-foreground">No entries</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
+          </motion.div>
+
           {/* Warehouses Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-3 sm:gap-4 md:gap-5">
             {WAREHOUSES.map((warehouse, index) => {
               return (
                 <motion.div
@@ -1449,12 +1518,12 @@ export default function ManagerReview() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{
                     duration: 0.4,
-                    delay: index * 0.1,
+                    delay: index * 0.08,
                     ease: [0.22, 1, 0.36, 1],
                   }}
                 >
                   <Card
-                    className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.02] hover:border-primary touch-manipulation"
+                    className="p-3 sm:p-4 md:p-5 border-border hover:shadow-lg transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.02] hover:border-primary touch-manipulation h-full flex flex-col"
                     onClick={() => {
                       if (!isScrollingRef.current) {
                         handleWarehouseClick(warehouse);
@@ -1462,18 +1531,16 @@ export default function ManagerReview() {
                     }}
                     style={{ touchAction: 'manipulation' }}
                   >
-                    <div className="flex items-center gap-3 sm:gap-4 mb-4">
-                      <div className="p-2 sm:p-3 bg-primary/10 rounded-lg">
-                        <Warehouse className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
+                    <div className="flex items-center gap-2 sm:gap-3 flex-1">
+                      <div className="p-1.5 sm:p-2 md:p-2.5 bg-primary/10 rounded-lg shrink-0">
+                        <Warehouse className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-primary" />
                       </div>
-                      <div className="flex-1">
-                        <h3 className="text-lg sm:text-xl font-bold text-foreground">
-                          {warehouse}
-                        </h3>
-                      </div>
-                      <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                      <h3 className="text-sm sm:text-base md:text-lg font-bold text-foreground flex-1 truncate">
+                        {warehouse}
+                      </h3>
+                      <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-muted-foreground shrink-0" />
                     </div>
-                    
+
                     {/* Upload Sheet Button for Savla and Rishi */}
                     {(warehouse === "Savla" || warehouse === "Rishi") && (
                       <Button
@@ -1484,15 +1551,13 @@ export default function ManagerReview() {
                             alert(`Upload sheet for ${warehouse} - Feature coming soon!`);
                           }
                         }}
-                        className="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white"
+                        className="w-full mt-2 sm:mt-3 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm"
                         size="sm"
                       >
-                        <Upload className="w-4 h-4 mr-2" />
+                        <Upload className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                         Upload Sheet
                       </Button>
                     )}
-                    
-
                   </Card>
                 </motion.div>
               );
@@ -1501,31 +1566,29 @@ export default function ManagerReview() {
 
           {/* Stock Take Complete Section */}
           <motion.div
-            className="mt-8 sm:mt-10"
+            className="mt-6 sm:mt-8 md:mt-10"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: 0.3 }}
           >
-            <Card className="p-4 sm:p-6 border-border bg-muted/30">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div className="flex-1">
-                  <p className="text-sm sm:text-base font-medium text-foreground">
-                    Stock take is complete. All items have been checked and verified.
-                  </p>
-                </div>
+            <Card className="p-3 sm:p-4 md:p-6 border-border bg-muted/30">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
+                <p className="text-xs sm:text-sm md:text-base font-medium text-foreground">
+                  Stock take is complete. All items have been checked and verified.
+                </p>
                 <Button
                   onClick={handleSaveData}
                   disabled={savingData}
-                  className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                  className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap text-xs sm:text-sm"
                 >
                   {savingData ? (
                     <>
-                      <Loader className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 sm:mr-2 animate-spin" />
                       Saving...
                     </>
                   ) : (
                     <>
-                      <Save className="w-4 h-4 mr-2" />
+                      <Save className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 sm:mr-2" />
                       Save Data
                     </>
                   )}
@@ -1679,6 +1742,7 @@ export default function ManagerReview() {
           document.body.style.overflow = '';
           setSelectedFloor(null);
           setSelectedItemName(null);
+          setItemSearchQuery("");
         }
       }}>
         <DrawerContent className="flex flex-col max-h-[85vh]">
@@ -1707,6 +1771,24 @@ export default function ManagerReview() {
             <DrawerDescription>
               Select an item to view all entries with usernames and quantities
             </DrawerDescription>
+            <div className="relative mt-2">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Search items..."
+                value={itemSearchQuery}
+                onChange={(e) => setItemSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-8 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+              {itemSearchQuery && (
+                <button
+                  onClick={() => setItemSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
           </DrawerHeader>
           <div className="flex-1 overflow-y-auto px-4 pb-4 min-h-0">
             {loadingGroupedItems ? (
@@ -1714,9 +1796,15 @@ export default function ManagerReview() {
                 <Loader className="w-8 h-8 animate-spin text-primary" />
                 <p className="text-sm text-muted-foreground">Loading items from database...</p>
               </div>
-            ) : getGroupedItems().length > 0 ? (
-              <div className="space-y-3">
+            ) : (() => {
+              const allItems = getGroupedItems();
+              const filteredItems = itemSearchQuery
+                ? allItems.filter(item => item.description.toLowerCase().includes(itemSearchQuery.toLowerCase()))
+                : allItems;
+              return allItems.length > 0 ? (
+              <div className="space-y-2">
                 {/* Add Item Card */}
+                {!itemSearchQuery && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -1735,8 +1823,14 @@ export default function ManagerReview() {
                     </div>
                   </Card>
                 </motion.div>
+                )}
 
-                {getGroupedItems().map((groupedItem, index) => (
+                {filteredItems.length === 0 ? (
+                  <div className="text-center py-6">
+                    <Search className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground">No items matching "{itemSearchQuery}"</p>
+                  </div>
+                ) : filteredItems.map((groupedItem, index) => (
                   <motion.div
                     key={groupedItem.description}
                     initial={{ opacity: 0, y: 10 }}
@@ -1747,43 +1841,15 @@ export default function ManagerReview() {
                     }}
                   >
                     <Card
-                      className={`p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation ${
+                      className={`p-3 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation ${
                         groupedItem.entries.some((e: any) => e.stockType === "Off Grade/Rejection" || e.stockType === "Rejection")
                           ? "border-l-4 border-l-red-500"
                           : "border-l-4 border-l-green-500"
                       }`}
                       style={{ touchAction: 'manipulation' }}
-                      onMouseDown={(e) => {
-                        if (e.button === 0 && !editingItemName) {
-                          handleItemNameLongPressStart(groupedItem.description);
-                        }
-                      }}
-                      onTouchStart={(e) => {
-                        if (!editingItemName) {
-                          handleItemNameLongPressStart(groupedItem.description);
-                        }
-                      }}
-                      onMouseUp={(e) => {
-                        e.preventDefault();
-                        handleLongPressEnd();
-                        if (!editingItemName && !longPressDetectedRef.current && !isScrollingRef.current) {
-                          setTimeout(() => {
-                            if (!longPressDetectedRef.current && !isScrollingRef.current) {
-                              handleItemClick(groupedItem.description);
-                            }
-                          }, 150);
-                        }
-                      }}
-                      onMouseLeave={() => handleLongPressEnd()}
-                      onTouchEnd={(e) => {
-                        e.preventDefault();
-                        handleLongPressEnd();
-                        if (!editingItemName && !longPressDetectedRef.current && !isScrollingRef.current) {
-                          setTimeout(() => {
-                            if (!longPressDetectedRef.current && !isScrollingRef.current) {
-                              handleItemClick(groupedItem.description);
-                            }
-                          }, 150);
+                      onClick={() => {
+                        if (!isScrollingRef.current) {
+                          handleItemClick(groupedItem.description);
                         }
                       }}
                     >
@@ -1792,111 +1858,19 @@ export default function ManagerReview() {
                           <div className="absolute -top-2 -right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900"></div>
                         )}
                         <div className="flex-1 min-w-0">
-                          {editingItemName && editingItemName.itemName === groupedItem.description ? (
-                            <div 
-                              className="flex items-center gap-2"
-                              onMouseDown={(e) => e.stopPropagation()}
-                              onMouseUp={(e) => e.stopPropagation()}
-                              onTouchStart={(e) => e.stopPropagation()}
-                              onTouchEnd={(e) => e.stopPropagation()}
-                            >
-                              <Input
-                                value={editingItemName.newName}
-                                onChange={(e) => setEditingItemName({ ...editingItemName, newName: e.target.value })}
-                                className="flex-1 text-sm font-semibold"
-                                autoFocus
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    handleSaveEditedItemName();
-                                  } else if (e.key === "Escape") {
-                                    handleCancelEdit();
-                                  }
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                              <Button
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  handleSaveEditedItemName();
-                                }}
-                                onTouchEnd={(e) => {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  handleSaveEditedItemName();
-                                }}
-                                className="h-8 px-2 bg-green-600 hover:bg-green-700"
-                              >
-                                <Check className="w-3 h-3" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  handleCancelEdit();
-                                }}
-                                onTouchEnd={(e) => {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  handleCancelEdit();
-                                }}
-                                className="h-8 px-2"
-                              >
-                                <X className="w-3 h-3" />
-                              </Button>
-                            </div>
-                          ) : (
-                            <>
-                              <p className="font-semibold text-foreground text-sm sm:text-base">
-                                {groupedItem.description}
-                              </p>
-                              <p className="text-xs text-muted-foreground mt-1">
-                                Long press to edit name
-                              </p>
-                            </>
-                          )}
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {groupedItem.category} - {groupedItem.subcategory}
+                          <p className="font-semibold text-foreground text-sm leading-tight">
+                            {groupedItem.description}
                           </p>
-                          <div className="flex items-center gap-4 mt-2">
-                            <span className="text-xs text-black dark:text-white font-semibold">
-                              {groupedItem.totalEntries} {groupedItem.totalEntries === 1 ? 'entry' : 'entries'}
-                            </span>
+                          <div className="flex items-center gap-3 mt-1">
                             <span className="text-xs text-muted-foreground">
-                              Total: {groupedItem.totalQuantity} units
+                              {groupedItem.totalQuantity} units
                             </span>
                             <span className="text-xs font-semibold text-primary">
                               {groupedItem.totalWeight.toFixed(2)} kg
                             </span>
                           </div>
-                          {/* Stock Type Badges */}
-                          <div className="flex items-center gap-2 mt-2">
-                            {(() => {
-                              const freshCount = groupedItem.entries.filter((e: any) => e.stockType === "Fresh Stock" || !e.stockType).length;
-                              const rejectionCount = groupedItem.entries.filter((e: any) => e.stockType === "Off Grade/Rejection" || e.stockType === "Rejection").length;
-                              return (
-                                <>
-                                  {freshCount > 0 && (
-                                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 font-medium">
-                                      Fresh: {freshCount}
-                                    </span>
-                                  )}
-                                  {rejectionCount > 0 && (
-                                    <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 font-medium">
-                                      Rejection: {rejectionCount}
-                                    </span>
-                                  )}
-                                </>
-                              );
-                            })()}
-                          </div>
                         </div>
-                        {!editingItemName && (
-                          <ChevronRight className="w-5 h-5 text-muted-foreground flex-shrink-0 ml-2" />
-                        )}
+                        <ChevronRight className="w-5 h-5 text-muted-foreground flex-shrink-0 ml-2" />
                       </div>
                     </Card>
                   </motion.div>
@@ -1914,7 +1888,8 @@ export default function ManagerReview() {
                   Add First Item
                 </Button>
               </div>
-            )}
+            );
+            })()}
           </div>
           
 
@@ -2227,6 +2202,8 @@ export default function ManagerReview() {
           // Restore body scroll
           document.body.style.overflow = '';
           setSelectedItemName(null);
+          setShowQuickAddEntry(false);
+          setQuickAddUnits("");
         }
       }}>
         <DrawerContent 
@@ -2240,6 +2217,7 @@ export default function ManagerReview() {
                 size="sm"
                 onClick={() => {
                   setItemDetailsOpen(false);
+                  setShowQuickAddEntry(false);
                   setTimeout(() => {
                     setItemsDrawerOpen(true);
                   }, 200);
@@ -2248,6 +2226,15 @@ export default function ManagerReview() {
               >
                 <ArrowLeft className="w-3 h-3 mr-1" />
                 <span className="text-xs">Back</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowQuickAddEntry(!showQuickAddEntry)}
+                className="h-8 px-2.5 border-primary/40 text-primary hover:bg-primary/10"
+              >
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                <span className="text-xs">Add Units</span>
               </Button>
             </div>
             <DrawerTitle className="text-sm font-semibold leading-tight">
@@ -2267,6 +2254,79 @@ export default function ManagerReview() {
             )}
           </DrawerHeader>
           <div className="flex-1 overflow-y-auto px-3 pb-2 min-h-0">
+            {/* Quick Add Entry Form */}
+            {showQuickAddEntry && selectedItemName && (
+              <div className="mb-3 p-3 bg-primary/5 border-2 border-primary/20 rounded-lg">
+                <p className="text-xs font-semibold text-foreground mb-2">Add new entry for this item</p>
+                <div className="flex gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setQuickAddStockType("Fresh Stock")}
+                    className={`flex-1 text-[10px] font-medium py-1.5 rounded-md border transition-colors ${
+                      quickAddStockType === "Fresh Stock"
+                        ? "bg-green-600 text-white border-green-600"
+                        : "bg-background text-muted-foreground border-border hover:bg-green-50 dark:hover:bg-green-950"
+                    }`}
+                  >
+                    Fresh
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuickAddStockType("Off Grade/Rejection")}
+                    className={`flex-1 text-[10px] font-medium py-1.5 rounded-md border transition-colors ${
+                      quickAddStockType === "Off Grade/Rejection"
+                        ? "bg-orange-600 text-white border-orange-600"
+                        : "bg-background text-muted-foreground border-border hover:bg-orange-50 dark:hover:bg-orange-950"
+                    }`}
+                  >
+                    Rejection
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    placeholder="Units / Qty"
+                    value={quickAddUnits}
+                    onChange={(e) => setQuickAddUnits(e.target.value)}
+                    className="h-9 text-sm flex-1 bg-background"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleQuickAddEntry();
+                      } else if (e.key === "Escape") {
+                        setShowQuickAddEntry(false);
+                        setQuickAddUnits("");
+                      }
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleQuickAddEntry}
+                    disabled={submittingQuickAdd || !quickAddUnits || parseFloat(quickAddUnits) <= 0}
+                    className="h-9 px-3 bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    {submittingQuickAdd ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => { setShowQuickAddEntry(false); setQuickAddUnits(""); }}
+                    className="h-9 px-3"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+                {quickAddUnits && !isNaN(parseFloat(quickAddUnits)) && parseFloat(quickAddUnits) > 0 && selectedItemName && getItemEntries(selectedItemName).length > 0 && (
+                  <p className="text-[10px] text-muted-foreground mt-1.5">
+                    Weight: {(parseFloat(quickAddUnits) * getItemEntries(selectedItemName)[0].packageSize).toFixed(2)} kg
+                    {" "}(UOM: {getItemEntries(selectedItemName)[0].packageSize.toFixed(3)}kg)
+                  </p>
+                )}
+              </div>
+            )}
             {selectedItemName && getItemEntries(selectedItemName).length > 0 ? (
               <>
                 <div className="space-y-2.5">
@@ -2307,63 +2367,71 @@ export default function ManagerReview() {
                                   className="relative group"
                                 >
                                   {isEditing ? (
-                                    <div className="relative bg-primary/10 border-2 border-primary rounded-lg p-4 min-w-[120px]">
-                                      <div className="flex flex-col gap-2">
-                                        <Input
-                                          type="number"
-                                          step="0.1"
-                                          value={editingQuantity.value}
-                                          onChange={(e) => {
-                                            // Store the raw string value to preserve decimal precision
-                                            setEditingQuantity({ entryId: entry.id, value: e.target.value });
+                                    <div className="relative bg-primary/10 border-2 border-primary rounded-lg p-2 min-w-[90px]">
+                                      <Input
+                                        type="number"
+                                        step="0.1"
+                                        value={editingQuantity.value}
+                                        onChange={(e) => {
+                                          setEditingQuantity({ entryId: entry.id, value: e.target.value });
+                                        }}
+                                        className="text-center text-sm font-bold h-8 px-1 mb-1.5"
+                                        autoFocus
+                                        min="0.1"
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            const val = parseFloat(editingQuantity.value) || 0;
+                                            handleSaveEditedQuantity(entry.id, val);
+                                          } else if (e.key === "Escape") {
+                                            handleCancelEdit();
+                                          }
+                                        }}
+                                      />
+                                      <div className="flex gap-0.5 justify-center">
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const val = parseFloat(editingQuantity.value) || 0;
+                                            handleSaveEditedQuantity(entry.id, val);
                                           }}
-                                          className="text-center text-lg font-bold"
-                                          autoFocus
-                                          min="0.1"
-                                          onKeyDown={(e) => {
-                                            if (e.key === "Enter") {
-                                              const val = parseFloat(editingQuantity.value) || 0;
-                                              handleSaveEditedQuantity(entry.id, val);
-                                            } else if (e.key === "Escape") {
-                                              handleCancelEdit();
-                                            }
+                                          onTouchEnd={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            const val = parseFloat(editingQuantity.value) || 0;
+                                            handleSaveEditedQuantity(entry.id, val);
                                           }}
-                                        />
-                                        <div className="flex gap-1 justify-center">
-                                          <Button
-                                            size="sm"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              const val = parseFloat(editingQuantity.value) || 0;
-                                              handleSaveEditedQuantity(entry.id, val);
-                                            }}
-                                            onTouchEnd={(e) => {
-                                              e.stopPropagation();
-                                              e.preventDefault();
-                                              const val = parseFloat(editingQuantity.value) || 0;
-                                              handleSaveEditedQuantity(entry.id, val);
-                                            }}
-                                            className="h-6 px-2 bg-green-600 hover:bg-green-700"
-                                          >
-                                            <Check className="w-3 h-3" />
-                                          </Button>
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              handleCancelEdit();
-                                            }}
-                                            onTouchEnd={(e) => {
-                                              e.stopPropagation();
-                                              e.preventDefault();
-                                              handleCancelEdit();
-                                            }}
-                                            className="h-6 px-2"
-                                          >
-                                            <X className="w-3 h-3" />
-                                          </Button>
-                                        </div>
+                                          className="h-6 w-6 flex items-center justify-center rounded bg-green-600 text-white"
+                                        >
+                                          <Check className="w-3 h-3" />
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleCancelEdit();
+                                          }}
+                                          onTouchEnd={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            handleCancelEdit();
+                                          }}
+                                          className="h-6 w-6 flex items-center justify-center rounded bg-muted text-muted-foreground"
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDeleteEntry(entry.id);
+                                          }}
+                                          onTouchEnd={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            handleDeleteEntry(entry.id);
+                                          }}
+                                          className="h-6 w-6 flex items-center justify-center rounded bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
                                       </div>
                                     </div>
                                   ) : (
@@ -2466,7 +2534,7 @@ export default function ManagerReview() {
                 </div>
                 
                 {/* Save Button */}
-                <div className="sticky bottom-0 bg-background pt-3 border-t border-border -mx-3 px-3 pb-3 mt-4">
+                <div className="bg-background pt-3 border-t border-border -mx-3 px-3 pb-3 mt-4">
                   {/* <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200 dark:border-blue-800">
                     <p className="text-xs text-blue-900 dark:text-blue-100 font-semibold mb-1">
                       Checked Entries: <span className="text-primary">{

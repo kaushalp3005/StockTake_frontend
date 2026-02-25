@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -103,7 +103,7 @@ export default function AddItem() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [deleteType, setDeleteType] = useState<'single' | 'allQuantities'>('single');
-  const [itemGroupToDelete, setItemGroupToDelete] = useState<{category: string, subcategory: string, description: string} | null>(null);
+  const [itemGroupToDelete, setItemGroupToDelete] = useState<{category: string, subcategory: string, description: string, stockType?: string} | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Track expanded categories
@@ -186,104 +186,102 @@ export default function AddItem() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Handle browser back button and page unload to save state
+  // ====== CONSOLIDATED AUTO-SAVE SYSTEM ======
+  // Use refs to always have the latest state values in event handlers
+  // and cleanup functions (avoids stale closure issues that caused
+  // intermittent auto-save failures on mobile back button)
+  const floorSessionRef = useRef(floorSession);
+  const addedItemsRef = useRef(addedItems);
+  const formFieldsRef = useRef({
+    stockType, itemType, category, customCategory, subcategory,
+    description, customItemName, packageSize, units, descriptionSearchQuery
+  });
+
+  // Keep refs in sync with state after every render
   useEffect(() => {
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      // Save current state before page unloads
-      if (floorSession) {
-        const currentFormState = {
-          stockType,
-          itemType,
-          category,
-          customCategory,
-          subcategory,
-          description,
-          customItemName,
-          packageSize,
-          units,
-          descriptionSearchQuery,
-          lastFormUpdate: new Date().toISOString()
-        };
-        
-        const updatedSession = {
-          ...floorSession,
-          items: addedItems,
-          currentFormState,
-          lastModified: new Date().toISOString(),
-          savedOnUnload: true
-        };
-        
-        localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
-      }
+    floorSessionRef.current = floorSession;
+    addedItemsRef.current = addedItems;
+    formFieldsRef.current = {
+      stockType, itemType, category, customCategory, subcategory,
+      description, customItemName, packageSize, units, descriptionSearchQuery
+    };
+  });
+
+  // Single consolidated save function - reads from refs so it's NEVER stale
+  const saveSessionToStorage = useCallback(() => {
+    const session = floorSessionRef.current;
+    if (!session) return;
+
+    const fields = formFieldsRef.current;
+    const currentFormState = {
+      ...fields,
+      lastFormUpdate: new Date().toISOString()
     };
 
-    const handlePopState = () => {
-      // Handle browser back button
-      handleBeforeUnload({} as BeforeUnloadEvent);
+    const updatedSession = {
+      ...session,
+      itemType: fields.itemType || session.itemType || "",
+      items: addedItemsRef.current,
+      currentFormState,
+      lastModified: new Date().toISOString()
     };
 
-    // Add event listeners
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    window.addEventListener('popstate', handlePopState);
-
-    // Cleanup event listeners
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, [floorSession, addedItems, stockType, itemType, category, customCategory, subcategory, description, customItemName, packageSize, units]);
-
-  // Auto-save items to localStorage whenever addedItems changes
-  useEffect(() => {
-    if (floorSession && addedItems.length >= 0) {
-      const updatedSession = {
-        ...floorSession,
-        itemType: itemType || floorSession.itemType || "",
-        items: addedItems,
-        lastModified: new Date().toISOString(), // Add timestamp for better tracking
-      };
+    try {
       localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
-      
-      // Also update in floorSessions array if it exists
-      const allSessions = JSON.parse(
-        localStorage.getItem("floorSessions") || "[]"
-      );
-      const sessionIndex = allSessions.findIndex(
-        (s: any) => s.id === floorSession.id
-      );
+
+      // Also update in floorSessions array
+      const allSessions = JSON.parse(localStorage.getItem("floorSessions") || "[]");
+      const sessionIndex = allSessions.findIndex((s: any) => s.id === session.id);
       if (sessionIndex !== -1) {
         allSessions[sessionIndex] = updatedSession;
         localStorage.setItem("floorSessions", JSON.stringify(allSessions));
       }
+    } catch (e) {
+      console.error("Auto-save failed:", e);
     }
-  }, [addedItems, floorSession, itemType]);
+  }, []);
 
-  // Auto-save current form state whenever form fields change
+  // Browser events + CRITICAL: save on component unmount (cleanup function)
+  // This handles: browser back button, page refresh, tab close, app switch,
+  // in-app navigation (React Router), and mobile-specific events
+  useEffect(() => {
+    const handleSave = () => saveSessionToStorage();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        saveSessionToStorage();
+      }
+    };
+
+    window.addEventListener('beforeunload', handleSave);
+    window.addEventListener('pagehide', handleSave);       // Mobile browsers (more reliable than beforeunload)
+    document.addEventListener('visibilitychange', handleVisibilityChange); // App switch / tab switch
+    window.addEventListener('popstate', handleSave);        // Browser back/forward
+
+    return () => {
+      // CRITICAL FIX: Save state when component unmounts
+      // This catches React Router navigation (in-app back button, navigate() calls)
+      // which do NOT fire beforeunload/pagehide/popstate events
+      saveSessionToStorage();
+
+      window.removeEventListener('beforeunload', handleSave);
+      window.removeEventListener('pagehide', handleSave);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('popstate', handleSave);
+    };
+  }, [saveSessionToStorage]);
+
+  // Periodic auto-save every 5 seconds as safety net
+  useEffect(() => {
+    const intervalId = setInterval(saveSessionToStorage, 5000);
+    return () => clearInterval(intervalId);
+  }, [saveSessionToStorage]);
+
+  // Auto-save on every state change (items added/removed, form field changes)
   useEffect(() => {
     if (floorSession) {
-      const currentFormState = {
-        stockType,
-        itemType,
-        category,
-        customCategory,
-        subcategory,
-        description,
-        customItemName,
-        packageSize,
-        units,
-        lastFormUpdate: new Date().toISOString()
-      };
-      
-      const updatedSession = {
-        ...floorSession,
-        items: addedItems,
-        currentFormState,
-        lastModified: new Date().toISOString()
-      };
-      
-      localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
+      saveSessionToStorage();
     }
-  }, [floorSession, addedItems, stockType, itemType, category, customCategory, subcategory, description, customItemName, packageSize, units]);
+  }, [addedItems, floorSession, itemType, stockType, category, customCategory, subcategory, description, customItemName, packageSize, units, saveSessionToStorage]);
 
   // Fetch categorial inventory data when item type is selected
   useEffect(() => {
@@ -641,8 +639,8 @@ export default function AddItem() {
     setDeleteConfirmOpen(true);
   };
 
-  const handleRemoveAllQuantities = (category: string, subcategory: string, description: string) => {
-    setItemGroupToDelete({category, subcategory, description});
+  const handleRemoveAllQuantities = (category: string, subcategory: string, description: string, stockType?: string) => {
+    setItemGroupToDelete({category, subcategory, description, stockType});
     setDeleteType('allQuantities');
     setDeleteConfirmOpen(true);
   };
@@ -696,11 +694,12 @@ export default function AddItem() {
         }
       } else if (deleteType === 'allQuantities' && itemGroupToDelete) {
         console.log("🔄 Attempting to delete all quantities for item group:", itemGroupToDelete);
-        // Get all items to delete
-        const itemsToDelete = addedItems.filter(item => 
-          item.category === itemGroupToDelete.category && 
-          item.subcategory === itemGroupToDelete.subcategory && 
-          item.description === itemGroupToDelete.description
+        // Get all items to delete (matching stockType so Fresh and Off-Grade are independent)
+        const itemsToDelete = addedItems.filter(item =>
+          item.category === itemGroupToDelete.category &&
+          item.subcategory === itemGroupToDelete.subcategory &&
+          item.description === itemGroupToDelete.description &&
+          (!itemGroupToDelete.stockType || item.stockType === itemGroupToDelete.stockType)
         );
         
         console.log(`🎯 Found ${itemsToDelete.length} items to delete:`, itemsToDelete.map(i => i.id));
@@ -735,10 +734,11 @@ export default function AddItem() {
         // Always remove from local state (even if some DB deletes failed)
         console.log("🔄 Removing items from local state");
         setAddedItems(prev => {
-          const newItems = prev.filter(item => 
-            !(item.category === itemGroupToDelete.category && 
-              item.subcategory === itemGroupToDelete.subcategory && 
-              item.description === itemGroupToDelete.description)
+          const newItems = prev.filter(item =>
+            !(item.category === itemGroupToDelete.category &&
+              item.subcategory === itemGroupToDelete.subcategory &&
+              item.description === itemGroupToDelete.description &&
+              (!itemGroupToDelete.stockType || item.stockType === itemGroupToDelete.stockType))
           );
           console.log("📊 Items before:", prev.length, "after:", newItems.length);
           return newItems;
@@ -778,10 +778,10 @@ export default function AddItem() {
     setExpandedCategories(newExpanded);
   };
 
-  // Group items by category, then by item (subcategory + description), then collect quantity entries
+  // Group items by category, then by item (subcategory + description + stockType), then collect quantity entries
   const groupedItems = addedItems.reduce((acc, item) => {
     const category = item.category;
-    const itemKey = `${item.subcategory}|${item.description}`; // Unique item identifier
+    const itemKey = `${item.subcategory}|${item.description}|${item.stockType || 'Fresh Stock'}`; // Unique item identifier including stock type
     
     if (!acc[category]) {
       acc[category] = {};
@@ -824,10 +824,9 @@ export default function AddItem() {
       return;
     }
 
-    // Find existing item from the same group using itemKey
-    const [subcategory, description] = itemKey.split('|');
-    const existingItem = addedItems.find((item) => 
-      `${item.subcategory}|${item.description}` === itemKey
+    // Find existing item from the same group using itemKey (includes stockType)
+    const existingItem = addedItems.find((item) =>
+      `${item.subcategory}|${item.description}|${item.stockType || 'Fresh Stock'}` === itemKey
     );
     
     if (!existingItem) {
@@ -1539,7 +1538,7 @@ export default function AddItem() {
                                             </button>
                                           )}
                                           <button
-                                            onClick={() => handleRemoveAllQuantities(itemInfo.category, itemInfo.subcategory, itemInfo.description)}
+                                            onClick={() => handleRemoveAllQuantities(itemInfo.category, itemInfo.subcategory, itemInfo.description, itemInfo.stockType)}
                                             className="flex items-center justify-center w-9 h-9 text-destructive hover:bg-destructive/10 rounded-md transition-colors touch-manipulation"
                                             title="Delete all quantities of this item"
                                           >
