@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/drawer";
 import { Checkbox } from "@/components/ui/checkbox";
 import { motion, AnimatePresence } from "framer-motion";
-import { stocktakeEntriesAPI, warehousesAPI, categorialInvAPI } from "@/utils/api";
+import { stocktakeEntriesAPI, warehousesAPI, categorialInvAPI, floorReviewAPI } from "@/utils/api";
 import {
   Select,
   SelectContent,
@@ -100,6 +100,7 @@ export default function ManagerReview() {
   const [checkedEntries, setCheckedEntries] = useState<Record<string, boolean>>({});
   const [editingQuantity, setEditingQuantity] = useState<{ entryId: string; value: string } | null>(null);
   const [downloadingWarehouse, setDownloadingWarehouse] = useState(false);
+  const [savingFloorReview, setSavingFloorReview] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -321,9 +322,81 @@ export default function ManagerReview() {
     setDrawerOpen(false);
     setTimeout(() => {
       setItemsDrawerOpen(true);
-      // Scroll to top to ensure drawer is visible on all devices
-      window.scrollTo({ top: 0, behavior: 'smooth' });
     }, 200);
+  };
+
+  const handleSaveFloorReview = async () => {
+    if (!selectedWarehouse || !selectedFloor || !selectedDate) {
+      toast({ title: "Missing info", description: "Warehouse, floor and date are required", variant: "destructive" });
+      return;
+    }
+
+    const allItems = getGroupedItems();
+    if (allItems.length === 0) {
+      toast({ title: "No items", description: "No items to save for this floor", variant: "destructive" });
+      return;
+    }
+
+    setSavingFloorReview(true);
+    try {
+      const entries: Array<{
+        itemName: string;
+        itemType: string;
+        category: string;
+        subcategory: string;
+        stockType: string;
+        quantity: number;
+        uom: number;
+        weight: number;
+        isChecked: boolean;
+        entryId: string;
+        enteredBy: string;
+      }> = [];
+
+      for (const item of allItems) {
+        const itemNameUpper = item.description.toUpperCase();
+        const storageKey = `checkedEntries_${selectedWarehouse}_${selectedFloor}_${itemNameUpper}`;
+        const savedChecked = localStorage.getItem(storageKey);
+        const checkedMap: Record<string, boolean> = savedChecked ? JSON.parse(savedChecked) : {};
+
+        for (const entry of item.entries) {
+          entries.push({
+            itemName: entry.description || item.description,
+            itemType: entry.itemType || (item as any).itemType || "",
+            category: item.category || entry.category || "",
+            subcategory: item.subcategory || entry.subcategory || "",
+            stockType: entry.stockType || "Fresh Stock",
+            quantity: entry.units || 0,
+            uom: entry.packageSize || 0,
+            weight: entry.totalWeight || 0,
+            isChecked: checkedMap[entry.id] === true,
+            entryId: entry.id || "",
+            enteredBy: entry.userName || "",
+          });
+        }
+      }
+
+      await floorReviewAPI.saveFloorReview({
+        warehouse: selectedWarehouse,
+        floorName: selectedFloor,
+        reviewDate: selectedDate,
+        entries,
+      });
+
+      toast({
+        title: "Floor saved",
+        description: `${entries.length} entries saved for ${selectedWarehouse} - ${selectedFloor}`,
+      });
+    } catch (err: any) {
+      console.error("Save floor review error:", err);
+      toast({
+        title: "Save failed",
+        description: err.message || "Failed to save floor review",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingFloorReview(false);
+    }
   };
 
   const handleItemClick = (itemName: string) => {
@@ -423,97 +496,14 @@ export default function ManagerReview() {
     console.log("Timestamp:", new Date().toISOString());
     setSavingData(true);
     try {
-      // Fetch ALL entries across ALL warehouses and their floors
-      const allEntries: Array<{
-        entryId: string;
-        warehouse: string;
-        floorName: string;
-        itemName: string;
-        itemType: string;
-        category: string;
-        subcategory: string;
-        quantity: number;
-        weight: number;
-        uom: number;
-        stockType: string;
-      }> = [];
-
-      // For each warehouse, fetch entries to discover floors, then fetch grouped entries per floor
-      const fetchParams: any = {};
-      if (selectedDate) {
-        fetchParams.startDate = `${selectedDate}T00:00:00.000Z`;
-        fetchParams.endDate = `${selectedDate}T23:59:59.999Z`;
-      }
-
-      for (const warehouse of WAREHOUSES) {
-        try {
-          console.log(`Fetching entries for warehouse: ${warehouse}`);
-          const entriesResponse = await stocktakeEntriesAPI.getEntries({ warehouse, ...fetchParams });
-
-          if (!entriesResponse?.entries?.length) {
-            console.log(`No entries for ${warehouse}, skipping`);
-            continue;
-          }
-
-          // Get unique floor names from entries
-          const floorNames = new Set<string>();
-          entriesResponse.entries.forEach((entry: any) => {
-            floorNames.add((entry.floorName || "Unknown").toUpperCase());
-          });
-
-          // Fetch grouped entries for each floor
-          for (const floorName of floorNames) {
-            try {
-              const groupedData = await stocktakeEntriesAPI.getGroupedEntries(warehouse, floorName, selectedDate || undefined);
-              if (groupedData?.groups) {
-                groupedData.groups.forEach((group: any) => {
-                  group.entries.forEach((entry: any) => {
-                    allEntries.push({
-                      entryId: entry.id,
-                      warehouse,
-                      floorName,
-                      itemName: entry.description,
-                      itemType: entry.itemType || "",
-                      category: entry.category,
-                      subcategory: entry.subcategory,
-                      quantity: entry.units,
-                      weight: entry.totalWeight,
-                      uom: entry.packageSize,
-                      stockType: entry.stockType || "Fresh Stock",
-                    });
-                  });
-                });
-              }
-              console.log(`  ${warehouse}/${floorName}: ${allEntries.length} entries so far`);
-            } catch (floorErr) {
-              console.error(`Error fetching grouped entries for ${warehouse}/${floorName}:`, floorErr);
-            }
-          }
-        } catch (whErr) {
-          console.error(`Error fetching entries for warehouse ${warehouse}:`, whErr);
-        }
-      }
-
-      if (allEntries.length === 0) {
-        toast({
-          title: "No entries found",
-          description: "There are no entries to save across any warehouse.",
-          variant: "destructive",
-        });
-        setSavingData(false);
-        return;
-      }
-
-      console.log(`=== PREPARING TO SAVE ===`);
-      console.log(`Saving ALL ${allEntries.length} entries across all warehouses`);
-
-      // Send full entry data to API (pass selectedDate so resultsheet uses the reviewed date, not today)
-      const response = await stocktakeEntriesAPI.saveResultsheet(allEntries, selectedDate || undefined);
+      // Send just the date - backend will fetch entries from DB directly
+      // This avoids the 413 payload-too-large error on API Gateway
+      const response = await stocktakeEntriesAPI.saveResultsheet([], selectedDate || undefined);
       console.log("API Response received:", response);
 
       toast({
         title: "Success",
-        description: `Stock take data saved successfully! ${response.savedCount || allEntries.length} entries saved to resultsheet.`,
+        description: `Stock take data saved successfully! ${response.savedCount || 0} entries saved to resultsheet.`,
       });
 
       setSavingData(false);
@@ -1153,13 +1143,77 @@ export default function ManagerReview() {
         "Date Updated"
       ];
 
+      // Check verification status: are ALL entries for this warehouse on the selected date checked?
+      let allVerified = true;
+      const floorItemMap = new Map<string, Set<string>>();
+      response.entries.forEach((entry: any) => {
+        const floor = (entry.floorName || entry.floor_name || "Unknown").toUpperCase();
+        if (!floorItemMap.has(floor)) floorItemMap.set(floor, new Set());
+        floorItemMap.get(floor)!.add((entry.itemName || entry.item_name || "").toUpperCase());
+      });
+
+      for (const [floor, itemNames] of floorItemMap) {
+        for (const itemName of itemNames) {
+          const storageKey = `checkedEntries_${selectedWarehouse}_${floor}_${itemName}`;
+          const saved = localStorage.getItem(storageKey);
+          if (!saved) {
+            allVerified = false;
+            break;
+          }
+          const checkedMap = JSON.parse(saved);
+          const floorEntries = response.entries.filter((e: any) =>
+            (e.floorName || e.floor_name || "").toUpperCase() === floor &&
+            (e.itemName || e.item_name || "").toUpperCase() === itemName
+          );
+          for (const e of floorEntries) {
+            if (!checkedMap[e.id]) {
+              allVerified = false;
+              break;
+            }
+          }
+          if (!allVerified) break;
+        }
+        if (!allVerified) break;
+      }
+
       // Helper function to create a worksheet with data
       const createWorksheet = (sheetName: string, entries: any[], headerColor: string) => {
         if (entries.length === 0) return null;
 
         const worksheet = workbook.addWorksheet(sheetName);
 
-        // Add headers to worksheet
+        // Row 1: Verification status banner
+        const statusText = allVerified ? "VERIFIED" : "NOT VERIFIED";
+        const statusRow = worksheet.addRow([statusText]);
+        worksheet.mergeCells(1, 1, 1, headers.length);
+        const statusCell = statusRow.getCell(1);
+        statusCell.font = { bold: true, size: 16, color: { argb: "FFFFFFFF" } };
+        statusCell.alignment = { horizontal: "center", vertical: "middle" };
+        statusCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: allVerified ? "FF28A745" : "FFDC3545" },
+        };
+        statusRow.height = 36;
+
+        // Row 2: Date and warehouse info
+        const infoRow = worksheet.addRow([
+          `Warehouse: ${selectedWarehouse}  |  Date: ${selectedDate ? new Date(selectedDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "All Dates"}  |  Status: ${statusText}`
+        ]);
+        worksheet.mergeCells(2, 1, 2, headers.length);
+        const infoCell = infoRow.getCell(1);
+        infoCell.font = { bold: true, size: 11 };
+        infoCell.alignment = { horizontal: "center", vertical: "middle" };
+        infoCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFF2F2F2" },
+        };
+
+        // Row 3: Empty spacer
+        worksheet.addRow([]);
+
+        // Row 4: Headers
         const headerRow = worksheet.addRow(headers);
         headerRow.font = { bold: true };
         headerRow.fill = {
@@ -1603,16 +1657,7 @@ export default function ManagerReview() {
       {/* Floors Drawer */}
       <Drawer open={drawerOpen} onOpenChange={(open) => {
         setDrawerOpen(open);
-        if (open) {
-          // Prevent body scroll and ensure proper positioning
-          document.body.style.overflow = 'hidden';
-          // Scroll to top when drawer opens to ensure visibility on all devices
-          setTimeout(() => {
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }, 100);
-        } else {
-          // Restore body scroll
-          document.body.style.overflow = '';
+        if (!open) {
           setSelectedWarehouse(null);
         }
       }}>
@@ -1680,9 +1725,6 @@ export default function ManagerReview() {
                               <h3 className="font-semibold text-foreground">
                                 {floor.floorName}
                               </h3>
-                              <p className="text-xs text-blue-600 dark:text-blue-400 opacity-70">
-                                Long press to edit name
-                              </p>
                               <p className="text-sm text-muted-foreground">
                                 {floor.itemCount} items • {floor.totalWeight.toFixed(2)} kg
                               </p>
@@ -1729,16 +1771,7 @@ export default function ManagerReview() {
       {/* Items List Drawer - Shows unique item names */}
       <Drawer open={itemsDrawerOpen} onOpenChange={(open) => {
         setItemsDrawerOpen(open);
-        if (open) {
-          // Prevent body scroll and ensure proper positioning
-          document.body.style.overflow = 'hidden';
-          // Scroll to top when drawer opens to ensure visibility on all devices
-          setTimeout(() => {
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }, 100);
-        } else {
-          // Restore body scroll
-          document.body.style.overflow = '';
+        if (!open) {
           setSelectedFloor(null);
           setSelectedItemName(null);
           setItemSearchQuery("");
@@ -1802,6 +1835,34 @@ export default function ManagerReview() {
                 : allItems;
               return allItems.length > 0 ? (
               <div className="space-y-2">
+                {/* Save Floor Entry Button */}
+                {!itemSearchQuery && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <Card
+                    className={`p-4 border-2 border-emerald-500/50 hover:border-emerald-500 hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] bg-emerald-50 dark:bg-emerald-950/30 touch-manipulation ${savingFloorReview ? "opacity-70 pointer-events-none" : ""}`}
+                    onClick={handleSaveFloorReview}
+                    style={{ touchAction: 'manipulation' }}
+                  >
+                    <div className="flex items-center justify-center gap-3">
+                      {savingFloorReview ? (
+                        <Loader className="w-5 h-5 animate-spin text-emerald-600" />
+                      ) : (
+                        <div className="p-2 bg-emerald-500/20 rounded-full">
+                          <Save className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                        </div>
+                      )}
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                        {savingFloorReview ? "Saving..." : "Save Floor Entry"}
+                      </span>
+                    </div>
+                  </Card>
+                </motion.div>
+                )}
+
                 {/* Add Item Card */}
                 {!itemSearchQuery && (
                 <motion.div
@@ -1898,10 +1959,7 @@ export default function ManagerReview() {
       {/* Add Item Drawer */}
       <Drawer open={addItemDrawerOpen} onOpenChange={(open) => {
         setAddItemDrawerOpen(open);
-        if (open) {
-          document.body.style.overflow = 'hidden';
-        } else {
-          document.body.style.overflow = '';
+        if (!open) {
           // Reset form when closing
           setNewItemForm({
             itemType: "",
@@ -2190,23 +2248,14 @@ export default function ManagerReview() {
       {/* Item Details Drawer - Shows entries grouped by username with quantity boxes */}
       <Drawer open={itemDetailsOpen} onOpenChange={(open) => {
         setItemDetailsOpen(open);
-        if (open) {
-          // Prevent body scroll and ensure proper positioning
-          document.body.style.overflow = 'hidden';
-          // Scroll to top when drawer opens to ensure visibility on all devices
-          setTimeout(() => {
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }, 100);
-        } else {
-          // Restore body scroll
-          document.body.style.overflow = '';
+        if (!open) {
           setSelectedItemName(null);
           setShowQuickAddEntry(false);
           setQuickAddUnits("");
         }
       }}>
         <DrawerContent 
-          className="flex flex-col h-90"
+          className="flex flex-col h-[90vh]"
           containerClassName="warehouse-entries-drawer"
         >
           <DrawerHeader className="pb-2 flex-shrink-0">

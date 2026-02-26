@@ -11,42 +11,40 @@
     -webkit-tap-highlight-color: transparent;
     box-sizing: border-box;
   }
-  
+
   html {
     scroll-behavior: auto;
     -webkit-text-size-adjust: 100%;
     height: 100%;
   }
-  
+
   body {
     overscroll-behavior: none;
     height: 100%;
-    /* Prevent rubber band scrolling on iOS */
     position: relative;
   }
-  
+
   /* Root app container */
   #root {
     min-height: 100vh;
     position: relative;
   }
-  
+
   /* Fix iOS font size and zoom issues */
   input,
   select,
   textarea {
     font-size: 16px !important;
     -webkit-appearance: none;
-    /* Prevent zoom on iOS when focusing inputs */
     transform: scale(1) !important;
   }
-  
+
   /* Prevent body scroll when select is open */
   body[style*="position: fixed"] {
     overflow: hidden !important;
     -webkit-overflow-scrolling: auto !important;
   }
-  
+
   /* Force prevent scroll on mobile when select dropdown is open */
   body:has([data-radix-select-trigger][data-state="open"]) {
     overflow: hidden !important;
@@ -59,6 +57,8 @@
 [data-radix-select-content] {
   z-index: 9999 !important;
   position: fixed !important;
+  max-height: 50vh !important;
+  overscroll-behavior: contain;
 }
 
 /* Additional mobile fixes */
@@ -66,90 +66,63 @@
   [data-radix-select-content] {
     max-height: 50vh !important;
   }
-  
+
   [data-radix-select-viewport] {
     max-height: 45vh !important;
   }
-  
-  /* Ensure drawers work properly on mobile */
-  [data-vaul-drawer] {
-    position: fixed !important;
-    inset: 0 !important;
-    z-index: 50 !important;
-  }
-  
-  [data-vaul-overlay] {
-    position: fixed !important;
-    inset: 0 !important;
-    z-index: 50 !important;
-    background-color: rgba(0, 0, 0, 0.8) !important;
-  }
 }
 
-/* CRITICAL: Warehouse entries section - 75% width for vaul drawer */
-/* This must be preserved in production builds */
-.warehouse-entries-drawer [data-vaul-drawer-content] {
+/* Warehouse entries drawer - side panel on desktop, bottom sheet on mobile */
+/* Uses class applied directly to DrawerContent element */
+.warehouse-entries-drawer-content {
   position: fixed !important;
-  left: 25% !important;
-  right: 0 !important;
-  width: 75% !important;
-  max-width: 75% !important;
-  top: 0 !important;
-  bottom: 0 !important;
   z-index: 50 !important;
   background-color: white !important;
-  border-radius: 0.5rem 0 0 0.5rem !important;
-  box-shadow: -10px 0 25px -5px rgba(0, 0, 0, 0.1), -10px 0 10px -5px rgba(0, 0, 0, 0.04) !important;
 }
 
-/* Mobile responsive - keep full width on mobile */
+@media (min-width: 769px) {
+  .warehouse-entries-drawer-content {
+    left: 25% !important;
+    right: 0 !important;
+    width: 75% !important;
+    max-width: 75% !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    border-radius: 0.5rem 0 0 0.5rem !important;
+    box-shadow: -10px 0 25px -5px rgba(0, 0, 0, 0.1), -10px 0 10px -5px rgba(0, 0, 0, 0.04) !important;
+  }
+}
+
 @media (max-width: 768px) {
-  .warehouse-entries-drawer [data-vaul-drawer-content] {
+  .warehouse-entries-drawer-content {
     left: 0 !important;
     right: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
-    border-radius: 0.5rem 0.5rem 0 0 !important;
-    top: auto !important;
     bottom: 0 !important;
+    top: auto !important;
     height: 90vh !important;
     max-height: 90vh !important;
-  }
-  
-  /* Fix mobile drawer positioning when expanded at top */
-  .warehouse-entries-drawer [data-vaul-drawer-content][data-vaul-snap="1"],
-  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 100%"] {
-    height: 95vh !important;
-    max-height: 95vh !important;
-    top: 5vh !important;
     border-radius: 0.5rem 0.5rem 0 0 !important;
+    box-shadow: 0 -10px 25px -5px rgba(0, 0, 0, 0.1) !important;
   }
 }
 
 /* iOS Safari viewport fix */
 @supports (-webkit-touch-callout: none) {
-  /* iOS specific styles */
   .select-dropdown-content {
     -webkit-overflow-scrolling: touch;
     touch-action: manipulation;
   }
-  
-  /* Prevent iOS viewport zoom/shift on focus */
-  input, 
-  select, 
+
+  input,
+  select,
   textarea {
     font-size: 16px !important;
     transform-origin: left top;
-    will-change: transform;
   }
-}
-
-/* Prevent select dropdown from causing scroll on mobile */
-[data-radix-select-content] {
-  position: fixed !important;
-  z-index: 9999;
-  max-height: 50vh !important;
-  overscroll-behavior: contain;
 }
 
 /* Better scroll prevention for radix-ui select */
@@ -184,35 +157,6 @@
 /* Ensure select items don't cause scroll */
 [data-radix-select-item] {
   touch-action: manipulation;
-}
-
-/* Warehouse entries section - 75% width for vaul drawer */
-.warehouse-entries-drawer [data-vaul-drawer-content] {
-  left: 25% !important;
-  right: 0 !important;
-  width: 75% !important;
-  max-width: 75% !important;
-}
-
-/* Mobile responsive - keep full width on mobile */
-@media (max-width: 768px) {
-  .warehouse-entries-drawer [data-vaul-drawer-content] {
-    left: 0 !important;
-    right: 0 !important;
-    width: 100% !important;
-    max-width: 100% !important;
-  }
-}
-
-/* Alternative approach using CSS variables */
-.warehouse-entries-drawer {
-  --drawer-width: 75%;
-}
-
-@media (max-width: 768px) {
-  .warehouse-entries-drawer {
-    --drawer-width: 100%;
-  }
 }
 
 @layer base {
@@ -315,32 +259,17 @@
 
   body {
     @apply bg-background text-foreground;
-    /* Prevent horizontal scroll on mobile */
     overflow-x: hidden;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Smooth transitions for all interactive elements */
-  * {
-    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  /* Targeted transitions on interactive elements only (not global *) */
+  button, a, input, select, textarea {
+    transition: color 200ms, background-color 200ms, border-color 200ms,
+                box-shadow 200ms, opacity 200ms, transform 200ms;
     transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-    transition-duration: 200ms;
-  }
-
-  /* Exclude select dropdown from global transform transition to allow animations */
-  /* But allow opacity and transform for dropdown animation */
-  .select-dropdown-content,
-  .select-dropdown-content *,
-  [data-radix-select-content],
-  [data-radix-select-content] * {
-    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, filter, backdrop-filter, transform !important;
-  }
-
-  /* For select content specifically, allow transform for animation */
-  .select-dropdown-content {
-    transition-property: opacity, transform !important;
   }
 
   /* Enhanced card styling */
@@ -354,18 +283,8 @@
     transform: translateY(-2px);
   }
 
-  /* Smooth button animations */
-  button {
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
   button:active {
     transform: scale(0.98);
-  }
-
-  /* Input focus animations */
-  input:focus, select:focus, textarea:focus {
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   :where(p, span, li, h1, h2, h3, h4, h5, h6, a, button, label, td, th) {
@@ -396,7 +315,6 @@
     }
   }
 
-  /* Mobile-first responsive improvements */
   /* Better table responsiveness */
   .table-responsive {
     overflow-x: auto;
@@ -434,50 +352,43 @@
     white-space: pre;
   }
 
-  /* Smooth dropdown animation - Modern and clean */
+  /* Smooth dropdown animation */
   .select-dropdown-content,
   [data-radix-select-content] {
     animation-duration: 200ms;
     animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-    will-change: transform, opacity;
   }
 
-  /* Enhanced shadow for dropdown depth - modern and subtle */
+  /* Enhanced shadow for dropdown */
   .select-dropdown-content,
   [data-radix-select-content] {
     box-shadow: 0 10px 38px -10px rgba(22, 23, 24, 0.35),
                 0 10px 20px -15px rgba(22, 23, 24, 0.2);
     border: 1px solid hsl(var(--border) / 0.5);
-    backdrop-filter: blur(8px);
   }
 
-  /* Smooth transitions for select items with hover effect */
+  /* Select item transitions */
   [data-radix-select-item] {
-    transition: background-color 150ms cubic-bezier(0.4, 0, 0.2, 1),
-                color 150ms cubic-bezier(0.4, 0, 0.2, 1),
-                transform 100ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 150ms, color 150ms;
     border-radius: 0.375rem;
   }
 
-  /* Hover effect for items */
   [data-radix-select-item]:not([data-disabled]):hover {
     background-color: hsl(var(--accent) / 0.8);
-    transform: translateX(2px);
   }
 
-  /* Focus effect for items */
   [data-radix-select-item]:not([data-disabled]):focus {
     background-color: hsl(var(--accent));
     outline: none;
   }
 
-  /* Ensure proper positioning and smooth animations */
+  /* Ensure proper positioning */
   [data-radix-select-content] {
     position: fixed !important;
     transform-origin: var(--radix-select-content-transform-origin);
   }
 
-  /* Smooth trigger icon rotation */
+  /* Trigger icon rotation */
   [data-radix-select-trigger] svg {
     transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
@@ -486,15 +397,12 @@
     transform: rotate(180deg);
   }
 
-  /* Better focus states with smooth ring */
+  /* Focus states */
   [data-radix-select-trigger]:focus {
     box-shadow: 0 0 0 2px hsl(var(--ring));
-    transition: box-shadow 150ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  /* Smooth border transition on hover for trigger */
   [data-radix-select-trigger]:hover:not([data-disabled]) {
     border-color: hsl(var(--ring) / 0.5);
-    transition: border-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 }

@@ -328,22 +328,10 @@ export const stocktakeEntriesAPI = {
   getAuditStatus: (warehouse: string) =>
     apiFetch(`/stocktake-entries/audit-status?warehouse=${encodeURIComponent(warehouse)}`),
 
-  saveResultsheet: (entries: Array<{
-    entryId: string;
-    warehouse: string;
-    floorName: string;
-    itemName: string;
-    itemType: string;
-    category: string;
-    subcategory: string;
-    quantity: number;
-    weight: number;
-    uom: number;
-    stockType: string;
-  }>, date?: string) =>
+  saveResultsheet: (entries: Array<any>, date?: string) =>
     apiFetch("/stocktake-entries/save-resultsheet", {
       method: "POST",
-      body: { entries, date },
+      body: { date, ...(entries.length > 0 ? { entries } : {}) },
     }),
 
   clearAllEntries: () =>
@@ -389,6 +377,40 @@ export const stocktakeEntriesAPI = {
     }
 
     return response; // Return the response for blob handling
+  },
+};
+
+// Floor Review (Save Floor) API
+export const floorReviewAPI = {
+  saveFloorReview: (data: {
+    warehouse: string;
+    floorName: string;
+    reviewDate: string;
+    entries: Array<{
+      itemName: string;
+      itemType: string;
+      category: string;
+      subcategory: string;
+      stockType: string;
+      quantity: number;
+      uom: number;
+      weight: number;
+      isChecked: boolean;
+      entryId: string;
+      enteredBy: string;
+    }>;
+  }) =>
+    apiFetch("/floor-review-records", {
+      method: "POST",
+      body: data,
+    }),
+
+  getFloorReview: (warehouse: string, floorName: string, date: string) => {
+    const params = new URLSearchParams();
+    params.append("warehouse", warehouse);
+    params.append("floorName", floorName);
+    params.append("date", date);
+    return apiFetch(`/floor-review-records?${params.toString()}`);
   },
 };
 
