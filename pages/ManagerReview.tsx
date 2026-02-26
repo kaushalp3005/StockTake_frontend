@@ -1376,7 +1376,7 @@ export default function ManagerReview() {
             className="mb-4 sm:mb-6 relative z-10"
             variants={cardVariants}
           >
-            <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+            <Popover open={calendarOpen} onOpenChange={setCalendarOpen} modal={false}>
               <PopoverTrigger asChild>
                 <Card className={`p-3 sm:p-4 border-border cursor-pointer hover:shadow-md transition-all duration-200 hover:border-primary/50 ${selectedDate ? "border-primary bg-primary/5" : ""}`}>
                   <div className="flex items-center justify-between">
@@ -1420,7 +1420,7 @@ export default function ManagerReview() {
                   </div>
                 </Card>
               </PopoverTrigger>
-              <PopoverContent className="w-auto p-0 z-[100]" align="start" side="bottom" sideOffset={8} avoidCollisions>
+              <PopoverContent className="w-auto p-0 z-[100] max-h-[80vh] overflow-y-auto" align="start" side="bottom" sideOffset={8} avoidCollisions onOpenAutoFocus={(e) => e.preventDefault()} onCloseAutoFocus={(e) => e.preventDefault()}>
                 {loadingDates ? (
                   <div className="p-6 flex items-center justify-center">
                     <Loader className="w-5 h-5 animate-spin text-primary" />
@@ -1489,7 +1489,6 @@ export default function ManagerReview() {
                         modifiersClassNames={{
                           hasEntries: "has-entries",
                         }}
-                        initialFocus
                       />
                     </div>
                     <div className="px-2 sm:px-3 pb-2 sm:pb-3 pt-1 border-t flex items-center justify-center gap-2 sm:gap-3">

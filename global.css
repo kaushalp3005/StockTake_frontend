@@ -47,8 +47,8 @@
     -webkit-overflow-scrolling: auto !important;
   }
   
-  /* Force prevent scroll on mobile when dropdown is open */
-  body:has([data-state="open"]) {
+  /* Force prevent scroll on mobile when select dropdown is open */
+  body:has([data-radix-select-trigger][data-state="open"]) {
     overflow: hidden !important;
     position: fixed !important;
     width: 100% !important;
