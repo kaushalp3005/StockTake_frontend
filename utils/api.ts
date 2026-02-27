@@ -382,34 +382,16 @@ export const stocktakeEntriesAPI = {
 
 // Floor Review (Save Floor) API
 export const floorReviewAPI = {
-  saveFloorReview: (data: {
-    warehouse: string;
-    floorName: string;
-    reviewDate: string;
-    entries: Array<{
-      itemName: string;
-      itemType: string;
-      category: string;
-      subcategory: string;
-      stockType: string;
-      quantity: number;
-      uom: number;
-      weight: number;
-      isChecked: boolean;
-      entryId: string;
-      enteredBy: string;
-    }>;
-  }) =>
+  saveFloorReview: (entryIds: string[]) =>
     apiFetch("/floor-review-records", {
       method: "POST",
-      body: data,
+      body: { entryIds },
     }),
 
-  getFloorReview: (warehouse: string, floorName: string, date: string) => {
+  getFloorReview: (warehouse: string, floorName: string) => {
     const params = new URLSearchParams();
     params.append("warehouse", warehouse);
     params.append("floorName", floorName);
-    params.append("date", date);
     return apiFetch(`/floor-review-records?${params.toString()}`);
   },
 };

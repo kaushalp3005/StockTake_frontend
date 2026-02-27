@@ -52,6 +52,7 @@ interface ItemEntry {
   userName: string;
   sessionId: string;
   stockType?: string;
+  isChecked?: boolean;
 }
 
 interface GroupedItem {
@@ -326,8 +327,8 @@ export default function ManagerReview() {
   };
 
   const handleSaveFloorReview = async () => {
-    if (!selectedWarehouse || !selectedFloor || !selectedDate) {
-      toast({ title: "Missing info", description: "Warehouse, floor and date are required", variant: "destructive" });
+    if (!selectedWarehouse || !selectedFloor) {
+      toast({ title: "Missing info", description: "Warehouse and floor are required", variant: "destructive" });
       return;
     }
 
@@ -337,55 +338,34 @@ export default function ManagerReview() {
       return;
     }
 
-    setSavingFloorReview(true);
-    try {
-      const entries: Array<{
-        itemName: string;
-        itemType: string;
-        category: string;
-        subcategory: string;
-        stockType: string;
-        quantity: number;
-        uom: number;
-        weight: number;
-        isChecked: boolean;
-        entryId: string;
-        enteredBy: string;
-      }> = [];
+    // Collect only the checked entry IDs
+    const checkedEntryIds: string[] = [];
 
-      for (const item of allItems) {
-        const itemNameUpper = item.description.toUpperCase();
-        const storageKey = `checkedEntries_${selectedWarehouse}_${selectedFloor}_${itemNameUpper}`;
-        const savedChecked = localStorage.getItem(storageKey);
-        const checkedMap: Record<string, boolean> = savedChecked ? JSON.parse(savedChecked) : {};
+    for (const item of allItems) {
+      const itemNameUpper = item.description.toUpperCase();
+      const storageKey = `checkedEntries_${selectedWarehouse}_${selectedFloor}_${itemNameUpper}`;
+      const savedChecked = localStorage.getItem(storageKey);
+      const checkedMap: Record<string, boolean> = savedChecked ? JSON.parse(savedChecked) : {};
 
-        for (const entry of item.entries) {
-          entries.push({
-            itemName: entry.description || item.description,
-            itemType: entry.itemType || (item as any).itemType || "",
-            category: item.category || entry.category || "",
-            subcategory: item.subcategory || entry.subcategory || "",
-            stockType: entry.stockType || "Fresh Stock",
-            quantity: entry.units || 0,
-            uom: entry.packageSize || 0,
-            weight: entry.totalWeight || 0,
-            isChecked: checkedMap[entry.id] === true,
-            entryId: entry.id || "",
-            enteredBy: entry.userName || "",
-          });
+      for (const entry of item.entries) {
+        if (checkedMap[entry.id] === true && entry.id) {
+          checkedEntryIds.push(entry.id);
         }
       }
+    }
 
-      await floorReviewAPI.saveFloorReview({
-        warehouse: selectedWarehouse,
-        floorName: selectedFloor,
-        reviewDate: selectedDate,
-        entries,
-      });
+    if (checkedEntryIds.length === 0) {
+      toast({ title: "No checked items", description: "Please check at least one entry before saving", variant: "destructive" });
+      return;
+    }
+
+    setSavingFloorReview(true);
+    try {
+      await floorReviewAPI.saveFloorReview(checkedEntryIds);
 
       toast({
         title: "Floor saved",
-        description: `${entries.length} entries saved for ${selectedWarehouse} - ${selectedFloor}`,
+        description: `${checkedEntryIds.length} entries marked as checked for ${selectedWarehouse} - ${selectedFloor}`,
       });
     } catch (err: any) {
       console.error("Save floor review error:", err);
@@ -1012,60 +992,50 @@ export default function ManagerReview() {
     return grouped;
   };
 
+  // Helper: check if an entry is checked (local tick OR saved in DB)
+  const isEntryChecked = (entryId: string, itemName: string, floorName: string, dbChecked?: boolean): boolean => {
+    // First check localStorage (local tick state)
+    if (selectedWarehouse) {
+      const storageKey = `checkedEntries_${selectedWarehouse}_${floorName}_${itemName.toUpperCase()}`;
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const checkedMap: Record<string, boolean> = JSON.parse(saved);
+        if (checkedMap[entryId] === true) return true;
+      }
+    }
+    // Fall back to DB state
+    return dbChecked === true;
+  };
+
   // Helper function to check if a floor has any unchecked entries
   const hasUncheckedEntriesInFloor = (floorName: string): boolean => {
     if (!selectedWarehouse) return false;
-    
-    // Get all items for this floor
+
     const items = getGroupedItems();
-    
-    // Check each item for unchecked entries
+
     for (const item of items) {
-      const itemName = item.description.toUpperCase();
-      const storageKey = `checkedEntries_${selectedWarehouse}_${floorName}_${itemName}`;
-      const savedCheckedEntries = localStorage.getItem(storageKey);
-      
-      if (!savedCheckedEntries) {
-        // No saved state means unchecked
-        return true;
-      }
-      
-      const checkedState = JSON.parse(savedCheckedEntries);
-      const entries = item.entries;
-      
-      // Check if all entries are checked
-      for (const entry of entries) {
-        if (!checkedState[entry.id]) {
-          return true; // Found an unchecked entry
+      for (const entry of item.entries) {
+        if (!isEntryChecked(entry.id, item.description, floorName, entry.isChecked)) {
+          return true;
         }
       }
     }
-    
+
     return false;
   };
 
   // Helper function to check if an item has any unchecked entries
   const hasUncheckedEntriesInItem = (itemName: string): boolean => {
     if (!selectedWarehouse || !selectedFloor) return false;
-    
-    const storageKey = `checkedEntries_${selectedWarehouse}_${selectedFloor}_${itemName.toUpperCase()}`;
-    const savedCheckedEntries = localStorage.getItem(storageKey);
-    
-    if (!savedCheckedEntries) {
-      // No saved state means unchecked
-      return true;
-    }
-    
-    const checkedState = JSON.parse(savedCheckedEntries);
+
     const entries = getItemEntries(itemName);
-    
-    // Check if all entries are checked
+
     for (const entry of entries) {
-      if (!checkedState[entry.id]) {
-        return true; // Found an unchecked entry
+      if (!isEntryChecked(entry.id, itemName, selectedFloor, entry.isChecked)) {
+        return true;
       }
     }
-    
+
     return false;
   };
 

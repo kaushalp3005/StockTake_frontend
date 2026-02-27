@@ -35,6 +35,7 @@ interface ResultsheetDataItem {
   group: string;
   subgroup: string;
   stock_type?: string;
+  is_verified?: boolean;
 }
 
 interface Warehouse {
@@ -106,12 +107,7 @@ export default function ResultsheetView() {
     setIsLoadingSheet(true);
 
     try {
-      // Format date with time for more specific query
-      const dateStr = entry.createdAt 
-        ? new Date(entry.createdAt).toISOString().split('T')[0]
-        : entry.date;
-      
-      const response = await resultsheetAPI.getData(dateStr);
+      const response = await resultsheetAPI.getData(entry.date);
       setSheetData(response);
     } catch (error: any) {
       console.error("Error fetching sheet data:", error);
@@ -157,12 +153,7 @@ export default function ResultsheetView() {
 
     setDeleting(entry.date);
     try {
-      // Format date for API call
-      const dateStr = entry.createdAt 
-        ? new Date(entry.createdAt).toISOString().split('T')[0]
-        : entry.date;
-
-      await resultsheetAPI.delete(dateStr);
+      await resultsheetAPI.delete(entry.date);
       
       toast({
         title: "Success",
@@ -204,7 +195,7 @@ export default function ResultsheetView() {
         const worksheet = workbook.addWorksheet(worksheetName);
 
         // Build header rows
-        const headerRow1 = ["Group", "Subgroup", "Item Name", "UOM (kg)", "Item Type"];
+        const headerRow1 = ["Group", "Subgroup", "Item Name", "UOM (kg)", "Item Type", "Status"];
         stockData.warehouses.forEach((warehouse) => {
           for (let i = 0; i < warehouse.floors.length * 2; i++) {
             if (i === 0) {
@@ -221,7 +212,7 @@ export default function ResultsheetView() {
         row1.alignment = { horizontal: "center", vertical: "middle" };
 
         // Row 2: Floor names
-        const headerRow2 = ["", "", "", "", ""];
+        const headerRow2 = ["", "", "", "", "", ""];
         stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach((floor) => {
             headerRow2.push(floor);
@@ -235,7 +226,7 @@ export default function ResultsheetView() {
         row2.alignment = { horizontal: "center", vertical: "middle" };
 
         // Row 3: Qty | Weight labels
-        const headerRow3 = ["", "", "", "", ""];
+        const headerRow3 = ["", "", "", "", "", ""];
         stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach(() => {
             headerRow3.push("Qty");
@@ -251,8 +242,9 @@ export default function ResultsheetView() {
         // Merge cells
         worksheet.mergeCells(1, 4, 3, 4);
         worksheet.mergeCells(1, 5, 3, 5);
+        worksheet.mergeCells(1, 6, 3, 6);
 
-        let colIndex = 6;
+        let colIndex = 7;
         stockData.warehouses.forEach((warehouse) => {
           const colspan = warehouse.floors.length * 2;
           if (colspan > 0) {
@@ -261,7 +253,7 @@ export default function ResultsheetView() {
           colIndex += colspan;
         });
 
-        colIndex = 6;
+        colIndex = 7;
         stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach(() => {
             worksheet.mergeCells(2, colIndex, 2, colIndex + 1);
@@ -291,7 +283,8 @@ export default function ResultsheetView() {
             if (uom > 0) break;
           }
 
-          const row = [item.group, item.subgroup, item.item_name, uom > 0 ? uom.toFixed(3) : "-", (item.item_type && item.item_type.trim()) ? item.item_type : "-"];
+          const statusText = item.is_verified ? "Verified" : "Not Verified";
+          const row = [item.group, item.subgroup, item.item_name, uom > 0 ? uom.toFixed(3) : "-", (item.item_type && item.item_type.trim()) ? item.item_type : "-", statusText];
 
           let itemTotalWeight = 0;
           stockData.warehouses.forEach((warehouse) => {
@@ -309,8 +302,11 @@ export default function ResultsheetView() {
           dataRow.alignment = { horizontal: "left", vertical: "middle" };
           dataRow.getCell(4).alignment = { horizontal: "center" };
           dataRow.getCell(5).alignment = { horizontal: "center" };
+          dataRow.getCell(6).alignment = { horizontal: "center" };
+          dataRow.getCell(6).font = { bold: true, color: { argb: item.is_verified ? "FF228B22" : "FFB22222" } };
+          dataRow.getCell(6).fill = { type: "pattern", pattern: "solid", fgColor: { argb: item.is_verified ? "FFE2EFDA" : "FFFCE4EC" } };
 
-          let dataCol = 6;
+          let dataCol = 7;
           stockData.warehouses.forEach((warehouse) => {
             warehouse.floors.forEach(() => {
               dataRow.getCell(dataCol).alignment = { horizontal: "center" };
@@ -324,7 +320,7 @@ export default function ResultsheetView() {
         });
 
         // Add total row
-        const totalRow = ["TOTAL", "", "", "", ""];
+        const totalRow = ["TOTAL", "", "", "", "", ""];
         let grandTotalWeight = 0;
         stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach((floor) => {
@@ -351,7 +347,7 @@ export default function ResultsheetView() {
         totalRowObj.getCell(4).alignment = { horizontal: "center" };
         totalRowObj.getCell(5).alignment = { horizontal: "center" };
 
-        let totalCol = 6;
+        let totalCol = 7;
         stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach(() => {
             totalRowObj.getCell(totalCol).alignment = { horizontal: "center" };
@@ -380,7 +376,8 @@ export default function ResultsheetView() {
         worksheet.getColumn(3).width = 30;
         worksheet.getColumn(4).width = 12;
         worksheet.getColumn(5).width = 12;
-        let widthCol = 6;
+        worksheet.getColumn(6).width = 14;
+        let widthCol = 7;
         stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach(() => {
             worksheet.getColumn(widthCol).width = 10;
@@ -390,7 +387,7 @@ export default function ResultsheetView() {
         });
         worksheet.getColumn(widthCol).width = 15;
 
-        worksheet.views = [{ state: "frozen", xSplit: 5, ySplit: 3 }];
+        worksheet.views = [{ state: "frozen", xSplit: 6, ySplit: 3 }];
       };
 
       // Create Fresh Stock worksheet (green header)
@@ -630,11 +627,17 @@ export default function ResultsheetView() {
                       >
                         UOM (kg)
                       </TableHead>
-                      <TableHead 
+                      <TableHead
                         rowSpan={3}
                         className="sticky left-[540px] z-10 bg-gray-100 border border-gray-400 min-w-[100px] align-middle font-bold text-center text-xs py-2"
                       >
                         Item Type
+                      </TableHead>
+                      <TableHead
+                        rowSpan={3}
+                        className="sticky left-[640px] z-10 bg-gray-100 border border-gray-400 min-w-[100px] align-middle font-bold text-center text-xs py-2"
+                      >
+                        Status
                       </TableHead>
                       {sheetData.warehouses.map((warehouse) => (
                         <TableHead
@@ -729,6 +732,13 @@ export default function ResultsheetView() {
                           <TableCell className="sticky left-[540px] z-10 bg-white border border-gray-400 text-xs py-1 px-2 text-center font-medium">
                             {item.item_type && item.item_type.trim() ? item.item_type : "-"}
                           </TableCell>
+                          <TableCell className={`sticky left-[640px] z-10 border border-gray-400 text-xs py-1 px-2 text-center font-bold ${
+                            item.is_verified
+                              ? "bg-green-50 text-green-700"
+                              : "bg-red-50 text-red-700"
+                          }`}>
+                            {item.is_verified ? "Verified" : "Not Verified"}
+                          </TableCell>
                           {sheetData.warehouses.map((warehouse) =>
                             warehouse.floors.map((floor) => {
                               const cellData = sheetData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
@@ -768,7 +778,10 @@ export default function ResultsheetView() {
                         
                       </TableCell>
                       <TableCell className="sticky left-[540px] z-10 bg-yellow-100 border border-gray-400 text-xs py-1 px-2">
-                        
+
+                      </TableCell>
+                      <TableCell className="sticky left-[640px] z-10 bg-yellow-100 border border-gray-400 text-xs py-1 px-2">
+
                       </TableCell>
                       {sheetData.warehouses.map((warehouse) =>
                         warehouse.floors.map((floor) => {
