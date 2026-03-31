@@ -258,6 +258,37 @@ export const stocktakeEntriesAPI = {
       body: { entries },
     }),
 
+  // Draft entry operations - save items to DB immediately
+  addDraftEntry: (entry: any) =>
+    apiFetch("/stocktake-entries/draft", {
+      method: "POST",
+      body: entry,
+    }),
+
+  getDraftEntries: (params?: {
+    warehouse?: string;
+    floorName?: string;
+    enteredByEmail?: string;
+  }) => {
+    const queryParams = new URLSearchParams();
+    if (params?.warehouse) queryParams.append("warehouse", params.warehouse);
+    if (params?.floorName) queryParams.append("floorName", params.floorName);
+    if (params?.enteredByEmail) queryParams.append("enteredByEmail", params.enteredByEmail);
+    const queryString = queryParams.toString();
+    return apiFetch(`/stocktake-entries/drafts${queryString ? `?${queryString}` : ""}`);
+  },
+
+  finalizeDraftEntries: (params: {
+    warehouse: string;
+    floorName: string;
+    enteredByEmail?: string;
+  }) =>
+    apiFetch("/stocktake-entries/finalize-drafts", {
+      method: "POST",
+      body: params,
+    }),
+
+
   getEntries: (params?: {
     warehouse?: string;
     floorName?: string;
@@ -287,15 +318,8 @@ export const stocktakeEntriesAPI = {
     return apiFetch(`/stocktake-entries?limit=${limit}`);
   },
 
-  getAvailableDates: () => apiFetch("/stocktake-entries/available-dates"),
-
-  getGroupedEntries: (warehouse: string, floorName: string, date?: string) => {
-    const params = new URLSearchParams();
-    params.append("warehouse", warehouse);
-    params.append("floorName", floorName);
-    if (date) params.append("date", date);
-    return apiFetch(`/stocktake-entries/grouped?${params.toString()}`);
-  },
+  getGroupedEntries: (warehouse: string, floorName: string) =>
+    apiFetch(`/stocktake-entries/grouped?warehouse=${encodeURIComponent(warehouse)}&floorName=${encodeURIComponent(floorName)}`),
 
   updateEntry: (entryId: string, data: any) =>
     apiFetch(`/stocktake-entries/${entryId}`, {
@@ -328,10 +352,10 @@ export const stocktakeEntriesAPI = {
   getAuditStatus: (warehouse: string) =>
     apiFetch(`/stocktake-entries/audit-status?warehouse=${encodeURIComponent(warehouse)}`),
 
-  saveResultsheet: (entries: Array<any>, date?: string) =>
+  saveResultsheet: (entries: Array<{ entryId: string; warehouse: string; floorName: string }>) =>
     apiFetch("/stocktake-entries/save-resultsheet", {
       method: "POST",
-      body: { date, ...(entries.length > 0 ? { entries } : {}) },
+      body: { entries },
     }),
 
   clearAllEntries: () =>
@@ -377,22 +401,6 @@ export const stocktakeEntriesAPI = {
     }
 
     return response; // Return the response for blob handling
-  },
-};
-
-// Floor Review (Save Floor) API
-export const floorReviewAPI = {
-  saveFloorReview: (entryIds: string[]) =>
-    apiFetch("/floor-review-records", {
-      method: "POST",
-      body: { entryIds },
-    }),
-
-  getFloorReview: (warehouse: string, floorName: string) => {
-    const params = new URLSearchParams();
-    params.append("warehouse", warehouse);
-    params.append("floorName", floorName);
-    return apiFetch(`/floor-review-records?${params.toString()}`);
   },
 };
 
@@ -457,4 +465,15 @@ export const skuAPI = {
   },
 
   getStatus: () => apiFetch("/sku/status"),
+};
+
+export const floorReviewAPI = {
+  saveFloorReview: (entryIds: string[]) =>
+    apiFetch("/floor-review-records", {
+      method: "POST",
+      body: { entryIds },
+    }),
+
+  getFloorReview: (warehouse: string, floorName: string) =>
+    apiFetch(`/floor-review-records?warehouse=${encodeURIComponent(warehouse)}&floorName=${encodeURIComponent(floorName)}`),
 };

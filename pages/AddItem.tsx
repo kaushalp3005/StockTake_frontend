@@ -126,8 +126,11 @@ export default function AddItem() {
   const [isGroupLocked, setIsGroupLocked] = useState(false);
   const [isSubgroupLocked, setIsSubgroupLocked] = useState(false);
 
+  // State for tracking if we're saving a draft to DB
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+
   useEffect(() => {
-    // Get floor session from localStorage
+    // Get floor session from localStorage (session metadata: warehouse, floor, authority)
     const session = localStorage.getItem("currentFloorSession");
     if (!session) {
       navigate("/dashboard");
@@ -135,42 +138,95 @@ export default function AddItem() {
     }
     const parsedSession = JSON.parse(session);
     setFloorSession(parsedSession);
-    
+
     // Restore itemType if it exists in session
     if (parsedSession.itemType) {
       setItemType(parsedSession.itemType.toLowerCase() as "pm" | "rm" | "fg" | "");
     }
-    
-    // If session has existing items, load them for editing
-    if (parsedSession.items && parsedSession.items.length > 0) {
-      // Ensure all items have valid IDs and preserve database IDs and entryIds
-      const itemsWithIds = parsedSession.items.map((item: AddedItem, index: number) => ({
-        ...item,
-        id: item.id || `item-${Date.now()}-${index}`, // Assign ID if missing
-        databaseId: item.databaseId || undefined, // Preserve database ID if it exists
-        entryId: item.entryId || parsedSession.entryId || undefined // Preserve entry ID
-      }));
-      setAddedItems(itemsWithIds);
-      console.log("Loaded items for editing:", itemsWithIds.length, "Entry ID:", parsedSession.entryId);
-    }
-    
-    // Restore current form state if it exists
-    if (parsedSession.currentFormState) {
-      const formState = parsedSession.currentFormState;
-      console.log("Restoring form state:", formState);
-      
-      // Restore all form fields
-      if (formState.stockType) setStockType(formState.stockType);
-      if (formState.itemType) setItemType(formState.itemType);
-      if (formState.category) setCategory(formState.category);
-      if (formState.customCategory) setCustomCategory(formState.customCategory);
-      if (formState.subcategory) setSubcategory(formState.subcategory);
-      if (formState.description) setDescription(formState.description);
-      if (formState.customItemName) setCustomItemName(formState.customItemName);
-      if (formState.packageSize) setPackageSize(formState.packageSize);
-      if (formState.units) setUnits(formState.units);
-      if (formState.descriptionSearchQuery) setDescriptionSearchQuery(formState.descriptionSearchQuery);
-    }
+
+    // Fetch draft entries from database (instead of loading from localStorage)
+    const loadDraftEntries = async () => {
+      try {
+        const userStr = localStorage.getItem("user");
+        const user = userStr ? JSON.parse(userStr) : null;
+        const userEmail = user?.email || parsedSession.userEmail || "";
+
+        if (!userEmail) {
+          console.warn("No user email found, cannot load drafts from DB");
+          // Fallback: load from session items if available (for edit mode)
+          if (parsedSession.items && parsedSession.items.length > 0) {
+            const itemsWithIds = parsedSession.items.map((item: AddedItem, index: number) => ({
+              ...item,
+              id: item.id || `item-${Date.now()}-${index}`,
+              databaseId: item.databaseId || undefined,
+              entryId: item.entryId || parsedSession.entryId || undefined
+            }));
+            setAddedItems(itemsWithIds);
+          }
+          return;
+        }
+
+        // If this is an edit session (editing already-submitted entries), load from session as before
+        if (parsedSession.isEditing) {
+          if (parsedSession.items && parsedSession.items.length > 0) {
+            const itemsWithIds = parsedSession.items.map((item: AddedItem, index: number) => ({
+              ...item,
+              id: item.id || `item-${Date.now()}-${index}`,
+              databaseId: item.databaseId || undefined,
+              entryId: item.entryId || parsedSession.entryId || undefined
+            }));
+            setAddedItems(itemsWithIds);
+            console.log("Loaded items for editing:", itemsWithIds.length);
+          }
+          return;
+        }
+
+        // Load draft entries from database
+        const response = await stocktakeEntriesAPI.getDraftEntries({
+          warehouse: parsedSession.warehouse,
+          floorName: parsedSession.floorName || parsedSession.floor,
+          enteredByEmail: userEmail,
+        });
+
+        if (response.entries && response.entries.length > 0) {
+          const dbItems: AddedItem[] = response.entries.map((entry: any, index: number) => ({
+            id: `item-${entry.id}-${index}`,
+            databaseId: String(entry.id),
+            entryId: entry.entryId || undefined,
+            stockType: entry.stockType || "Fresh Stock",
+            itemType: entry.itemType || "",
+            category: entry.itemCategory || "",
+            subcategory: entry.itemSubcategory || "",
+            description: entry.itemName || "",
+            packageSize: entry.unitUom || 0,
+            units: entry.totalQuantity || 0,
+            totalWeight: entry.totalWeight || 0,
+          }));
+          setAddedItems(dbItems);
+          console.log("Loaded draft entries from database:", dbItems.length);
+
+          // Restore itemType from first draft entry if not already set
+          if (!parsedSession.itemType && dbItems.length > 0 && dbItems[0].itemType) {
+            setItemType(dbItems[0].itemType.toLowerCase() as "pm" | "rm" | "fg" | "");
+          }
+        } else {
+          console.log("No draft entries found in database for this session");
+        }
+      } catch (err) {
+        console.error("Failed to load draft entries from DB:", err);
+        // Fallback: load from localStorage session items
+        if (parsedSession.items && parsedSession.items.length > 0) {
+          const itemsWithIds = parsedSession.items.map((item: AddedItem, index: number) => ({
+            ...item,
+            id: item.id || `item-${Date.now()}-${index}`,
+            databaseId: item.databaseId || undefined,
+          }));
+          setAddedItems(itemsWithIds);
+        }
+      }
+    };
+
+    loadDraftEntries();
   }, [navigate]);
 
   // Handle click outside to close description dropdown
@@ -186,102 +242,29 @@ export default function AddItem() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // ====== CONSOLIDATED AUTO-SAVE SYSTEM ======
-  // Use refs to always have the latest state values in event handlers
-  // and cleanup functions (avoids stale closure issues that caused
-  // intermittent auto-save failures on mobile back button)
-  const floorSessionRef = useRef(floorSession);
-  const addedItemsRef = useRef(addedItems);
-  const formFieldsRef = useRef({
-    stockType, itemType, category, customCategory, subcategory,
-    description, customItemName, packageSize, units, descriptionSearchQuery
-  });
-
-  // Keep refs in sync with state after every render
-  useEffect(() => {
-    floorSessionRef.current = floorSession;
-    addedItemsRef.current = addedItems;
-    formFieldsRef.current = {
-      stockType, itemType, category, customCategory, subcategory,
-      description, customItemName, packageSize, units, descriptionSearchQuery
-    };
-  });
-
-  // Single consolidated save function - reads from refs so it's NEVER stale
-  const saveSessionToStorage = useCallback(() => {
-    const session = floorSessionRef.current;
-    if (!session) return;
-
-    const fields = formFieldsRef.current;
-    const currentFormState = {
-      ...fields,
-      lastFormUpdate: new Date().toISOString()
-    };
-
-    const updatedSession = {
-      ...session,
-      itemType: fields.itemType || session.itemType || "",
-      items: addedItemsRef.current,
-      currentFormState,
-      lastModified: new Date().toISOString()
-    };
-
+  // ====== SESSION METADATA SAVE (items are now in DB, only save session info to localStorage) ======
+  const saveSessionMetadata = useCallback(() => {
+    if (!floorSession) return;
     try {
+      const updatedSession = {
+        ...floorSession,
+        itemType: itemType || floorSession.itemType || "",
+        // Keep items array in sync for backward compatibility (e.g., EntriesSummary, Dashboard)
+        items: addedItems,
+        lastModified: new Date().toISOString()
+      };
       localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
-
-      // Also update in floorSessions array
-      const allSessions = JSON.parse(localStorage.getItem("floorSessions") || "[]");
-      const sessionIndex = allSessions.findIndex((s: any) => s.id === session.id);
-      if (sessionIndex !== -1) {
-        allSessions[sessionIndex] = updatedSession;
-        localStorage.setItem("floorSessions", JSON.stringify(allSessions));
-      }
     } catch (e) {
-      console.error("Auto-save failed:", e);
+      console.error("Session metadata save failed:", e);
     }
-  }, []);
+  }, [floorSession, itemType, addedItems]);
 
-  // Browser events + CRITICAL: save on component unmount (cleanup function)
-  // This handles: browser back button, page refresh, tab close, app switch,
-  // in-app navigation (React Router), and mobile-specific events
-  useEffect(() => {
-    const handleSave = () => saveSessionToStorage();
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        saveSessionToStorage();
-      }
-    };
-
-    window.addEventListener('beforeunload', handleSave);
-    window.addEventListener('pagehide', handleSave);       // Mobile browsers (more reliable than beforeunload)
-    document.addEventListener('visibilitychange', handleVisibilityChange); // App switch / tab switch
-    window.addEventListener('popstate', handleSave);        // Browser back/forward
-
-    return () => {
-      // CRITICAL FIX: Save state when component unmounts
-      // This catches React Router navigation (in-app back button, navigate() calls)
-      // which do NOT fire beforeunload/pagehide/popstate events
-      saveSessionToStorage();
-
-      window.removeEventListener('beforeunload', handleSave);
-      window.removeEventListener('pagehide', handleSave);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('popstate', handleSave);
-    };
-  }, [saveSessionToStorage]);
-
-  // Periodic auto-save every 5 seconds as safety net
-  useEffect(() => {
-    const intervalId = setInterval(saveSessionToStorage, 5000);
-    return () => clearInterval(intervalId);
-  }, [saveSessionToStorage]);
-
-  // Auto-save on every state change (items added/removed, form field changes)
+  // Save session metadata when items or itemType changes
   useEffect(() => {
     if (floorSession) {
-      saveSessionToStorage();
+      saveSessionMetadata();
     }
-  }, [addedItems, floorSession, itemType, stockType, category, customCategory, subcategory, description, customItemName, packageSize, units, saveSessionToStorage]);
+  }, [addedItems, itemType, saveSessionMetadata]);
 
   // Fetch categorial inventory data when item type is selected
   useEffect(() => {
@@ -553,7 +536,7 @@ export default function AddItem() {
     return pkgSize * qty;
   };
 
-  const handleAddItem = (e: React.FormEvent) => {
+  const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
@@ -576,17 +559,17 @@ export default function AddItem() {
     // Check for item description/name
     const isOtherCategory = category === "OTHER";
     const isOtherItem = description === "OTHER";
-    
+
     if (isOtherCategory && !customItemName.trim()) {
       setError("Custom item name is required when using 'OTHER' category.");
       return;
     }
-    
+
     if (isOtherItem && !customItemName.trim()) {
       setError("Custom item name is required when selecting 'Other (Custom Item)'.");
       return;
     }
-    
+
     if (!isOtherCategory && !isOtherItem && !description) {
       setError("Item description is required. Please select or enter an item description.");
       return;
@@ -594,34 +577,64 @@ export default function AddItem() {
 
     const pkgSizeNum = parseFloat(packageSize) || 0;
     const unitsNum = parseFloat(units) || 0;
-
     const totalWeight = calculateTotalWeight(pkgSizeNum, unitsNum);
-    
-    const newItem: AddedItem = {
-      id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      stockType: stockType === "fresh" ? "Fresh Stock" : "Off Grade/Rejection",
-      itemType: itemType.toUpperCase(),
-      // When category is "OTHER", save as OTHER -> OTHER -> custom item name
-      category: isOtherCategory ? "OTHER" : (isOtherItem ? "" : category.toUpperCase()),
-      subcategory: isOtherCategory ? "OTHER" : (isOtherItem ? "" : subcategory.toUpperCase()),
-      description: isOtherCategory ? customItemName.toUpperCase() : (isOtherItem ? customItemName.toUpperCase() : description.toUpperCase()),
-      packageSize: pkgSizeNum,
-      units: unitsNum,
-      totalWeight,
-    };
 
-    setAddedItems([...addedItems, newItem]);
+    const itemCategoryVal = isOtherCategory ? "OTHER" : (isOtherItem ? "" : category.toUpperCase());
+    const itemSubcategoryVal = isOtherCategory ? "OTHER" : (isOtherItem ? "" : subcategory.toUpperCase());
+    const itemDescriptionVal = isOtherCategory ? customItemName.toUpperCase() : (isOtherItem ? customItemName.toUpperCase() : description.toUpperCase());
+    const stockTypeVal = stockType === "fresh" ? "Fresh Stock" : "Off Grade/Rejection";
 
-    // Reset form (keep stock type and item type for convenience)
-    setCategory("");
-    setCustomCategory("");
-    setSubcategory("");
-    setDescription("");
-    setCustomItemName("");
-    setPackageSize("");
-    setUnits("");
+    // Save draft entry to database immediately
+    setIsSavingDraft(true);
+    try {
+      const userStr = localStorage.getItem("user");
+      const user = userStr ? JSON.parse(userStr) : null;
 
-    // Reset locks (removed UOM lock as it's now permanently read-only when auto-filled)
+      const draftResponse = await stocktakeEntriesAPI.addDraftEntry({
+        item_name: itemDescriptionVal,
+        item_type: itemType.toUpperCase(),
+        item_category: itemCategoryVal,
+        item_subcategory: itemSubcategoryVal,
+        floor_name: floorSession?.floorName || floorSession?.floor || "",
+        warehouse: floorSession?.warehouse || "",
+        total_quantity: unitsNum,
+        unit_uom: pkgSizeNum,
+        total_weight: totalWeight,
+        entered_by: user?.username || user?.email || floorSession?.userName || "UNKNOWN",
+        entered_by_email: user?.email || floorSession?.userEmail || "",
+        authority: floorSession?.authority || "FLOOR_MANAGER",
+        stock_type: stockTypeVal,
+      });
+
+      const newItem: AddedItem = {
+        id: `item-${draftResponse.entry.id}-${Date.now()}`,
+        databaseId: String(draftResponse.entry.id),
+        stockType: stockTypeVal,
+        itemType: itemType.toUpperCase(),
+        category: itemCategoryVal,
+        subcategory: itemSubcategoryVal,
+        description: itemDescriptionVal,
+        packageSize: pkgSizeNum,
+        units: unitsNum,
+        totalWeight,
+      };
+
+      setAddedItems([...addedItems, newItem]);
+
+      // Reset form (keep stock type and item type for convenience)
+      setCategory("");
+      setCustomCategory("");
+      setSubcategory("");
+      setDescription("");
+      setCustomItemName("");
+      setPackageSize("");
+      setUnits("");
+    } catch (err: any) {
+      console.error("Failed to save draft entry:", err);
+      setError(err.message || "Failed to save item to database. Please try again.");
+    } finally {
+      setIsSavingDraft(false);
+    }
   };
 
   const handleRemoveItem = (id: string) => {
@@ -818,7 +831,7 @@ export default function AddItem() {
     setNewQuantity("");
   };
 
-  const handleSubmitAddQt = (itemKey: string) => {
+  const handleSubmitAddQt = async (itemKey: string) => {
     if (!newQuantity || isNaN(parseFloat(newQuantity)) || parseFloat(newQuantity) <= 0) {
       setError("Please enter a valid quantity (decimals allowed, e.g., 450.25)");
       return;
@@ -828,7 +841,7 @@ export default function AddItem() {
     const existingItem = addedItems.find((item) =>
       `${item.subcategory}|${item.description}|${item.stockType || 'Fresh Stock'}` === itemKey
     );
-    
+
     if (!existingItem) {
       setError("Item not found");
       return;
@@ -837,22 +850,51 @@ export default function AddItem() {
     const newUnits = parseFloat(newQuantity);
     const totalWeight = calculateTotalWeight(existingItem.packageSize, newUnits);
 
-    const newItem: AddedItem = {
-      id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      itemType: existingItem.itemType,
-      stockType: existingItem.stockType,
-      category: existingItem.category,
-      subcategory: existingItem.subcategory,
-      description: existingItem.description,
-      packageSize: existingItem.packageSize,
-      units: newUnits,
-      totalWeight,
-    };
+    // Save draft entry to database immediately
+    setIsSavingDraft(true);
+    try {
+      const userStr = localStorage.getItem("user");
+      const user = userStr ? JSON.parse(userStr) : null;
 
-    setAddedItems([...addedItems, newItem]);
-    setAddingQuantityTo(null);
-    setNewQuantity("");
-    setError("");
+      const draftResponse = await stocktakeEntriesAPI.addDraftEntry({
+        item_name: existingItem.description,
+        item_type: existingItem.itemType || "",
+        item_category: existingItem.category,
+        item_subcategory: existingItem.subcategory,
+        floor_name: floorSession?.floorName || floorSession?.floor || "",
+        warehouse: floorSession?.warehouse || "",
+        total_quantity: newUnits,
+        unit_uom: existingItem.packageSize,
+        total_weight: totalWeight,
+        entered_by: user?.username || user?.email || floorSession?.userName || "UNKNOWN",
+        entered_by_email: user?.email || floorSession?.userEmail || "",
+        authority: floorSession?.authority || "FLOOR_MANAGER",
+        stock_type: existingItem.stockType || "Fresh Stock",
+      });
+
+      const newItem: AddedItem = {
+        id: `item-${draftResponse.entry.id}-${Date.now()}`,
+        databaseId: String(draftResponse.entry.id),
+        itemType: existingItem.itemType,
+        stockType: existingItem.stockType,
+        category: existingItem.category,
+        subcategory: existingItem.subcategory,
+        description: existingItem.description,
+        packageSize: existingItem.packageSize,
+        units: newUnits,
+        totalWeight,
+      };
+
+      setAddedItems([...addedItems, newItem]);
+      setAddingQuantityTo(null);
+      setNewQuantity("");
+      setError("");
+    } catch (err: any) {
+      console.error("Failed to save draft entry:", err);
+      setError(err.message || "Failed to save item to database. Please try again.");
+    } finally {
+      setIsSavingDraft(false);
+    }
   };
 
   const handleSaveAndContinue = async () => {
@@ -864,27 +906,14 @@ export default function AddItem() {
     setIsLoading(true);
 
     try {
-      // Save items to floor session
+      // Items are already saved in database as drafts.
+      // Update session metadata in localStorage for EntriesSummary page
       const updatedSession = {
         ...floorSession,
         itemType: itemType || floorSession.itemType || "",
         items: addedItems,
       };
       localStorage.setItem("currentFloorSession", JSON.stringify(updatedSession));
-
-      // If this is an existing session (has an id and was in floorSessions), update it
-      const allSessions = JSON.parse(
-        localStorage.getItem("floorSessions") || "[]"
-      );
-      const sessionIndex = allSessions.findIndex(
-        (s: any) => s.id === floorSession.id
-      );
-      
-      if (sessionIndex !== -1) {
-        // Update existing session
-        allSessions[sessionIndex] = updatedSession;
-        localStorage.setItem("floorSessions", JSON.stringify(allSessions));
-      }
 
       // Redirect to review/entries page
       navigate("/audit/entries");
@@ -1438,9 +1467,14 @@ export default function AddItem() {
                 <Button
                   type="submit"
                   className="w-full bg-primary hover:bg-primary/90 text-white"
+                  disabled={isSavingDraft}
                 >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Article
+                  {isSavingDraft ? (
+                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Plus className="w-4 h-4 mr-2" />
+                  )}
+                  {isSavingDraft ? "Saving..." : "Add Article"}
                 </Button>
               </form>
             </Card>

@@ -166,21 +166,90 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Check for draft entries in DB and show as pending session
+  const checkDraftEntries = async (userEmail: string) => {
+    try {
+      const response = await stocktakeEntriesAPI.getDraftEntries({
+        enteredByEmail: userEmail,
+      });
+      if (response.entries && response.entries.length > 0) {
+        // Group drafts by warehouse+floor to form a pending session
+        const firstEntry = response.entries[0];
+        const draftSession = {
+          id: `draft-session-${firstEntry.warehouse}-${firstEntry.floorName}`,
+          warehouse: firstEntry.warehouse,
+          floorName: firstEntry.floorName,
+          authority: firstEntry.authority || "FLOOR_MANAGER",
+          userEmail: firstEntry.enteredByEmail || userEmail,
+          userName: firstEntry.enteredBy || "",
+          items: response.entries.map((entry: any, index: number) => ({
+            id: `item-${entry.id}-${index}`,
+            databaseId: String(entry.id),
+            category: entry.itemCategory,
+            subcategory: entry.itemSubcategory,
+            description: entry.itemName,
+            packageSize: entry.unitUom,
+            units: entry.totalQuantity,
+            totalWeight: entry.totalWeight,
+            stockType: entry.stockType,
+            itemType: entry.itemType,
+          })),
+          createdAt: firstEntry.createdAt,
+          isDraft: true, // Flag to identify this is from DB drafts
+        };
+
+        // Also ensure localStorage has the session metadata so AddItem can load it
+        const currentSession = localStorage.getItem("currentFloorSession");
+        if (!currentSession) {
+          localStorage.setItem("currentFloorSession", JSON.stringify({
+            id: draftSession.id,
+            warehouse: draftSession.warehouse,
+            floorName: draftSession.floorName,
+            authority: draftSession.authority,
+            userEmail: draftSession.userEmail,
+            userName: draftSession.userName,
+            items: draftSession.items,
+            createdAt: draftSession.createdAt,
+          }));
+        }
+
+        setPendingSession(draftSession);
+        console.log("Found draft entries in DB, showing as pending session:", response.entries.length);
+      } else {
+        // No drafts in DB - also check localStorage for backward compatibility
+        const currentSession = localStorage.getItem("currentFloorSession");
+        if (currentSession) {
+          const sessionData = JSON.parse(currentSession);
+          if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
+            setPendingSession(sessionData);
+          } else {
+            setPendingSession(null);
+          }
+        } else {
+          setPendingSession(null);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to check draft entries:", err);
+      // Fallback to localStorage check
+      const currentSession = localStorage.getItem("currentFloorSession");
+      if (currentSession) {
+        const sessionData = JSON.parse(currentSession);
+        if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
+          setPendingSession(sessionData);
+        }
+      }
+    }
+  };
+
   const loadUserSessions = async () => {
     const userStr = localStorage.getItem("user");
     if (userStr) {
       try {
         const parsedUser = JSON.parse(userStr);
 
-        // Also check for pending session when loading sessions
-        const currentSession = localStorage.getItem("currentFloorSession");
-        if (currentSession) {
-          const sessionData = JSON.parse(currentSession);
-          if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
-            console.log("Loading sessions - found pending session:", sessionData);
-            setPendingSession(sessionData);
-          }
-        }
+        // Check for draft entries in DB
+        await checkDraftEntries(parsedUser.email);
 
         // Fetch entries from database API instead of localStorage cache
         const userIdentifier = parsedUser.username || parsedUser.email;
@@ -291,17 +360,7 @@ export default function Dashboard() {
         const parsedUser = JSON.parse(userStr);
         setUser(parsedUser);
 
-        // Check for pending session with unsaved items
-        const currentSession = localStorage.getItem("currentFloorSession");
-        if (currentSession) {
-          const sessionData = JSON.parse(currentSession);
-          // Check if session has unsaved items (items exist but session is not submitted)
-          if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
-            console.log("Found pending session:", sessionData);
-            setPendingSession(sessionData);
-          }
-        }
-
+        // Load sessions (this also checks for draft entries in DB)
         loadUserSessions();
 
         // Load recent entries for INVENTORY_MANAGER and SUPERUSER
@@ -319,30 +378,10 @@ export default function Dashboard() {
   // Refresh sessions when component comes into focus (e.g., returning from edit page)
   useEffect(() => {
     const handleFocus = () => {
-      // Check for pending session when returning to dashboard
-      const currentSession = localStorage.getItem("currentFloorSession");
-      if (currentSession) {
-        try {
-          const sessionData = JSON.parse(currentSession);
-          // Check if session has unsaved items (items exist but session is not submitted)
-          if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
-            console.log("Updated pending session on focus:", sessionData);
-            setPendingSession(sessionData);
-          } else {
-            // Clear pending session if it's been submitted
-            setPendingSession(null);
-          }
-        } catch (err) {
-          console.error("Error parsing session on focus:", err);
-        }
-      } else {
-        // No current session exists, clear pending
-        setPendingSession(null);
-      }
-      
+      // Reload sessions - this also checks for draft entries in DB
       loadUserSessions();
     };
-    
+
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
   }, []);
@@ -351,20 +390,12 @@ export default function Dashboard() {
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === "currentFloorSession") {
-        if (e.newValue) {
-          try {
-            const sessionData = JSON.parse(e.newValue);
-            if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
-              console.log("Storage change detected - pending session:", sessionData);
-              setPendingSession(sessionData);
-            }
-          } catch (err) {
-            console.error("Error parsing storage change:", err);
-          }
-        } else {
-          // Session was removed
+        if (!e.newValue) {
+          // Session was removed (submitted or discarded)
           setPendingSession(null);
         }
+        // Reload sessions to pick up any changes
+        loadUserSessions();
       }
     };
 
@@ -402,8 +433,27 @@ export default function Dashboard() {
     navigate("/audit/add-item");
   };
 
-  const handleDiscardSession = () => {
-    // Remove the pending session
+  const handleDiscardSession = async () => {
+    // If this is a DB-backed draft session, delete draft entries from database
+    if (pendingSession?.isDraft && pendingSession?.items?.length > 0) {
+      try {
+        for (const item of pendingSession.items) {
+          if (item.databaseId) {
+            try {
+              await stocktakeEntriesAPI.deleteEntry(item.databaseId);
+            } catch (err: any) {
+              if (err?.status !== 404) {
+                console.error(`Failed to delete draft entry ${item.databaseId}:`, err);
+              }
+            }
+          }
+        }
+        console.log("Deleted draft entries from database");
+      } catch (err) {
+        console.error("Failed to delete draft entries:", err);
+      }
+    }
+    // Remove the pending session from localStorage
     localStorage.removeItem("currentFloorSession");
     setPendingSession(null);
   };
