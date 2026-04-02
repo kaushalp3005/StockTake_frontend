@@ -173,8 +173,20 @@ export default function Dashboard() {
         enteredByEmail: userEmail,
       });
       if (response.entries && response.entries.length > 0) {
-        // Group drafts by warehouse+floor to form a pending session
         const firstEntry = response.entries[0];
+        const draftItems = response.entries.map((entry: any, index: number) => ({
+          id: `item-${entry.id}-${index}`,
+          databaseId: String(entry.id),
+          category: entry.itemCategory,
+          subcategory: entry.itemSubcategory,
+          description: entry.itemName,
+          packageSize: entry.unitUom,
+          units: entry.totalQuantity,
+          totalWeight: entry.totalWeight,
+          stockType: entry.stockType,
+          itemType: entry.itemType,
+        }));
+
         const draftSession = {
           id: `draft-session-${firstEntry.warehouse}-${firstEntry.floorName}`,
           warehouse: firstEntry.warehouse,
@@ -182,63 +194,33 @@ export default function Dashboard() {
           authority: firstEntry.authority || "FLOOR_MANAGER",
           userEmail: firstEntry.enteredByEmail || userEmail,
           userName: firstEntry.enteredBy || "",
-          items: response.entries.map((entry: any, index: number) => ({
-            id: `item-${entry.id}-${index}`,
-            databaseId: String(entry.id),
-            category: entry.itemCategory,
-            subcategory: entry.itemSubcategory,
-            description: entry.itemName,
-            packageSize: entry.unitUom,
-            units: entry.totalQuantity,
-            totalWeight: entry.totalWeight,
-            stockType: entry.stockType,
-            itemType: entry.itemType,
-          })),
+          items: draftItems,
           createdAt: firstEntry.createdAt,
-          isDraft: true, // Flag to identify this is from DB drafts
+          isDraft: true,
         };
 
-        // Also ensure localStorage has the session metadata so AddItem can load it
-        const currentSession = localStorage.getItem("currentFloorSession");
-        if (!currentSession) {
-          localStorage.setItem("currentFloorSession", JSON.stringify({
-            id: draftSession.id,
-            warehouse: draftSession.warehouse,
-            floorName: draftSession.floorName,
-            authority: draftSession.authority,
-            userEmail: draftSession.userEmail,
-            userName: draftSession.userName,
-            items: draftSession.items,
-            createdAt: draftSession.createdAt,
-          }));
-        }
+        // Always update localStorage with fresh draft data so Resume always has correct info
+        localStorage.setItem("currentFloorSession", JSON.stringify({
+          id: draftSession.id,
+          warehouse: draftSession.warehouse,
+          floorName: draftSession.floorName,
+          authority: draftSession.authority,
+          userEmail: draftSession.userEmail,
+          userName: draftSession.userName,
+          items: draftItems,
+          createdAt: draftSession.createdAt,
+        }));
 
         setPendingSession(draftSession);
-        console.log("Found draft entries in DB, showing as pending session:", response.entries.length);
+        console.log("Found draft entries in DB:", response.entries.length, "items");
       } else {
-        // No drafts in DB - also check localStorage for backward compatibility
-        const currentSession = localStorage.getItem("currentFloorSession");
-        if (currentSession) {
-          const sessionData = JSON.parse(currentSession);
-          if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
-            setPendingSession(sessionData);
-          } else {
-            setPendingSession(null);
-          }
-        } else {
-          setPendingSession(null);
-        }
+        // No drafts in DB — clear any stale pending session from localStorage
+        localStorage.removeItem("currentFloorSession");
+        setPendingSession(null);
       }
     } catch (err) {
       console.error("Failed to check draft entries:", err);
-      // Fallback to localStorage check
-      const currentSession = localStorage.getItem("currentFloorSession");
-      if (currentSession) {
-        const sessionData = JSON.parse(currentSession);
-        if (sessionData.items && sessionData.items.length > 0 && !sessionData.submittedAt) {
-          setPendingSession(sessionData);
-        }
-      }
+      setPendingSession(null);
     }
   };
 
@@ -251,37 +233,35 @@ export default function Dashboard() {
         // Check for draft entries in DB
         await checkDraftEntries(parsedUser.email);
 
-        // Fetch entries from database API instead of localStorage cache
-        const userIdentifier = parsedUser.username || parsedUser.email;
-        console.log("Fetching entries from database for user:", userIdentifier);
-        
+        // Fetch submitted entries by email (most reliable identifier)
+        const userEmail = parsedUser.email;
+        console.log("Fetching submitted entries for user email:", userEmail);
+
         const response = await stocktakeEntriesAPI.getEntries({
-          enteredBy: userIdentifier
+          enteredBy: userEmail,
         });
-        
-        console.log("Fetched entries from database:", response);
-        
-        // API returns { success: true, entries: [...], count: number }
+
         const entries = response?.entries || [];
-        
+        console.log(`✅ Found ${entries.length} submitted entries for user`);
+
         if (entries.length === 0) {
-          console.log("No entries found for user");
           setUserSessions([]);
           return;
         }
-        
-        console.log(`✅ Found ${entries.length} entries for user`);
-        
-        // Group entries by session (warehouse + floor + date)
+
+        // Group entries by entry_id (batch submission) — each entry_id = one submission
+        // Entries without entry_id (edge case) fall back to warehouse+floor+date grouping
         const sessionsMap = new Map<string, FloorSession>();
-        
+
         entries.forEach((entry: any) => {
-          const sessionDate = entry.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0];
-          const sessionKey = `${entry.warehouse}-${entry.floorName}-${entry.enteredBy}-${sessionDate}`;
-          
+          // Use entry_id as the primary session key (most accurate grouping)
+          const sessionKey = entry.entryId
+            ? `entryid-${entry.entryId}`
+            : `${entry.warehouse}-${entry.floorName}-${entry.createdAt?.split('T')[0]}`;
+
           if (!sessionsMap.has(sessionKey)) {
             sessionsMap.set(sessionKey, {
-              id: `session-${Date.parse(entry.createdAt || new Date().toISOString())}`,
+              id: entry.entryId ? `session-${entry.entryId}` : `session-${Date.parse(entry.createdAt || new Date().toISOString())}`,
               warehouse: entry.warehouse,
               floorName: entry.floorName,
               floor: entry.floorName,
@@ -292,35 +272,31 @@ export default function Dashboard() {
               items: [],
               status: "SUBMITTED",
               createdAt: entry.createdAt,
-              submittedAt: entry.updatedAt || entry.createdAt
+              submittedAt: entry.updatedAt || entry.createdAt,
             });
           }
-          
+
           const session = sessionsMap.get(sessionKey)!;
           session.items.push({
-            id: `item-${entry.id}-${Date.now()}`, // Local ID for UI
-            databaseId: entry.id.toString(), // Store database ID for updates
-            entryId: entry.entryId || null, // Batch entry ID (YYMM0001 format)
+            id: `item-${entry.id}`,
+            databaseId: entry.id.toString(),
+            entryId: entry.entryId || null,
             category: entry.itemCategory,
             subcategory: entry.itemSubcategory,
             description: entry.itemName,
             packageSize: entry.unitUom,
             units: entry.totalQuantity,
             totalWeight: entry.totalWeight,
-            stockType: entry.stockType || entry.stock_type, // Fallback for safety
-            itemType: entry.itemType
+            stockType: entry.stockType,
+            itemType: entry.itemType,
           });
         });
-        
-        const sessions = Array.from(sessionsMap.values());
-        
-        // Sort by creation date (newest first)
-        sessions.sort(
-          (a, b) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+
+        const sessions = Array.from(sessionsMap.values()).sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
-        
-        console.log("Grouped sessions from database:", sessions);
+
+        console.log("Grouped submitted sessions:", sessions.length);
         setUserSessions(sessions);
         
       } catch (err) {
@@ -428,8 +404,12 @@ export default function Dashboard() {
     navigate("/audit/add-item");
   };
 
-  const handleResumeSession = () => {
-    // Session is already in localStorage, just navigate
+  const handleResumeSession = async () => {
+    // Re-fetch draft entries and refresh localStorage before navigating
+    // This ensures AddItem always sees the latest items from DB
+    if (user?.email) {
+      await checkDraftEntries(user.email);
+    }
     navigate("/audit/add-item");
   };
 
