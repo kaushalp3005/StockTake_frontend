@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CheckCircle, Package, ArrowRight, Download, Loader } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { downloadEntriesAsExcel } from "@/services/excelService";
 
 interface FloorSession {
   id: string;
@@ -56,6 +57,30 @@ export default function SubmissionSuccess() {
     }
   }, []);
 
+  // Helper: map local session items to the shape expected by downloadEntriesAsExcel.
+  // Newly submitted entries are not yet verified, so F1 fields are set to empty/false.
+  const buildEntriesFromSession = (session: FloorSession) =>
+    (session.items || []).map((item: any) => ({
+      entryId: item.id ?? null,
+      itemName: item.description || item.subcategory || item.category || "",
+      itemType: item.itemType ?? item.stockType ?? "",
+      itemCategory: item.category ?? "",
+      itemSubcategory: item.subcategory ?? "",
+      floorName: session.floorName || session.floor || "",
+      warehouse: session.warehouse || "",
+      totalQuantity: item.units ?? 0,
+      unitUom: item.packageSize ?? 0,
+      totalWeight: item.totalWeight ?? 0,
+      stockType: item.stockType || "Fresh Stock",
+      enteredBy: session.userName || session.userEmail || "",
+      createdAt: session.submittedAt || session.createdAt || new Date().toISOString(),
+      // F1: freshly submitted — not yet verified
+      verified: false,
+      verifiedBy: "",
+      verifiedAt: null,
+      remark: "",
+    }));
+
   // Auto-download when page loads and session is available
   useEffect(() => {
     if (
@@ -70,172 +95,21 @@ export default function SubmissionSuccess() {
         hasAutoDownloadedRef.current = true;
         setIsExporting(true);
         try {
-          // Dynamic import of exceljs
-          const ExcelJS = (await import("exceljs")).default;
-          const workbook = new ExcelJS.Workbook();
-          
-          // Separate items by stock type
-          const freshStockItems = floorSession.items.filter(
-            item => item.stockType === "Fresh Stock" || !item.stockType
-          );
-          const offGradeItems = floorSession.items.filter(
-            item => item.stockType === "Off Grade/Rejection"
-          );
-
-          // Helper function to create a worksheet with items
-          const createWorksheet = (ws: any, items: any[], sheetTitle: string) => {
-            // Add header section
-            const headerRow1 = ws.addRow([sheetTitle]);
-            headerRow1.font = { bold: true, size: 16 };
-            headerRow1.height = 25;
-            ws.mergeCells(1, 1, 1, 8);
-
-            const headerRow2 = ws.addRow([
-              "Warehouse:",
-              floorSession.warehouse || "N/A",
-              "",
-              "Floor:",
-              floorSession.floorName || floorSession.floor || "N/A",
-            ]);
-            headerRow2.font = { bold: true };
-            ws.mergeCells(2, 1, 2, 2);
-            ws.mergeCells(2, 4, 2, 5);
-
-            const headerRow3 = ws.addRow([
-              "Submitted By:",
-              floorSession.userName || "N/A",
-              "",
-              "Submitted At:",
-              floorSession.submittedAt
-                ? new Date(floorSession.submittedAt).toLocaleString()
-                : new Date().toLocaleString(),
-            ]);
-            headerRow3.font = { bold: true };
-            ws.mergeCells(3, 1, 3, 2);
-            ws.mergeCells(3, 4, 3, 5);
-
-            // Empty row
-            ws.addRow([]);
-
-            // Table headers
-            const headers = [
-              "S.No",
-              "Category (Group)",
-              "Subcategory",
-              "Item Description",
-              "UOM (kg)",
-              "Units",
-              "Total Weight (kg)",
-            ];
-            const headerRow = ws.addRow(headers);
-            headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
-            headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
-            headerRow.alignment = { horizontal: "center", vertical: "middle" };
-
-            // Add data rows
-            items.forEach((item: any, index: number) => {
-              const row = [
-                index + 1,
-                item.category,
-                item.subcategory,
-                item.description,
-                item.packageSize.toFixed(3),
-                item.units,
-                item.totalWeight.toFixed(2),
-              ];
-              const dataRow = ws.addRow(row);
-              dataRow.alignment = { horizontal: "left", vertical: "middle" };
-              // Center align numeric columns
-              dataRow.getCell(1).alignment = { horizontal: "center" }; // S.No
-              dataRow.getCell(5).alignment = { horizontal: "center" }; // UOM
-              dataRow.getCell(6).alignment = { horizontal: "center" }; // Units
-              dataRow.getCell(7).alignment = { horizontal: "center" }; // Total Weight
-            });
-
-            // Add total row
-            const totalWeight = items.reduce(
-              (sum: number, item: any) => sum + item.totalWeight,
-              0
-            );
-            const totalUnits = items.reduce(
-              (sum: number, item: any) => sum + item.units,
-              0
-            );
-            const totalRow = [
-              "TOTAL",
-              "",
-              "",
-              "",
-              "",
-              totalUnits,
-              totalWeight.toFixed(2),
-            ];
-            const totalRowObj = ws.addRow(totalRow);
-            totalRowObj.font = { bold: true };
-            totalRowObj.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
-            totalRowObj.alignment = { horizontal: "left", vertical: "middle" };
-            totalRowObj.getCell(6).alignment = { horizontal: "center" };
-            totalRowObj.getCell(7).alignment = { horizontal: "center" };
-
-            // Add borders to all cells
-            ws.eachRow((row: any, rowNumber: number) => {
-              if (rowNumber > 4) {
-                // Skip header section
-                row.eachCell((cell: any) => {
-                  cell.border = {
-                    top: { style: "thin", color: { argb: "FF000000" } },
-                    left: { style: "thin", color: { argb: "FF000000" } },
-                    bottom: { style: "thin", color: { argb: "FF000000" } },
-                    right: { style: "thin", color: { argb: "FF000000" } },
-                  };
-                });
-              }
-            });
-
-            // Set column widths
-            ws.getColumn(1).width = 8; // S.No
-            ws.getColumn(2).width = 20; // Category
-            ws.getColumn(3).width = 20; // Subcategory
-            ws.getColumn(4).width = 35; // Description
-            ws.getColumn(5).width = 12; // UOM
-            ws.getColumn(6).width = 12; // Units
-            ws.getColumn(7).width = 15; // Total Weight
-
-            // Freeze header row
-            ws.views = [{ state: "frozen", ySplit: 5 }];
-          };
-
-          // Create sheets based on available stock types
-          if (freshStockItems.length > 0) {
-            const freshSheet = workbook.addWorksheet("Fresh Stock");
-            createWorksheet(freshSheet, freshStockItems, "Fresh Stock Entries");
-          }
-          if (offGradeItems.length > 0) {
-            const offGradeSheet = workbook.addWorksheet("Off Grade-Rejection");
-            createWorksheet(offGradeSheet, offGradeItems, "Off Grade/Rejection Entries");
-          }
-          // If no stock types defined, create a default sheet
-          if (freshStockItems.length === 0 && offGradeItems.length === 0) {
-            const defaultSheet = workbook.addWorksheet("Submitted Entries");
-            createWorksheet(defaultSheet, floorSession.items, "Submitted Stock Entries");
-          }
-
-          // Save file
-          const buffer = await workbook.xlsx.writeBuffer();
-          const blob = new Blob([buffer], {
-            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          });
-          const url = window.URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = url;
+          const entries = buildEntriesFromSession(floorSession);
           const dateStr = floorSession.submittedAt
             ? new Date(floorSession.submittedAt).toISOString().split("T")[0]
             : new Date().toISOString().split("T")[0];
-          const warehouse = (floorSession.warehouse || "Unknown").replace(/\s/g, "_");
-          const floor = (floorSession.floorName || floorSession.floor || "Unknown").replace(/\s/g, "_");
-          link.download = `Submitted_Entries_${warehouse}_${floor}_${dateStr}.xlsx`;
-          link.click();
-          window.URL.revokeObjectURL(url);
+          const safeWarehouse = (floorSession.warehouse || "Unknown").replace(/\s+/g, "_");
+          const safeFloor = (floorSession.floorName || floorSession.floor || "Unknown").replace(/\s+/g, "_");
+
+          await downloadEntriesAsExcel({
+            entries,
+            title: `${floorSession.warehouse || ""} — ${floorSession.floorName || floorSession.floor || ""}`,
+            warehouse: floorSession.warehouse || "",
+            floorName: floorSession.floorName || floorSession.floor || "",
+            exportedBy: floorSession.userName || floorSession.userEmail || "",
+            filename: `Submitted_Entries_${safeWarehouse}_${safeFloor}_${dateStr}.xlsx`,
+          });
 
           toast({
             title: "Success",
@@ -266,175 +140,22 @@ export default function SubmissionSuccess() {
 
     setIsExporting(true);
     try {
-      // Dynamic import of exceljs
-      const ExcelJS = (await import("exceljs")).default;
-      const workbook = new ExcelJS.Workbook();
-      
-      // Separate items by stock type
-      const freshStockItems = floorSession.items.filter(
-        item => item.stockType === "Fresh Stock" || !item.stockType
-      );
-      const offGradeItems = floorSession.items.filter(
-        item => item.stockType === "Off Grade/Rejection"
-      );
-
-      // Helper function to create a worksheet with items
-      const createWorksheet = (ws: any, items: any[], sheetTitle: string) => {
-        // Add header section
-        const headerRow1 = ws.addRow([sheetTitle]);
-        headerRow1.font = { bold: true, size: 16 };
-        headerRow1.height = 25;
-        ws.mergeCells(1, 1, 1, 8);
-
-        const headerRow2 = ws.addRow([
-          "Warehouse:",
-          floorSession.warehouse || "N/A",
-          "",
-          "Floor:",
-          floorSession.floorName || floorSession.floor || "N/A",
-        ]);
-        headerRow2.font = { bold: true };
-        ws.mergeCells(2, 1, 2, 2);
-        ws.mergeCells(2, 4, 2, 5);
-
-        const headerRow3 = ws.addRow([
-          "Submitted By:",
-          floorSession.userName || "N/A",
-          "",
-          "Submitted At:",
-          floorSession.submittedAt
-            ? new Date(floorSession.submittedAt).toLocaleString()
-            : new Date().toLocaleString(),
-        ]);
-        headerRow3.font = { bold: true };
-        ws.mergeCells(3, 1, 3, 2);
-        ws.mergeCells(3, 4, 3, 5);
-
-        // Empty row
-        ws.addRow([]);
-
-        // Table headers
-        const headers = [
-          "S.No",
-          "Category (Group)",
-          "Subcategory",
-          "Item Description",
-          "UOM (kg)",
-          "Units",
-          "Total Weight (kg)",
-        ];
-        const headerRow = ws.addRow(headers);
-        headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
-        headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
-        headerRow.alignment = { horizontal: "center", vertical: "middle" };
-
-        // Add data rows
-        items.forEach((item: any, index: number) => {
-          const row = [
-            index + 1,
-            item.category,
-            item.subcategory,
-            item.description,
-            item.packageSize.toFixed(3),
-            item.units,
-            item.totalWeight.toFixed(2),
-          ];
-          const dataRow = ws.addRow(row);
-          dataRow.alignment = { horizontal: "left", vertical: "middle" };
-          // Center align numeric columns
-          dataRow.getCell(1).alignment = { horizontal: "center" }; // S.No
-          dataRow.getCell(5).alignment = { horizontal: "center" }; // UOM
-          dataRow.getCell(6).alignment = { horizontal: "center" }; // Units
-          dataRow.getCell(7).alignment = { horizontal: "center" }; // Total Weight
-        });
-
-        // Add total row
-        const totalWeight = items.reduce(
-          (sum: number, item: any) => sum + item.totalWeight,
-          0
-        );
-        const totalUnits = items.reduce(
-          (sum: number, item: any) => sum + item.units,
-          0
-        );
-        const totalRow = [
-          "TOTAL",
-          "",
-          "",
-          "",
-          "",
-          totalUnits,
-          totalWeight.toFixed(2),
-        ];
-        const totalRowObj = ws.addRow(totalRow);
-        totalRowObj.font = { bold: true };
-        totalRowObj.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
-        totalRowObj.alignment = { horizontal: "left", vertical: "middle" };
-        totalRowObj.getCell(6).alignment = { horizontal: "center" };
-        totalRowObj.getCell(7).alignment = { horizontal: "center" };
-
-        // Add borders to all cells
-        ws.eachRow((row: any, rowNumber: number) => {
-          if (rowNumber > 4) {
-            // Skip header section
-            row.eachCell((cell: any) => {
-              cell.border = {
-                top: { style: "thin", color: { argb: "FF000000" } },
-                left: { style: "thin", color: { argb: "FF000000" } },
-                bottom: { style: "thin", color: { argb: "FF000000" } },
-                right: { style: "thin", color: { argb: "FF000000" } },
-              };
-            });
-          }
-        });
-
-        // Set column widths
-        ws.getColumn(1).width = 8; // S.No
-        ws.getColumn(2).width = 20; // Category
-        ws.getColumn(3).width = 20; // Subcategory
-        ws.getColumn(4).width = 35; // Description
-        ws.getColumn(5).width = 12; // UOM
-        ws.getColumn(6).width = 12; // Units
-        ws.getColumn(7).width = 15; // Total Weight
-
-        // Freeze header row
-        ws.views = [{ state: "frozen", ySplit: 5 }];
-      };
-
-      // Create sheets based on available stock types
-      if (freshStockItems.length > 0) {
-        const freshSheet = workbook.addWorksheet("Fresh Stock");
-        createWorksheet(freshSheet, freshStockItems, "Fresh Stock Entries");
-      }
-      if (offGradeItems.length > 0) {
-        const offGradeSheet = workbook.addWorksheet("Off Grade-Rejection");
-        createWorksheet(offGradeSheet, offGradeItems, "Off Grade/Rejection Entries");
-      }
-      // If no stock types defined, create a default sheet
-      if (freshStockItems.length === 0 && offGradeItems.length === 0) {
-        const defaultSheet = workbook.addWorksheet("Submitted Entries");
-        createWorksheet(defaultSheet, floorSession.items, "Submitted Stock Entries");
-      }
-
-      // Save file
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
+      const entries = buildEntriesFromSession(floorSession);
       const dateStr = floorSession.submittedAt
         ? new Date(floorSession.submittedAt).toISOString().split("T")[0]
         : new Date().toISOString().split("T")[0];
-      const warehouse = (floorSession.warehouse || "Unknown").replace(/\s/g, "_");
-      const floor = (floorSession.floorName || floorSession.floor || "Unknown").replace(/\s/g, "_");
-      link.download = `Submitted_Entries_${warehouse}_${floor}_${dateStr}.xlsx`;
-      link.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(link);
+      const safeWarehouse = (floorSession.warehouse || "Unknown").replace(/\s+/g, "_");
+      const safeFloor = (floorSession.floorName || floorSession.floor || "Unknown").replace(/\s+/g, "_");
 
-      // Use timeout to prevent blocking
+      await downloadEntriesAsExcel({
+        entries,
+        title: `${floorSession.warehouse || ""} — ${floorSession.floorName || floorSession.floor || ""}`,
+        warehouse: floorSession.warehouse || "",
+        floorName: floorSession.floorName || floorSession.floor || "",
+        exportedBy: floorSession.userName || floorSession.userEmail || "",
+        filename: `Submitted_Entries_${safeWarehouse}_${safeFloor}_${dateStr}.xlsx`,
+      });
+
       setTimeout(() => {
         toast({
           title: "Success",
@@ -457,13 +178,13 @@ export default function SubmissionSuccess() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-      {/* Navigation */}
-      <nav className="sticky top-0 z-50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
-        <div className="container flex h-16 items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2">
-            <Package className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
-            <span className="text-lg sm:text-xl font-bold text-foreground">StockTake</span>
+      {/* H1: Dark Topbar */}
+      <nav style={{ background: "#111827", minHeight: 52 }} className="sticky top-0 z-50 flex items-center justify-between px-3 sm:px-5 sm:min-h-[56px]">
+        <div className="flex items-center gap-2">
+          <div style={{ background: "#185FA5", borderRadius: 8, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Package className="w-4 h-4 text-white" />
           </div>
+          <span style={{ color: "#FFFFFF", fontWeight: 700, fontSize: 16 }}>StockTake</span>
         </div>
       </nav>
 

@@ -92,23 +92,18 @@ export default function FloorSelection() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-      {/* Navigation */}
-      <nav className="sticky top-0 z-50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
-        <div className="container flex h-16 items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2">
-            <Package className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
-            <span className="text-lg sm:text-xl font-bold text-foreground">StockTake</span>
+      {/* H1: Dark Topbar */}
+      <nav style={{ background: "#111827", minHeight: 52 }} className="sticky top-0 z-50 flex items-center justify-between px-3 sm:px-5 sm:min-h-[56px]">
+        <div className="flex items-center gap-2">
+          <div style={{ background: "#185FA5", borderRadius: 8, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Package className="w-4 h-4 text-white" />
           </div>
-          <Button
-            variant="ghost"
-            onClick={() => navigate("/dashboard")}
-            size="sm"
-            className="text-xs sm:text-sm"
-          >
-            <ArrowLeft className="w-4 h-4 sm:mr-2" />
-            <span className="hidden sm:inline">Back</span>
-          </Button>
+          <span style={{ color: "#FFFFFF", fontWeight: 700, fontSize: 16 }}>StockTake</span>
         </div>
+        <button onClick={() => navigate("/dashboard")} style={{ display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 6, color: "#D1D5DB", fontSize: 12, fontWeight: 500, padding: "6px 10px", cursor: "pointer", touchAction: "manipulation", minHeight: 32 }}>
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Back</span>
+        </button>
       </nav>
 
       {/* Main Content */}

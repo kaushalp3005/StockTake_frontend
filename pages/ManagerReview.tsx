@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+/* MODIFIED: [E1/E2/E3/E6/E7/G4/G5] — compact item cards, auto-sort, auto-verify, verify/remark, delete modal, amber indicator, changelog */
+import "./ManagerReview.css";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Package, Loader, Check, Clock, Lock, Warehouse, ChevronRight, Save, Edit2, X, Upload, Plus, Search, Download, CalendarDays, Trash2 } from "lucide-react";
+import { ArrowLeft, Package, Loader, Check, Warehouse, ChevronRight, Save, X, Upload, Plus, Search, Download, Trash2, ChevronDown, AlertTriangle, LayoutGrid, LayoutList } from "lucide-react";
 import {
   Drawer,
   DrawerContent,
@@ -11,9 +13,8 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
-import { Checkbox } from "@/components/ui/checkbox";
-import { motion, AnimatePresence } from "framer-motion";
-import { stocktakeEntriesAPI, warehousesAPI, categorialInvAPI, floorReviewAPI } from "@/utils/api";
+import { motion } from "framer-motion";
+import { stocktakeEntriesAPI, categorialInvAPI, floorReviewAPI } from "@/utils/api";
 import {
   Select,
   SelectContent,
@@ -21,9 +22,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
+import { DatePillSelector } from "@/components/DatePillSelector";
+import { ColorLegend } from "@/components/ColorLegend";
 
 interface FloorSession {
   id: string;
@@ -40,6 +41,16 @@ interface FloorSession {
   userId?: string;
 }
 
+// Append-only edit record — entryDate is always the original, immutable date
+interface EntryEdit {
+  editedAt: string;
+  editedBy: string;
+  field: string;
+  oldValue: number;
+  newValue: number;
+  entryDate: string; // locked — never changes
+}
+
 interface ItemEntry {
   id: string;
   description: string;
@@ -50,9 +61,19 @@ interface ItemEntry {
   units: number;
   totalWeight: number;
   userName: string;
+  userEmail?: string;
   sessionId: string;
   stockType?: string;
   isChecked?: boolean;
+  entryDate?: string;   // original immutable entry date
+  verified?: boolean;
+  verifiedBy?: string | null;
+  verifiedAt?: string | null;
+  remark?: string | null;
+  edits?: EntryEdit[];  // append-only edit history
+  createdAt?: string;
+  updatedAt?: string;
+  status?: "draft" | "submitted";
 }
 
 interface GroupedItem {
@@ -82,10 +103,15 @@ const WAREHOUSES = ["W202", "A185", "F53", "A68", "Savla", "Rishi"];
 
 export default function ManagerReview() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const [user, setUser] = useState<any>(null);
   const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
-  const [warehouseFloors, setWarehouseFloors] = useState<{ floorName: string; itemCount: number; totalWeight: number }[]>([]);
+  const [warehouseFloors, setWarehouseFloors] = useState<{
+    floorName: string;
+    itemCount: number;
+    totalWeight: number;
+  }[]>([]);
   const [loadingFloors, setLoadingFloors] = useState(false);
   const [selectedWarehouse, setSelectedWarehouse] = useState<string | null>(null);
   const [selectedFloor, setSelectedFloor] = useState<string | null>(null);
@@ -102,13 +128,13 @@ export default function ManagerReview() {
   const [editingQuantity, setEditingQuantity] = useState<{ entryId: string; value: string } | null>(null);
   const [downloadingWarehouse, setDownloadingWarehouse] = useState(false);
   const [savingFloorReview, setSavingFloorReview] = useState(false);
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  // Multi-date selection — source of truth is URL ?dates= param
+  const [selectedDates, setSelectedDates] = useState<string[]>(() => {
+    const param = searchParams.get("dates");
+    return param ? param.split(",").filter(Boolean) : [];
   });
-  const [availableDates, setAvailableDates] = useState<Map<string, number>>(new Map());
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
-  const [calendarOpen, setCalendarOpen] = useState(false);
   const [itemSearchQuery, setItemSearchQuery] = useState("");
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const longPressDetectedRef = useRef<boolean>(false);
@@ -116,6 +142,7 @@ export default function ManagerReview() {
   // Add Item state
   const [addItemDrawerOpen, setAddItemDrawerOpen] = useState(false);
   const [addingItem, setAddingItem] = useState(false);
+  const [newItemStockType, setNewItemStockType] = useState<"Fresh Stock" | "Off Grade/Rejection">("Fresh Stock");
   const [newItemForm, setNewItemForm] = useState({
     itemType: "" as "pm" | "rm" | "fg" | "",
     category: "",
@@ -152,6 +179,38 @@ export default function ManagerReview() {
   const [quickAddStockType, setQuickAddStockType] = useState<"Fresh Stock" | "Off Grade/Rejection">("Fresh Stock");
   const [submittingQuickAdd, setSubmittingQuickAdd] = useState(false);
   
+  // E7: Delete confirmation modal state
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; itemName: string; units: number; totalWeight: number; userName: string; stockType: string; createdAt?: string } | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteConfirmStep, setDeleteConfirmStep] = useState(1);
+
+  // G5: Changelog panel state
+  const [changelogOpen, setChangelogOpen] = useState(false);
+  const [changelogEntry, setChangelogEntry] = useState<{ itemName: string; edits: any[] } | null>(null);
+
+  // E5: Reassignment state (INVENTORY_MANAGER only)
+  const [reassignDrawerOpen, setReassignDrawerOpen] = useState(false);
+  const [reassignTarget, setReassignTarget] = useState<{ entryId: string; currentDescription: string; itemType: string } | null>(null);
+  const [reassignSearchQuery, setReassignSearchQuery] = useState("");
+  const [reassignResults, setReassignResults] = useState<Array<{ name: string; group: string; subgroup: string; uom: number | null }>>([]);
+  const [reassignSearching, setReassignSearching] = useState(false);
+  const [reassigning, setReassigning] = useState(false);
+
+  // E6: Verify remark state
+  const [verifyRemarkInput, setVerifyRemarkInput] = useState("");
+  const [showVerifyRemark, setShowVerifyRemark] = useState(false);
+
+  // D1: Warehouse last-entry stats { [warehouse]: { lastDate: string|null, hasEntries: boolean } }
+  const [warehouseStats, setWarehouseStats] = useState<Record<string, { lastDate: string | null; hasEntries: boolean }>>({});
+  // D1: Grid/List view toggle — default list on mobile, grid on desktop
+  const [warehouseViewMode, setWarehouseViewMode] = useState<'grid' | 'list'>(() => {
+    const saved = localStorage.getItem('warehouseViewMode');
+    if (saved === 'grid' || saved === 'list') return saved as 'grid' | 'list';
+    return typeof window !== 'undefined' && window.innerWidth < 640 ? 'list' : 'grid';
+  });
+
   // Touch sensitivity improvement
   const isScrollingRef = useRef<boolean>(false);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
@@ -163,22 +222,28 @@ export default function ManagerReview() {
       setUser(JSON.parse(userStr));
     }
     
-    // Initialize with hardcoded warehouses (always show these on frontend)
+    // Initialize with hardcoded warehouses
     setWarehouses(WAREHOUSES.map(name => ({ id: name, name })));
 
-    // Fetch available dates for the date picker
+    // Fetch all dates that have at least one entry — fetched once, never re-fetched on filter change
     const fetchAvailableDates = async () => {
       setLoadingDates(true);
       try {
         const response = await stocktakeEntriesAPI.getAvailableDates();
-        console.log("Available dates response:", response);
         if (response?.dates && response.dates.length > 0) {
-          const dateMap = new Map<string, number>();
-          response.dates.forEach((d: { date: string; count: number }) => {
-            dateMap.set(d.date, d.count);
-          });
-          console.log("Date map:", Array.from(dateMap.entries()));
-          setAvailableDates(dateMap);
+          const sorted: string[] = response.dates
+            .map((d: { date: string }) => d.date)
+            .sort();
+          setAvailableDates(sorted);
+          // Auto-select last 3 dates if no date is already selected via URL param
+          const currentParam = searchParams.get("dates");
+          if (!currentParam) {
+            const defaultDates = sorted.slice(-3); // last 3 most recent
+            if (defaultDates.length > 0) {
+              setSelectedDates(defaultDates);
+              setSearchParams(prev => { prev.set("dates", defaultDates.join(",")); return prev; }, { replace: true });
+            }
+          }
         }
       } catch (err) {
         console.error("Error fetching available dates:", err);
@@ -187,7 +252,30 @@ export default function ManagerReview() {
       }
     };
     fetchAvailableDates();
-    
+
+    // D1: Fetch latest entry date per warehouse for warehouse card badges
+    const fetchWarehouseStats = async () => {
+      try {
+        const response = await stocktakeEntriesAPI.getEntries({ limit: 2000 });
+        const entries: any[] = response?.entries ?? [];
+        const stats: Record<string, { lastDate: string | null; hasEntries: boolean }> = {};
+        WAREHOUSES.forEach((wh) => {
+          const whEntries = entries.filter((e: any) => (e.warehouse || "").toLowerCase() === wh.toLowerCase());
+          if (whEntries.length === 0) {
+            stats[wh] = { lastDate: null, hasEntries: false };
+          } else {
+            const latest = whEntries.reduce((max: any, e: any) =>
+              new Date(e.createdAt || 0) > new Date(max.createdAt || 0) ? e : max, whEntries[0]);
+            stats[wh] = { lastDate: latest.createdAt || null, hasEntries: true };
+          }
+        });
+        setWarehouseStats(stats);
+      } catch (err) {
+        console.error("[D1] Failed to fetch warehouse stats:", err);
+      }
+    };
+    fetchWarehouseStats();
+
     // Initialize checked items from localStorage if exists (UI state only)
     const savedChecks = localStorage.getItem("checkedItems");
     if (savedChecks) {
@@ -254,7 +342,37 @@ export default function ManagerReview() {
       clearTimeout(scrollTimeoutRef.current);
     };
   }, []);
-  
+
+  // D1: Persist view mode preference
+  useEffect(() => {
+    localStorage.setItem('warehouseViewMode', warehouseViewMode);
+  }, [warehouseViewMode]);
+
+  // Sync selectedDates to URL params
+  useEffect(() => {
+    if (selectedDates.length > 0) {
+      setSearchParams({ dates: selectedDates.join(",") }, { replace: true });
+    } else {
+      setSearchParams({}, { replace: true });
+    }
+  }, [selectedDates, setSearchParams]);
+
+  // Helper: derive start/end date strings for API range queries
+  const getDateRange = useCallback(() => {
+    if (selectedDates.length === 0) return {};
+    const sorted = [...selectedDates].sort();
+    return {
+      startDate: `${sorted[0]}T00:00:00.000Z`,
+      endDate: `${sorted[sorted.length - 1]}T23:59:59.999Z`,
+    };
+  }, [selectedDates]);
+
+  // Helper: single date for grouped-entries API
+  const getPrimaryDate = useCallback(() => {
+    if (selectedDates.length === 0) return undefined;
+    return [...selectedDates].sort()[0];
+  }, [selectedDates]);
+
   const scrollTimeoutRef = useRef<NodeJS.Timeout>();
 
   const handleWarehouseClick = async (warehouse: string) => {
@@ -269,12 +387,7 @@ export default function ManagerReview() {
     
     try {
       // Fetch entries for this warehouse to get unique floors from database
-      const fetchParams: any = { warehouse };
-      if (selectedDate) {
-        // Filter by selected date: start of day to end of day
-        fetchParams.startDate = `${selectedDate}T00:00:00.000Z`;
-        fetchParams.endDate = `${selectedDate}T23:59:59.999Z`;
-      }
+      const fetchParams: any = { warehouse, ...getDateRange() };
       const entriesResponse = await stocktakeEntriesAPI.getEntries(fetchParams);
       
       if (entriesResponse && entriesResponse.entries && entriesResponse.entries.length > 0) {
@@ -478,7 +591,7 @@ export default function ManagerReview() {
     try {
       // Send just the date - backend will fetch entries from DB directly
       // This avoids the 413 payload-too-large error on API Gateway
-      const response = await stocktakeEntriesAPI.saveResultsheet([], selectedDate || undefined);
+      const response = await stocktakeEntriesAPI.saveResultsheet([], getPrimaryDate());
       console.log("API Response received:", response);
 
       toast({
@@ -565,7 +678,7 @@ export default function ManagerReview() {
 
       // Refresh grouped items data
       if (selectedWarehouse && selectedFloor) {
-        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, selectedDate || undefined);
+        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
         setGroupedItemsData(data.groups || []);
       }
 
@@ -576,21 +689,55 @@ export default function ManagerReview() {
     }
   };
 
-  const handleDeleteEntry = async (entryId: string) => {
-    if (!confirm("Are you sure you want to delete this entry?")) return;
+  // E7: Open delete modal (INVENTORY_MANAGER only — enforced in UI)
+  const openDeleteModal = (entry: ItemEntry) => {
+    setDeleteTarget({
+      id: entry.id,
+      itemName: entry.description,
+      units: entry.units,
+      totalWeight: entry.totalWeight,
+      userName: entry.userName,
+      stockType: entry.stockType || "Fresh Stock",
+      createdAt: entry.createdAt,
+    });
+    setDeleteReason("");
+    setDeleteConfirmStep(1);
+    setDeleteModalOpen(true);
+  };
 
+  // E7: Confirm delete with log
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    if (deleteConfirmStep === 1) {
+      setDeleteConfirmStep(2);
+      return;
+    }
+    setIsDeleting(true);
     try {
-      await stocktakeEntriesAPI.deleteEntry(entryId);
+      await stocktakeEntriesAPI.updateEntry(deleteTarget.id, {
+        edits: [
+          {
+            editedAt: new Date().toISOString(),
+            editedBy: user?.username || user?.name || "MANAGER",
+            field: "deleted",
+            oldValue: deleteTarget.units,
+            newValue: 0,
+            entryDate: deleteTarget.createdAt || new Date().toISOString(),
+            reason: deleteReason || undefined,
+          }
+        ]
+      });
+      await stocktakeEntriesAPI.deleteEntry(deleteTarget.id);
 
-      // Refresh grouped items data
       if (selectedWarehouse && selectedFloor) {
-        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, selectedDate || undefined);
+        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
         setGroupedItemsData(data.groups || []);
       }
-
+      setDeleteModalOpen(false);
+      setDeleteTarget(null);
       setEditingQuantity(null);
+      toast({ title: "Entry deleted", description: `${deleteTarget.itemName} entry removed.` });
 
-      // If the deleted entry's item group is now empty, close the details drawer
       if (selectedItemName) {
         const updatedEntries = getItemEntries(selectedItemName);
         if (updatedEntries.length <= 1) {
@@ -600,8 +747,16 @@ export default function ManagerReview() {
       }
     } catch (err: any) {
       console.error("Error deleting entry:", err);
-      alert(err.message || "Failed to delete entry");
+      toast({ title: "Delete failed", description: err.message || "Failed to delete entry", variant: "destructive" });
+    } finally {
+      setIsDeleting(false);
     }
+  };
+
+  const handleDeleteEntry = async (entryId: string) => {
+    // Legacy — now uses modal; kept for backward compat
+    const entry = groupedItemsData.flatMap(g => g.entries).find(e => e.id === entryId);
+    if (entry) openDeleteModal(entry);
   };
 
 
@@ -652,6 +807,31 @@ export default function ManagerReview() {
 
     return () => clearTimeout(timeoutId);
   }, [addItemSearchQuery, newItemForm.itemType]);
+
+  // E5: Debounced search for reassignment
+  useEffect(() => {
+    const searchReassign = async () => {
+      if (!reassignTarget?.itemType || !reassignSearchQuery || reassignSearchQuery.length < 2) {
+        setReassignResults([]);
+        return;
+      }
+      setReassignSearching(true);
+      try {
+        const response = await categorialInvAPI.searchDescriptions(
+          (reassignTarget.itemType || "fg") as "pm" | "rm" | "fg",
+          reassignSearchQuery
+        );
+        setReassignResults(response.results || []);
+      } catch (err) {
+        console.error("Error searching reassign items:", err);
+        setReassignResults([]);
+      } finally {
+        setReassignSearching(false);
+      }
+    };
+    const timeoutId = setTimeout(searchReassign, 300);
+    return () => clearTimeout(timeoutId);
+  }, [reassignSearchQuery, reassignTarget?.itemType]);
 
   // Fetch categorial data when item type changes for add item form
   const fetchAddItemCategorialData = async (itemType: "pm" | "rm" | "fg") => {
@@ -791,6 +971,8 @@ export default function ManagerReview() {
       const uom = parseFloat(newItemForm.uom) || 0;
       const totalWeight = quantity * uom;
 
+      // E3: Auto-verify items added by INVENTORY_MANAGER
+      const now = new Date().toISOString();
       const entry = {
         item_name: actualDescription.trim().toUpperCase(),
         item_type: newItemForm.itemType.toUpperCase(),
@@ -804,13 +986,18 @@ export default function ManagerReview() {
         entered_by: user?.name || user?.email || "MANAGER",
         entered_by_email: user?.email || "",
         authority: "INVENTORY_MANAGER",
-        stock_type: "Fresh Stock",
+        stock_type: newItemStockType,
+        // E3: auto-verify for INVENTORY_MANAGER
+        verified: true,
+        verified_by: user?.username || user?.name || user?.email || "MANAGER",
+        verified_at: now,
+        remark: verifyRemarkInput.trim() || "Added by manager",
       };
 
       await stocktakeEntriesAPI.submitEntries([entry]);
 
       // Refresh grouped items data
-      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, selectedDate || undefined);
+      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
       setGroupedItemsData(data.groups || []);
 
       // Reset form and close drawer
@@ -831,6 +1018,7 @@ export default function ManagerReview() {
       setIsOtherDescription(false);
       setCustomDescription("");
       setAddItemDrawerOpen(false);
+      setNewItemStockType("Fresh Stock");
 
       toast({
         title: "Success",
@@ -885,7 +1073,7 @@ export default function ManagerReview() {
 
       await stocktakeEntriesAPI.submitEntries([entry]);
 
-      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, selectedDate || undefined);
+      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
       setGroupedItemsData(data.groups || []);
 
       setQuickAddUnits("");
@@ -940,16 +1128,12 @@ export default function ManagerReview() {
 
       setLoadingGroupedItems(true);
       try {
-        // Fetch from database only - no localStorage fallback
         const data = await stocktakeEntriesAPI.getGroupedEntries(
           selectedWarehouse!,
           selectedFloor!,
-          selectedDate || undefined
+          getPrimaryDate()
         );
         setGroupedItemsData(data.groups || []);
-
-        // Don't reset checked entries here - they will be loaded when item is clicked
-        // Reset confirmation and selected item when loading new floor data
         setConfirmed(false);
         setSelectedItemName(null);
       } catch (err: any) {
@@ -962,7 +1146,7 @@ export default function ManagerReview() {
 
     fetchGroupedItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWarehouse, selectedFloor, selectedDate]);
+  }, [selectedWarehouse, selectedFloor, selectedDates]);
 
   const getGroupedItems = (): GroupedItem[] => {
     return groupedItemsData;
@@ -1042,8 +1226,8 @@ export default function ManagerReview() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-muted/30 flex items-center justify-center">
-        <Loader className="w-8 h-8 animate-spin text-primary" />
+      <div className="mr-loading">
+        <Loader className="mr-loader" />
       </div>
     );
   }
@@ -1062,12 +1246,7 @@ export default function ManagerReview() {
     setDownloadingWarehouse(true);
     
     try {
-      // Fetch all entries for the selected warehouse (with optional date filter)
-      const downloadParams: any = { warehouse: selectedWarehouse };
-      if (selectedDate) {
-        downloadParams.startDate = `${selectedDate}T00:00:00.000Z`;
-        downloadParams.endDate = `${selectedDate}T23:59:59.999Z`;
-      }
+      const downloadParams: any = { warehouse: selectedWarehouse, ...getDateRange() };
       const response = await stocktakeEntriesAPI.getEntries(downloadParams);
       
       if (!response?.entries || response.entries.length === 0) {
@@ -1168,7 +1347,7 @@ export default function ManagerReview() {
 
         // Row 2: Date and warehouse info
         const infoRow = worksheet.addRow([
-          `Warehouse: ${selectedWarehouse}  |  Date: ${selectedDate ? new Date(selectedDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "All Dates"}  |  Status: ${statusText}`
+          `Warehouse: ${selectedWarehouse}  |  Date: ${selectedDates.length > 0 ? selectedDates.join(", ") : "All Dates"}  |  Status: ${statusText}`
         ]);
         worksheet.mergeCells(2, 1, 2, headers.length);
         const infoCell = infoRow.getCell(1);
@@ -1340,200 +1519,306 @@ export default function ManagerReview() {
 
   return (
     <motion.div
-      className="min-h-screen bg-gradient-to-b from-background to-muted/30"
+      className="mr-page"
       style={{ touchAction: 'pan-y' }}
       variants={pageVariants}
       initial="initial"
       animate="animate"
       exit="exit"
     >
-      {/* Navigation */}
-      <nav className="sticky top-0 z-50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
-        <div className="w-full flex h-12 sm:h-14 md:h-16 items-center justify-between px-3 sm:px-4 md:px-6 lg:px-8">
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            <Package className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-primary" />
-            <span className="text-base sm:text-lg md:text-xl font-bold text-foreground">StockTake</span>
+      {/* ── Dark Topbar (Section 5A) ── */}
+      <nav
+        style={{ background: "#111827", height: 52 }}
+        className="mr-topbar"
+      >
+        {/* Logo */}
+        <div className="mr-topbar-logo">
+          <div
+            style={{
+              background: "#185FA5",
+              borderRadius: 8,
+              width: 28,
+              height: 28,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Package className="mr-topbar-logo-icon" />
           </div>
-          <div className="flex items-center gap-2 sm:gap-3 md:gap-4">
-            {user && (
-              <div className="text-right hidden sm:block">
-                <p className="font-semibold text-foreground text-xs sm:text-sm">{user.username}</p>
-                <p className="text-[10px] sm:text-xs text-muted-foreground">{user.role}</p>
+          <span style={{ color: "#FFFFFF", fontWeight: 700, fontSize: 16 }}>StockTake</span>
+        </div>
+
+        {/* Right: user chip + back */}
+        <div className="mr-topbar-right">
+          {user && (
+            <div className="mr-topbar-user">
+              {/* Avatar circle with initials */}
+              <div
+                style={{
+                  background: "#185FA5",
+                  borderRadius: "50%",
+                  width: 30,
+                  height: 30,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: "#fff",
+                  flexShrink: 0,
+                }}
+              >
+                {(user.username || user.name || "U").slice(0, 2).toUpperCase()}
               </div>
-            )}
-            <Button
-              variant="ghost"
-              onClick={() => {
-                if (!isScrollingRef.current) {
-                  navigate("/dashboard");
-                }
-              }}
-              size="sm"
-              className="text-xs sm:text-sm touch-manipulation h-8 sm:h-9 px-2 sm:px-3"
-              style={{ touchAction: 'manipulation' }}
-            >
-              <ArrowLeft className="w-4 h-4 sm:mr-1.5" />
-              <span className="hidden sm:inline">Back</span>
-            </Button>
-          </div>
+              <div className="mr-topbar-user-text">
+                <p style={{ color: "#F9FAFB", fontSize: 12, fontWeight: 600, lineHeight: 1 }}>
+                  {user.username || user.name}
+                </p>
+                <p style={{ color: "#9CA3AF", fontSize: 10, lineHeight: 1, marginTop: 2 }}>
+                  {user.role}
+                </p>
+              </div>
+            </div>
+          )}
+          <button
+            onClick={() => { if (!isScrollingRef.current) navigate("/dashboard"); }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              background: "rgba(255,255,255,0.1)",
+              border: "none",
+              borderRadius: 6,
+              color: "#D1D5DB",
+              fontSize: 12,
+              fontWeight: 500,
+              padding: "6px 10px",
+              cursor: "pointer",
+              touchAction: "manipulation",
+              minHeight: 32,
+            }}
+          >
+            <ArrowLeft className="mr-back-icon" />
+            <span className="mr-topbar-back-text">Back</span>
+          </button>
         </div>
       </nav>
 
+      {/* C3: Breadcrumb Trail */}
+      {(selectedWarehouse) && (
+        <nav style={{ background: "#111827", borderTop: "1px solid rgba(255,255,255,0.06)" }} className="mr-breadcrumb">
+          {(() => {
+            const crumbs: { label: string; onClick?: () => void }[] = [
+              {
+                label: "Review",
+                onClick: () => {
+                  setItemDetailsOpen(false);
+                  setItemsDrawerOpen(false);
+                  setDrawerOpen(false);
+                  setSelectedWarehouse(null);
+                  setSelectedFloor(null);
+                  setSelectedItemName(null);
+                },
+              },
+            ];
+            if (selectedWarehouse) {
+              crumbs.push({
+                label: selectedWarehouse,
+                onClick: (selectedFloor || selectedItemName)
+                  ? () => {
+                      setItemDetailsOpen(false);
+                      setItemsDrawerOpen(false);
+                      setSelectedFloor(null);
+                      setSelectedItemName(null);
+                      setTimeout(() => setDrawerOpen(true), 50);
+                    }
+                  : undefined,
+              });
+            }
+            if (selectedFloor) {
+              crumbs.push({
+                label: selectedFloor,
+                onClick: selectedItemName
+                  ? () => {
+                      setItemDetailsOpen(false);
+                      setSelectedItemName(null);
+                      setTimeout(() => setItemsDrawerOpen(true), 50);
+                    }
+                  : undefined,
+              });
+            }
+            if (selectedItemName) {
+              crumbs.push({ label: selectedItemName });
+            }
+
+            // Mobile: truncate middle crumbs with "…" if more than 3 deep
+            const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
+            const displayCrumbs =
+              isMobile && crumbs.length > 3
+                ? [crumbs[0], { label: "…" }, crumbs[crumbs.length - 1]]
+                : crumbs;
+
+            return displayCrumbs.map((crumb, i) => (
+              <span key={i} className="mr-breadcrumb-item">
+                {i > 0 && (
+                  <span style={{ color: "#4B5563", margin: "0 4px", fontSize: 11 }}>›</span>
+                )}
+                {crumb.onClick ? (
+                  <button
+                    onClick={crumb.onClick}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      color: "#9CA3AF",
+                      fontSize: 11,
+                      fontWeight: 500,
+                      maxWidth: 120,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {crumb.label}
+                  </button>
+                ) : (
+                  <span
+                    style={{
+                      color: "#FFFFFF",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      maxWidth: 160,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      display: "inline-block",
+                    }}
+                  >
+                    {crumb.label}
+                  </span>
+                )}
+              </span>
+            ));
+          })()}
+        </nav>
+      )}
+
       {/* Main Content */}
-      <div className="w-full py-4 sm:py-6 md:py-10 px-3 sm:px-4 md:px-6 lg:px-8">
-        <div className="max-w-6xl mx-auto">
+      <div className="mr-main">
+        <div className="mr-main-inner">
           {/* Header */}
           <motion.div
-            className="mb-4 sm:mb-6 md:mb-8"
+            className="mr-header"
             variants={cardVariants}
           >
-            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold text-foreground mb-1 sm:mb-2">
+            <h1 className="mr-title">
               Review Floor Sessions
             </h1>
-            <p className="text-sm sm:text-base md:text-lg text-muted-foreground">
+            <p className="mr-subtitle">
               Select a warehouse to review floor entries
             </p>
           </motion.div>
 
-          {/* Date Filter */}
+          {/* Date Filter — Pill-based selector (Section B2) */}
           <motion.div
-            className="mb-4 sm:mb-6 relative z-10"
+            className="mr-date-filter"
             variants={cardVariants}
           >
-            <Popover open={calendarOpen} onOpenChange={setCalendarOpen} modal={false}>
-              <PopoverTrigger asChild>
-                <Card className={`p-3 sm:p-4 border-border cursor-pointer hover:shadow-md transition-all duration-200 hover:border-primary/50 ${selectedDate ? "border-primary bg-primary/5" : ""}`}>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-                      <div className={`p-2 sm:p-2.5 rounded-lg shrink-0 ${selectedDate ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                        <CalendarDays className="w-4 h-4 sm:w-5 sm:h-5" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs sm:text-sm font-medium text-foreground truncate">
-                          {selectedDate
-                            ? new Date(selectedDate + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
-                            : "All Dates"}
-                        </p>
-                        <p className="text-[11px] sm:text-xs text-muted-foreground">
-                          {selectedDate
-                            ? `${availableDates.get(selectedDate) || 0} entries on this day`
-                            : "Tap to filter by date"}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-                      {selectedDate && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedDate("");
-                            setSelectedWarehouse(null);
-                            setSelectedFloor(null);
-                            setGroupedItemsData([]);
-                            setWarehouseFloors([]);
-                          }}
-                          className="h-7 w-7 sm:h-8 sm:w-8 p-0 text-muted-foreground hover:text-destructive"
-                        >
-                          <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                        </Button>
-                      )}
-                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                    </div>
-                  </div>
-                </Card>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0 z-[100] max-h-[80vh] overflow-y-auto" align="start" side="bottom" sideOffset={8} avoidCollisions onOpenAutoFocus={(e) => e.preventDefault()} onCloseAutoFocus={(e) => e.preventDefault()}>
-                {loadingDates ? (
-                  <div className="p-6 flex items-center justify-center">
-                    <Loader className="w-5 h-5 animate-spin text-primary" />
-                    <span className="ml-2 text-sm text-muted-foreground">Loading...</span>
-                  </div>
-                ) : (
-                  <div>
-                    <style>{`
-                      .date-filter-calendar button[disabled] {
-                        opacity: 0.15 !important;
-                        color: #9ca3af !important;
-                        cursor: not-allowed !important;
-                      }
-                      .date-filter-calendar .has-entries {
-                        background: #d1fae5 !important;
-                        color: #065f46 !important;
-                        font-weight: 700 !important;
-                        border-radius: 6px !important;
-                      }
-                      .date-filter-calendar .has-entries:hover {
-                        background: #a7f3d0 !important;
-                      }
-                      @media (prefers-color-scheme: dark) {
-                        .date-filter-calendar .has-entries {
-                          background: rgba(16, 185, 129, 0.25) !important;
-                          color: #6ee7b7 !important;
-                        }
-                        .date-filter-calendar .has-entries:hover {
-                          background: rgba(16, 185, 129, 0.4) !important;
-                        }
-                      }
-                    `}</style>
-                    <div className="date-filter-calendar">
-                      <Calendar
-                        mode="single"
-                        selected={selectedDate ? new Date(selectedDate + "T00:00:00") : undefined}
-                        onSelect={(date) => {
-                          if (date) {
-                            const yyyy = date.getFullYear();
-                            const mm = String(date.getMonth() + 1).padStart(2, "0");
-                            const dd = String(date.getDate()).padStart(2, "0");
-                            setSelectedDate(`${yyyy}-${mm}-${dd}`);
-                          } else {
-                            setSelectedDate("");
-                          }
-                          setSelectedWarehouse(null);
-                          setSelectedFloor(null);
-                          setGroupedItemsData([]);
-                          setWarehouseFloors([]);
-                          setCalendarOpen(false);
-                        }}
-                        disabled={(date) => {
-                          const yyyy = date.getFullYear();
-                          const mm = String(date.getMonth() + 1).padStart(2, "0");
-                          const dd = String(date.getDate()).padStart(2, "0");
-                          return !availableDates.has(`${yyyy}-${mm}-${dd}`);
-                        }}
-                        modifiers={{
-                          hasEntries: (date) => {
-                            const yyyy = date.getFullYear();
-                            const mm = String(date.getMonth() + 1).padStart(2, "0");
-                            const dd = String(date.getDate()).padStart(2, "0");
-                            return availableDates.has(`${yyyy}-${mm}-${dd}`);
-                          },
-                        }}
-                        modifiersClassNames={{
-                          hasEntries: "has-entries",
-                        }}
-                      />
-                    </div>
-                    <div className="px-2 sm:px-3 pb-2 sm:pb-3 pt-1 border-t flex items-center justify-center gap-2 sm:gap-3">
-                      <div className="flex items-center gap-1">
-                        <span className="inline-block w-2.5 h-2.5 sm:w-3 sm:h-3 rounded bg-emerald-200 dark:bg-emerald-800 border border-emerald-400"></span>
-                        <span className="text-[10px] sm:text-[11px] text-muted-foreground">Has entries</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="inline-block w-2.5 h-2.5 sm:w-3 sm:h-3 rounded bg-gray-100 dark:bg-gray-800 border border-gray-300 opacity-30"></span>
-                        <span className="text-[10px] sm:text-[11px] text-muted-foreground">No entries</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </PopoverContent>
-            </Popover>
+            <DatePillSelector
+              entryDates={availableDates}
+              selectedDates={selectedDates}
+              onChange={(dates) => {
+                setSelectedDates(dates);
+                setSelectedWarehouse(null);
+                setSelectedFloor(null);
+                setGroupedItemsData([]);
+                setWarehouseFloors([]);
+              }}
+              loading={loadingDates}
+            />
           </motion.div>
 
+          {/* Previous Stocktakes KPI card — shows combined stats for dates NOT currently selected */}
+          {(() => {
+            const prevDates = availableDates.filter(d => !selectedDates.includes(d));
+            if (prevDates.length === 0) return null;
+            const prevEntryCount = Object.values(warehouseStats).filter(s => s.hasEntries).length;
+            return (
+              <motion.div
+                className="mr-prev-stocktakes"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3 }}
+              >
+                <div style={{ background: "#1E293B", borderRadius: 12, padding: "12px 16px" }}>
+                  <div className="mr-prev-stocktakes-inner">
+                    <div>
+                      <p style={{ color: "#94A3B8", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>
+                        Previous Stocktakes
+                      </p>
+                      <p style={{ color: "#F1F5F9", fontSize: 13, fontWeight: 500 }}>
+                        {prevDates.length} other date{prevDates.length !== 1 ? "s" : ""} with entries — not shown in current view
+                      </p>
+                    </div>
+                    <span style={{ background: "#334155", color: "#94A3B8", fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "3px 10px", whiteSpace: "nowrap", flexShrink: 0 }}>
+                      {prevEntryCount} warehouse{prevEntryCount !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                  <div className="mr-prev-stocktakes-dates">
+                    {prevDates.map(d => (
+                      <span
+                        key={d}
+                        style={{ background: "#0F172A", color: "#64748B", fontSize: 11, fontWeight: 500, borderRadius: 999, padding: "2px 8px", border: "1px solid #334155" }}
+                      >
+                        {new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+                      </span>
+                    ))}
+                  </div>
+                  <p style={{ color: "#475569", fontSize: 11, marginTop: 8 }}>
+                    Select a date above to review those entries separately.
+                  </p>
+                </div>
+              </motion.div>
+            );
+          })()}
+
+          {/* D1: Grid / List toggle */}
+          <div className="mr-view-toggle-row">
+            <span className="mr-view-toggle-label">Warehouses</span>
+            <div className="mr-view-toggle-group">
+              <button
+                onClick={() => setWarehouseViewMode('grid')}
+                className={`mr-view-toggle-btn ${warehouseViewMode === 'grid' ? 'active' : ''}`}
+                title="Grid view"
+              >
+                <LayoutGrid className="mr-view-toggle-icon" />
+              </button>
+              <button
+                onClick={() => setWarehouseViewMode('list')}
+                className={`mr-view-toggle-btn ${warehouseViewMode === 'list' ? 'active' : ''}`}
+                title="List view"
+              >
+                <LayoutList className="mr-view-toggle-icon" />
+              </button>
+            </div>
+          </div>
+
           {/* Warehouses Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-3 sm:gap-4 md:gap-5">
+          <div className={warehouseViewMode === 'grid' ? "mr-warehouse-grid" : "mr-warehouse-list"}>
             {WAREHOUSES.map((warehouse, index) => {
+              const whStats = warehouseStats[warehouse];
+              const hasEntries = whStats?.hasEntries ?? true; // default tappable until stats load
+              const lastDate = whStats?.lastDate ?? null;
+              const lastDateStr = lastDate
+                ? (() => {
+                    const d = new Date(lastDate);
+                    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                    return `${String(d.getDate()).padStart(2,"0")} ${months[d.getMonth()]} ${d.getFullYear()}`;
+                  })()
+                : null;
+
               return (
                 <motion.div
                   key={warehouse}
@@ -1546,26 +1831,50 @@ export default function ManagerReview() {
                   }}
                 >
                   <Card
-                    className="p-3 sm:p-4 md:p-5 border-border hover:shadow-lg transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.02] hover:border-primary touch-manipulation h-full flex flex-col"
+                    className={`mr-wh-card ${warehouseViewMode === 'list' ? 'mr-wh-card-list' : 'mr-wh-card-grid'} ${hasEntries ? 'mr-wh-card-active' : 'mr-wh-card-disabled'}`}
                     onClick={() => {
-                      if (!isScrollingRef.current) {
+                      if (hasEntries && !isScrollingRef.current) {
                         handleWarehouseClick(warehouse);
                       }
                     }}
-                    style={{ touchAction: 'manipulation' }}
+                    style={{
+                      touchAction: hasEntries ? 'manipulation' : 'none',
+                      ...(hasEntries ? {} : { pointerEvents: 'none' as const }),
+                    }}
+                    onMouseEnter={(e) => {
+                      if (hasEntries) {
+                        (e.currentTarget as HTMLElement).style.borderColor = '#85B7EB';
+                        (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLElement).style.borderColor = '';
+                      (e.currentTarget as HTMLElement).style.transform = '';
+                    }}
                   >
-                    <div className="flex items-center gap-2 sm:gap-3 flex-1">
-                      <div className="p-1.5 sm:p-2 md:p-2.5 bg-primary/10 rounded-lg shrink-0">
-                        <Warehouse className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-primary" />
+                    <div className="mr-wh-card-inner">
+                      <div className={warehouseViewMode === 'list' ? 'mr-wh-icon-wrap-list' : 'mr-wh-icon-wrap-grid'}>
+                        <Warehouse className={warehouseViewMode === 'list' ? 'mr-wh-icon-list' : 'mr-wh-icon-grid'} />
                       </div>
-                      <h3 className="text-sm sm:text-base md:text-lg font-bold text-foreground flex-1 truncate">
-                        {warehouse}
-                      </h3>
-                      <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-muted-foreground shrink-0" />
+                      <div className="mr-wh-info">
+                        <h3 className={warehouseViewMode === 'list' ? 'mr-wh-name-list' : 'mr-wh-name-grid'}>
+                          {warehouse}
+                        </h3>
+                        {warehouseViewMode === 'grid' && lastDateStr && (
+                          <p className="mr-wh-last-entry-grid">Last entry: {lastDateStr}</p>
+                        )}
+                        {warehouseViewMode === 'grid' && whStats && !hasEntries && !lastDateStr && (
+                          <p className="mr-wh-no-entries">No entries</p>
+                        )}
+                        {warehouseViewMode === 'list' && lastDateStr && (
+                          <p className="mr-wh-last-entry-list">{lastDateStr}</p>
+                        )}
+                      </div>
+                      <ChevronRight className="mr-wh-chevron" />
                     </div>
 
-                    {/* Upload Sheet Button for Savla and Rishi */}
-                    {(warehouse === "Savla" || warehouse === "Rishi") && (
+                    {/* Upload Sheet Button for Savla and Rishi — grid mode only */}
+                    {warehouseViewMode === 'grid' && (warehouse === "Savla" || warehouse === "Rishi") && (
                       <Button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1574,10 +1883,10 @@ export default function ManagerReview() {
                             alert(`Upload sheet for ${warehouse} - Feature coming soon!`);
                           }
                         }}
-                        className="w-full mt-2 sm:mt-3 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm"
+                        className="mr-wh-upload-btn"
                         size="sm"
                       >
-                        <Upload className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
+                        <Upload className="mr-wh-upload-icon" />
                         Upload Sheet
                       </Button>
                     )}
@@ -1589,29 +1898,29 @@ export default function ManagerReview() {
 
           {/* Stock Take Complete Section */}
           <motion.div
-            className="mt-6 sm:mt-8 md:mt-10"
+            className="mr-complete-section"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: 0.3 }}
           >
-            <Card className="p-3 sm:p-4 md:p-6 border-border bg-muted/30">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
-                <p className="text-xs sm:text-sm md:text-base font-medium text-foreground">
+            <Card className="mr-complete-card">
+              <div className="mr-complete-inner">
+                <p className="mr-complete-text">
                   Stock take is complete. All items have been checked and verified.
                 </p>
                 <Button
                   onClick={handleSaveData}
                   disabled={savingData}
-                  className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap text-xs sm:text-sm"
+                  className="mr-save-btn"
                 >
                   {savingData ? (
                     <>
-                      <Loader className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 sm:mr-2 animate-spin" />
+                      <Loader className="mr-save-icon mr-loader-xs" />
                       Saving...
                     </>
                   ) : (
                     <>
-                      <Save className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 sm:mr-2" />
+                      <Save className="mr-save-icon" />
                       Save Data
                     </>
                   )}
@@ -1625,15 +1934,16 @@ export default function ManagerReview() {
       </div>
 
       {/* Floors Drawer */}
-      <Drawer open={drawerOpen} onOpenChange={(open) => {
+      <Drawer open={drawerOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
+        if (!open && deleteModalOpen) return; // keep open while delete modal is active
         setDrawerOpen(open);
         if (!open) {
           setSelectedWarehouse(null);
         }
       }}>
-        <DrawerContent className="flex flex-col max-h-[85vh]">
-          <DrawerHeader className="flex-shrink-0">
-            <div className="flex items-center gap-2 mb-2">
+        <DrawerContent className="mr-drawer-content">
+          <DrawerHeader className="mr-drawer-header">
+            <div className="mr-drawer-back-row">
               <Button
                 variant="ghost"
                 size="sm"
@@ -1642,29 +1952,65 @@ export default function ManagerReview() {
                     setDrawerOpen(false);
                   }
                 }}
-                className="mr-auto"
+                className="mr-drawer-back-btn"
               >
-                <ArrowLeft className="w-4 h-4 mr-2" />
+                <ArrowLeft className="mr-download-icon" />
                 Back
               </Button>
             </div>
-            <DrawerTitle className="text-xl font-bold">
+            <DrawerTitle className="mr-drawer-title">
               {selectedWarehouse} - Select Floor
             </DrawerTitle>
             <DrawerDescription>
               Choose a floor to review its entries
             </DrawerDescription>
+            {/* C4: Active date filter badge */}
+            <div className="mr-date-badge">
+              {selectedDates.length > 0 ? (
+                <span style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  background: "#1D4ED8",
+                  color: "#EFF6FF",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  borderRadius: 999,
+                  padding: "3px 10px",
+                }}>
+                  {selectedDates.length} date{selectedDates.length !== 1 ? "s" : ""} selected
+                </span>
+              ) : (
+                <span style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  background: "#374151",
+                  color: "#D1D5DB",
+                  fontSize: 11,
+                  fontWeight: 500,
+                  borderRadius: 999,
+                  padding: "3px 10px",
+                }}>
+                  All dates
+                </span>
+              )}
+            </div>
           </DrawerHeader>
-          <div className="flex-1 overflow-y-auto px-4 pb-4 min-h-0">
+          <div className="mr-drawer-body">
             {loadingFloors ? (
-              <div className="py-8 flex flex-col items-center justify-center gap-2">
-                <Loader className="w-8 h-8 animate-spin text-primary" />
-                <p className="text-sm text-muted-foreground">Loading floors from database...</p>
+              <div className="mr-floor-loading">
+                <Loader className="mr-loader" />
+                <p className="mr-floor-loading-text">Loading floors from database...</p>
               </div>
             ) : warehouseFloors.length > 0 ? (
               <>
-                <div className="space-y-3">
-                  {warehouseFloors.map((floor, index) => (
+                <div className="mr-floor-list">
+                  {(() => {
+                    const maxFloorItemCount = Math.max(...warehouseFloors.map(f => f.itemCount), 1);
+                    return warehouseFloors.map((floor, index) => {
+                      const hasUnchecked = hasUncheckedEntriesInFloor(floor.floorName);
+                      const allChecked = !hasUnchecked && floor.itemCount > 0;
+                      const progressPct = Math.round((floor.itemCount / maxFloorItemCount) * 100);
+                      return (
                     <motion.div
                       key={floor.floorName}
                       initial={{ opacity: 0, x: -20 }}
@@ -1675,7 +2021,7 @@ export default function ManagerReview() {
                       }}
                     >
                       <Card
-                        className="p-4 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation"
+                        className="mr-floor-card"
                         onClick={() => {
                           if (!isScrollingRef.current && !longPressDetectedRef.current) {
                             handleFloorClick(floor.floorName);
@@ -1683,46 +2029,65 @@ export default function ManagerReview() {
                         }}
                         style={{ touchAction: 'manipulation' }}
                       >
-                        <div className="flex items-center justify-between relative">
-                          {hasUncheckedEntriesInFloor(floor.floorName) && (
-                            <div className="absolute -top-2 -right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900"></div>
-                          )}
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 bg-primary/10 rounded-lg">
-                              <Package className="w-5 h-5 text-primary" />
+                        <div className="mr-floor-card-inner">
+                          <div className="mr-floor-card-header">
+                            {/* D2: Status dot — green if all checked, red if has unchecked */}
+                            <div
+                              className="mr-floor-status-dot"
+                              style={{ background: allChecked ? '#22C55E' : '#EF4444' }}
+                            />
+                            <div className="mr-floor-left">
+                              <div className="mr-floor-icon-wrap">
+                                <Package className="mr-floor-icon" />
+                              </div>
+                              {/* D2: Two-line layout */}
+                              <div>
+                                <h3 className="mr-floor-name">
+                                  {floor.floorName}
+                                </h3>
+                                <p className="mr-floor-meta">
+                                  {floor.itemCount} entries • {floor.totalWeight.toFixed(2)} kg
+                                </p>
+                              </div>
                             </div>
-                            <div>
-                              <h3 className="font-semibold text-foreground">
-                                {floor.floorName}
-                              </h3>
-                              <p className="text-sm text-muted-foreground">
-                                {floor.itemCount} items • {floor.totalWeight.toFixed(2)} kg
-                              </p>
-                            </div>
+                            <ChevronRight className="mr-floor-chevron" />
                           </div>
-                          <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                        </div>
+                        {/* D2: Progress bar at bottom of card */}
+                        <div style={{ height: 3, background: '#E5E7EB', borderRadius: '0 0 4px 4px' }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${progressPct}%`,
+                              background: '#185FA5',
+                              borderRadius: '0 0 4px 4px',
+                              transition: 'width 0.4s ease',
+                            }}
+                          />
                         </div>
                       </Card>
                     </motion.div>
-                  ))}
+                      );
+                    });
+                  })()}
                 </div>
                 
                 {/* Download Button */}
-                <div className="sticky bottom-0 bg-background pt-4 border-t border-border mt-6">
+                <div className="mr-download-sticky">
                   <Button
                     onClick={handleDownloadWarehouseEntries}
                     disabled={downloadingWarehouse}
-                    className="w-full bg-green-600 hover:bg-green-700 text-white"
+                    className="mr-download-btn"
                     size="lg"
                   >
                     {downloadingWarehouse ? (
                       <>
-                        <Loader className="w-4 h-4 mr-2 animate-spin" />
+                        <Loader className="mr-download-icon mr-loader-sm" />
                         Downloading...
                       </>
                     ) : (
                       <>
-                        <Download className="w-4 h-4 mr-2" />
+                        <Download className="mr-download-icon" />
                         Download All {selectedWarehouse} Entries
                       </>
                     )}
@@ -1730,7 +2095,7 @@ export default function ManagerReview() {
                 </div>
               </>
             ) : (
-              <p className="text-center text-muted-foreground py-8">
+              <p className="mr-empty-center">
                 No floors available for this warehouse
               </p>
             )}
@@ -1739,7 +2104,8 @@ export default function ManagerReview() {
       </Drawer>
 
       {/* Items List Drawer - Shows unique item names */}
-      <Drawer open={itemsDrawerOpen} onOpenChange={(open) => {
+      <Drawer open={itemsDrawerOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
+        if (!open && deleteModalOpen) return; // keep open while delete modal is active
         setItemsDrawerOpen(open);
         if (!open) {
           setSelectedFloor(null);
@@ -1747,9 +2113,9 @@ export default function ManagerReview() {
           setItemSearchQuery("");
         }
       }}>
-        <DrawerContent className="flex flex-col max-h-[85vh]">
-          <DrawerHeader className="flex-shrink-0">
-            <div className="flex items-center gap-2 mb-2">
+        <DrawerContent className="mr-drawer-content">
+          <DrawerHeader className="mr-drawer-header">
+            <div className="mr-drawer-back-row">
               <Button
                 variant="ghost"
                 size="sm"
@@ -1761,42 +2127,42 @@ export default function ManagerReview() {
                     }, 200);
                   }
                 }}
-                className="mr-auto"
+                className="mr-drawer-back-btn"
               >
-                <ArrowLeft className="w-4 h-4 mr-2" />
+                <ArrowLeft className="mr-download-icon" />
                 Back to Floors
               </Button>
             </div>
-            <DrawerTitle className="text-xl font-bold">
+            <DrawerTitle className="mr-drawer-title">
               {selectedWarehouse} - {selectedFloor}
             </DrawerTitle>
             <DrawerDescription>
               Select an item to view all entries with usernames and quantities
             </DrawerDescription>
-            <div className="relative mt-2">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <div className="mr-search-wrap">
+              <Search className="mr-search-icon" />
               <input
                 type="text"
                 placeholder="Search items..."
                 value={itemSearchQuery}
                 onChange={(e) => setItemSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-8 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+                className="mr-search-input"
               />
               {itemSearchQuery && (
                 <button
                   onClick={() => setItemSearchQuery("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  className="mr-search-clear"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="mr-search-clear-icon" />
                 </button>
               )}
             </div>
           </DrawerHeader>
-          <div className="flex-1 overflow-y-auto px-4 pb-4 min-h-0">
+          <div className="mr-drawer-body">
             {loadingGroupedItems ? (
-              <div className="py-8 flex flex-col items-center justify-center gap-2">
-                <Loader className="w-8 h-8 animate-spin text-primary" />
-                <p className="text-sm text-muted-foreground">Loading items from database...</p>
+              <div className="mr-floor-loading">
+                <Loader className="mr-loader" />
+                <p className="mr-floor-loading-text">Loading items from database...</p>
               </div>
             ) : (() => {
               const allItems = getGroupedItems();
@@ -1804,7 +2170,7 @@ export default function ManagerReview() {
                 ? allItems.filter(item => item.description.toLowerCase().includes(itemSearchQuery.toLowerCase()))
                 : allItems;
               return allItems.length > 0 ? (
-              <div className="space-y-2">
+              <div className="mr-items-space">
                 {/* Save Floor Entry Button */}
                 {!itemSearchQuery && (
                 <motion.div
@@ -1813,19 +2179,19 @@ export default function ManagerReview() {
                   transition={{ duration: 0.2 }}
                 >
                   <Card
-                    className={`p-4 border-2 border-emerald-500/50 hover:border-emerald-500 hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] bg-emerald-50 dark:bg-emerald-950/30 touch-manipulation ${savingFloorReview ? "opacity-70 pointer-events-none" : ""}`}
+                    className={`mr-save-floor-card ${savingFloorReview ? "saving" : ""}`}
                     onClick={handleSaveFloorReview}
                     style={{ touchAction: 'manipulation' }}
                   >
-                    <div className="flex items-center justify-center gap-3">
+                    <div className="mr-save-floor-inner">
                       {savingFloorReview ? (
-                        <Loader className="w-5 h-5 animate-spin text-emerald-600" />
+                        <Loader className="mr-save-floor-icon mr-loader-xs" style={{ animation: 'spin 1s linear infinite' }} />
                       ) : (
-                        <div className="p-2 bg-emerald-500/20 rounded-full">
-                          <Save className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                        <div className="mr-save-floor-icon-wrap">
+                          <Save className="mr-save-floor-icon" />
                         </div>
                       )}
-                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                      <span className="mr-save-floor-text">
                         {savingFloorReview ? "Saving..." : "Save Floor Entry"}
                       </span>
                     </div>
@@ -1841,80 +2207,123 @@ export default function ManagerReview() {
                   transition={{ duration: 0.3 }}
                 >
                   <Card
-                    className="p-4 border-2 border-dashed border-primary/50 hover:border-primary hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] bg-primary/5 touch-manipulation"
+                    className="mr-add-item-card"
                     onClick={() => setAddItemDrawerOpen(true)}
                     style={{ touchAction: 'manipulation' }}
                   >
-                    <div className="flex items-center justify-center gap-3">
-                      <div className="p-2 bg-primary/20 rounded-full">
-                        <Plus className="w-5 h-5 text-primary" />
+                    <div className="mr-add-item-inner">
+                      <div className="mr-add-item-icon-wrap">
+                        <Plus className="mr-add-item-icon" />
                       </div>
-                      <span className="font-semibold text-primary">Add New Item</span>
+                      <span className="mr-add-item-text">Add New Item</span>
                     </div>
                   </Card>
                 </motion.div>
                 )}
 
                 {filteredItems.length === 0 ? (
-                  <div className="text-center py-6">
-                    <Search className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No items matching "{itemSearchQuery}"</p>
+                  <div className="mr-no-results">
+                    <Search className="mr-no-results-icon" />
+                    <p className="mr-no-results-text">No items matching "{itemSearchQuery}"</p>
                   </div>
-                ) : filteredItems.map((groupedItem, index) => (
-                  <motion.div
-                    key={groupedItem.description}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{
-                      duration: 0.3,
-                      delay: index * 0.05,
-                    }}
-                  >
-                    <Card
-                      className={`p-3 border-border hover:shadow-md transition-all duration-300 cursor-pointer active:scale-[0.98] hover:scale-[1.01] hover:border-primary touch-manipulation ${
-                        groupedItem.entries.some((e: any) => e.stockType === "Off Grade/Rejection" || e.stockType === "Rejection")
-                          ? "border-l-4 border-l-red-500"
-                          : "border-l-4 border-l-green-500"
-                      }`}
-                      style={{ touchAction: 'manipulation' }}
-                      onClick={() => {
-                        if (!isScrollingRef.current) {
-                          handleItemClick(groupedItem.description);
-                        }
-                      }}
+                ) : (() => {
+                  // E2: Auto-sort — unverified items to top, verified to bottom
+                  const sortedItems = [...filteredItems].sort((a, b) => {
+                    const aVerified = a.entries.every((e: any) => e.verified);
+                    const bVerified = b.entries.every((e: any) => e.verified);
+                    if (aVerified === bVerified) return 0;
+                    return aVerified ? 1 : -1; // unverified first
+                  });
+                  return sortedItems.map((groupedItem, index) => {
+                    const allVerified = groupedItem.entries.every((e: any) => e.verified);
+                    const hasEdits = groupedItem.entries.some((e: any) => e.edits && e.edits.length > 0);
+                    const isOffGrade = groupedItem.entries.some((e: any) => e.stockType === "Off Grade/Rejection" || e.stockType === "Rejection");
+                    // E1: left bar color: Green=verified, Amber=amended, Grey=unverified
+                    const leftBarColor = allVerified ? "#3B6D11" : hasEdits ? "#BA7517" : "#9CA3AF";
+                    return (
+                    <motion.div
+                      key={groupedItem.description}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.3, delay: index * 0.04 }}
+                      style={{ transition: 'transform 0.25s cubic-bezier(0.4,0,0.2,1)' }}
                     >
-                      <div className="flex items-center justify-between relative">
-                        {hasUncheckedEntriesInItem(groupedItem.description) && (
-                          <div className="absolute -top-2 -right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900"></div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-foreground text-sm leading-tight">
-                            {groupedItem.description}
-                          </p>
-                          <div className="flex items-center gap-3 mt-1">
-                            <span className="text-xs text-muted-foreground">
-                              {groupedItem.totalQuantity} units
-                            </span>
-                            <span className="text-xs font-semibold text-primary">
-                              {groupedItem.totalWeight.toFixed(2)} kg
+                      <Card
+                        className="mr-item-card"
+                        style={{
+                          touchAction: 'manipulation',
+                          borderLeft: `3px solid ${leftBarColor}`,
+                          minHeight: 52,
+                          maxHeight: 56,
+                          background: hasEdits && !allVerified ? '#FFFDF8' : undefined,
+                          borderColor: hasEdits ? '#EF9F27' : undefined,
+                        }}
+                        onClick={() => { if (!isScrollingRef.current) handleItemClick(groupedItem.description); }}
+                      >
+                        {/* E1: Compact horizontal card layout */}
+                        <div className="mr-item-card-inner">
+                          {/* Left: item name + category */}
+                          <div className="mr-item-name-col">
+                            <p className="mr-item-name">
+                              {groupedItem.description}
+                            </p>
+                            <p className="mr-item-category">
+                              {groupedItem.entries[0]?.category || ""}{groupedItem.entries[0]?.subcategory ? ` · ${groupedItem.entries[0].subcategory}` : ""}
+                            </p>
+                          </div>
+                          {/* Right: units + kg */}
+                          <div className="mr-item-stats">
+                            <p className="mr-item-pcs">{groupedItem.totalQuantity} pcs</p>
+                            <p className="mr-item-kg">{groupedItem.totalWeight.toFixed(1)} kg</p>
+                          </div>
+                          {/* G4: Amber triangle if edited */}
+                          {hasEdits && (
+                            <button
+                              style={{ position: 'relative', minWidth: 28, minHeight: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const firstEdited = groupedItem.entries.find((e: any) => e.edits && e.edits.length > 0);
+                                if (firstEdited) {
+                                  setChangelogEntry({ itemName: groupedItem.description, edits: firstEdited.edits || [] });
+                                  setChangelogOpen(true);
+                                }
+                              }}
+                            >
+                              <AlertTriangle style={{ width: 14, height: 14, color: '#BA7517' }} />
+                            </button>
+                          )}
+                          {/* Status dot */}
+                          <div style={{ width: 6, height: 6, borderRadius: '50%', background: allVerified ? '#3B6D11' : hasEdits ? '#BA7517' : '#E24B4A', flexShrink: 0 }} />
+                          <ChevronRight className="mr-item-chevron" />
+                        </div>
+                        {/* G4: Amended tag below if edited */}
+                        {hasEdits && (
+                          <div style={{ padding: '2px 12px 4px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{
+                              fontSize: 10, color: '#854F0B', background: '#FAEEDA',
+                              border: '0.5px solid #EF9F27', borderRadius: 20, padding: '1px 8px',
+                              letterSpacing: 0
+                            }}>
+                              ✎ Amended · tap ▲ for log
                             </span>
                           </div>
-                        </div>
-                        <ChevronRight className="w-5 h-5 text-muted-foreground flex-shrink-0 ml-2" />
-                      </div>
-                    </Card>
-                  </motion.div>
-                ))}
+                        )}
+                      </Card>
+                    </motion.div>
+                  );
+                });
+                })()}
               </div>
             ) : (
-              <div className="text-center py-8">
-                <Package className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground mb-4">No items found for this floor</p>
+              <div className="mr-empty">
+                <Package className="mr-empty-icon" />
+                <p className="mr-empty-text">No items found for this floor</p>
                 <Button
                   onClick={() => setAddItemDrawerOpen(true)}
-                  className="bg-primary hover:bg-primary/90"
+                  className="mr-submit-btn"
+                  style={{ width: 'auto', display: 'inline-flex' }}
                 >
-                  <Plus className="w-4 h-4 mr-2" />
+                  <Plus className="mr-submit-icon" />
                   Add First Item
                 </Button>
               </div>
@@ -1927,7 +2336,7 @@ export default function ManagerReview() {
       </Drawer>
 
       {/* Add Item Drawer */}
-      <Drawer open={addItemDrawerOpen} onOpenChange={(open) => {
+      <Drawer open={addItemDrawerOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
         setAddItemDrawerOpen(open);
         if (!open) {
           // Reset form when closing
@@ -1949,32 +2358,32 @@ export default function ManagerReview() {
           setCustomDescription("");
         }
       }}>
-        <DrawerContent className="flex flex-col max-h-[85vh]">
-          <DrawerHeader className="flex-shrink-0">
-            <div className="flex items-center gap-2 mb-2">
+        <DrawerContent className="mr-drawer-content">
+          <DrawerHeader className="mr-drawer-header">
+            <div className="mr-drawer-back-row">
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => setAddItemDrawerOpen(false)}
-                className="mr-auto"
+                className="mr-drawer-back-btn"
               >
-                <ArrowLeft className="w-4 h-4 mr-2" />
+                <ArrowLeft className="mr-download-icon" />
                 Back
               </Button>
             </div>
-            <DrawerTitle className="text-xl font-bold">
+            <DrawerTitle className="mr-drawer-title">
               Add New Item
             </DrawerTitle>
             <DrawerDescription>
               Add a new item to {selectedWarehouse} - {selectedFloor}
             </DrawerDescription>
           </DrawerHeader>
-          <div className="flex-1 overflow-y-auto px-4 pb-4 min-h-0">
-            <div className="space-y-4">
+          <div className="mr-drawer-body">
+            <div className="mr-form-space">
               {/* Item Type */}
               <div>
-                <label className="text-sm font-medium text-foreground mb-1.5 block">
-                  Item Type <span className="text-destructive">*</span>
+                <label className="mr-form-label">
+                  Item Type <span className="mr-form-required">*</span>
                 </label>
                 <Select
                   value={newItemForm.itemType}
@@ -1993,39 +2402,39 @@ export default function ManagerReview() {
 
               {/* Search Input */}
               {newItemForm.itemType && (
-                <div className="relative">
-                  <label className="text-sm font-medium text-foreground mb-1.5 block">
+                <div style={{ position: 'relative' }}>
+                  <label className="mr-form-label">
                     Quick Search
                   </label>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <div style={{ position: 'relative' }}>
+                    <Search className="mr-search-icon" />
                     <Input
                       placeholder="Search item by name..."
                       value={addItemSearchQuery}
                       onChange={(e) => setAddItemSearchQuery(e.target.value)}
-                      className="pl-9"
+                      style={{ paddingLeft: '2.25rem' }}
                     />
                     {addItemIsSearching && (
-                      <Loader className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-primary" />
+                      <Loader className="mr-loader-sm" style={{ position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="mr-form-hint">
                     Type at least 2 characters to search
                   </p>
 
                   {/* Search Results */}
                   {addItemShowSearchResults && addItemSearchResults.length > 0 && (
-                    <div className="absolute z-50 w-full mt-1 bg-background border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                    <div className="mr-search-results-dropdown">
                       {addItemSearchResults.map((result, index) => (
                         <div
                           key={`${result.name}-${index}`}
-                          className="p-3 hover:bg-muted cursor-pointer border-b border-border last:border-b-0"
+                          className="mr-search-result-item"
                           onClick={() => handleSearchItemSelect(result)}
                         >
-                          <p className="font-medium text-sm text-foreground truncate">
+                          <p className="mr-search-result-name">
                             {result.name}
                           </p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
+                          <p className="mr-search-result-meta">
                             {result.group} / {result.subgroup}
                             {result.uom && ` • ${result.uom.toFixed(3)} kg`}
                           </p>
@@ -2035,8 +2444,8 @@ export default function ManagerReview() {
                   )}
 
                   {addItemShowSearchResults && addItemSearchResults.length === 0 && addItemSearchQuery.length >= 2 && !addItemIsSearching && (
-                    <div className="absolute z-50 w-full mt-1 bg-background border border-border rounded-lg shadow-lg p-3">
-                      <p className="text-sm text-muted-foreground text-center">
+                    <div className="mr-search-results-dropdown" style={{ padding: '0.75rem' }}>
+                      <p className="mr-no-results-text" style={{ textAlign: 'center' }}>
                         No items found
                       </p>
                     </div>
@@ -2046,20 +2455,20 @@ export default function ManagerReview() {
 
               {/* Divider */}
               {newItemForm.itemType && (
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <span className="w-full border-t border-border" />
+                <div className="mr-divider">
+                  <div className="mr-divider-line">
+                    <span className="mr-divider-border" />
                   </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-background px-2 text-muted-foreground">or select manually</span>
+                  <div className="mr-divider-text-wrap">
+                    <span className="mr-divider-text">or select manually</span>
                   </div>
                 </div>
               )}
 
               {/* Category */}
               <div>
-                <label className="text-sm font-medium text-foreground mb-1.5 block">
-                  Category <span className="text-destructive">*</span>
+                <label className="mr-form-label">
+                  Category <span className="mr-form-required">*</span>
                 </label>
                 <Select
                   value={newItemForm.category}
@@ -2081,8 +2490,8 @@ export default function ManagerReview() {
 
               {/* Subcategory */}
               <div>
-                <label className="text-sm font-medium text-foreground mb-1.5 block">
-                  Subcategory <span className="text-destructive">*</span>
+                <label className="mr-form-label">
+                  Subcategory <span className="mr-form-required">*</span>
                 </label>
                 <Select
                   value={newItemForm.subcategory}
@@ -2104,8 +2513,8 @@ export default function ManagerReview() {
 
               {/* Item Description */}
               <div>
-                <label className="text-sm font-medium text-foreground mb-1.5 block">
-                  Item Description <span className="text-destructive">*</span>
+                <label className="mr-form-label">
+                  Item Description <span className="mr-form-required">*</span>
                 </label>
                 <Select
                   value={isOtherDescription ? "__OTHER__" : newItemForm.description}
@@ -2121,7 +2530,7 @@ export default function ManagerReview() {
                         {particular.name} {particular.uom ? `(${particular.uom.toFixed(3)} kg)` : ""}
                       </SelectItem>
                     ))}
-                    <SelectItem value="__OTHER__" className="border-t border-border mt-1 pt-1 text-primary font-medium">
+                    <SelectItem value="__OTHER__" style={{ borderTop: '1px solid hsl(var(--border))', marginTop: '0.25rem', paddingTop: '0.25rem', color: 'hsl(var(--primary))', fontWeight: 500 }}>
                       + Other (Custom Item)
                     </SelectItem>
                   </SelectContent>
@@ -2129,7 +2538,7 @@ export default function ManagerReview() {
 
                 {/* Custom Description Input */}
                 {isOtherDescription && (
-                  <div className="mt-2">
+                  <div style={{ marginTop: '0.5rem' }}>
                     <Input
                       placeholder="Enter custom item description..."
                       value={customDescription}
@@ -2137,7 +2546,7 @@ export default function ManagerReview() {
                       className="w-full"
                       autoFocus
                     />
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="mr-form-hint">
                       Enter a custom item name not in the list
                     </p>
                   </div>
@@ -2145,10 +2554,10 @@ export default function ManagerReview() {
               </div>
 
               {/* Quantity and UOM in a row */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="mr-qty-uom-grid">
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-1.5 block">
-                    Quantity <span className="text-destructive">*</span>
+                  <label className="mr-form-label">
+                    Quantity <span className="mr-form-required">*</span>
                   </label>
                   <Input
                     type="number"
@@ -2160,8 +2569,8 @@ export default function ManagerReview() {
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-1.5 block">
-                    UOM (kg) <span className="text-destructive">*</span>
+                  <label className="mr-form-label">
+                    UOM (kg) <span className="mr-form-required">*</span>
                   </label>
                   <Input
                     type="number"
@@ -2173,19 +2582,40 @@ export default function ManagerReview() {
                     disabled={!isOtherDescription && !!newItemForm.description && parseFloat(newItemForm.uom) > 0}
                   />
                   {!isOtherDescription && newItemForm.description && parseFloat(newItemForm.uom) > 0 && (
-                    <p className="text-xs text-muted-foreground mt-1">Auto-filled from item</p>
+                    <p className="mr-form-hint">Auto-filled from item</p>
                   )}
                   {isOtherDescription && (
-                    <p className="text-xs text-muted-foreground mt-1">Enter weight per unit in kg</p>
+                    <p className="mr-form-hint">Enter weight per unit in kg</p>
                   )}
+                </div>
+              </div>
+
+              {/* Stock Type Toggle — Fresh vs Off Grade */}
+              <div>
+                <label className="mr-form-label-sm">Stock Type</label>
+                <div className="mr-stock-type-row">
+                  <button
+                    type="button"
+                    onClick={() => setNewItemStockType("Fresh Stock")}
+                    className={`mr-stock-type-btn ${newItemStockType === "Fresh Stock" ? "fresh-active" : ""}`}
+                  >
+                    🟢 Fresh Stock
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewItemStockType("Off Grade/Rejection")}
+                    className={`mr-stock-type-btn ${newItemStockType === "Off Grade/Rejection" ? "reject-active" : ""}`}
+                  >
+                    🟡 Off Grade
+                  </button>
                 </div>
               </div>
 
               {/* Total Weight Preview */}
               {newItemForm.quantity && newItemForm.uom && (
-                <div className="p-3 bg-muted/50 rounded-lg">
-                  <p className="text-sm text-muted-foreground">
-                    Total Weight: <span className="font-bold text-primary">
+                <div className="mr-weight-preview">
+                  <p className="mr-weight-preview-text">
+                    Total Weight: <span className="mr-weight-preview-value">
                       {((parseFloat(newItemForm.quantity) || 0) * (parseFloat(newItemForm.uom) || 0)).toFixed(2)} kg
                     </span>
                   </p>
@@ -2196,16 +2626,16 @@ export default function ManagerReview() {
               <Button
                 onClick={handleAddNewItem}
                 disabled={addingItem || !newItemForm.itemType || !newItemForm.category || !newItemForm.subcategory || (!newItemForm.description && !isOtherDescription) || (isOtherDescription && !customDescription.trim()) || !newItemForm.quantity || !newItemForm.uom}
-                className="w-full h-11 bg-primary hover:bg-primary/90 text-white"
+                className="mr-submit-btn"
               >
                 {addingItem ? (
                   <>
-                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader className="mr-submit-icon mr-loader-sm" />
                     Adding...
                   </>
                 ) : (
                   <>
-                    <Plus className="w-4 h-4 mr-2" />
+                    <Plus className="mr-submit-icon" />
                     Add Item
                   </>
                 )}
@@ -2216,7 +2646,8 @@ export default function ManagerReview() {
       </Drawer>
 
       {/* Item Details Drawer - Shows entries grouped by username with quantity boxes */}
-      <Drawer open={itemDetailsOpen} onOpenChange={(open) => {
+      <Drawer open={itemDetailsOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
+        if (!open && deleteModalOpen) return; // keep open while delete modal is active
         setItemDetailsOpen(open);
         if (!open) {
           setSelectedItemName(null);
@@ -2224,12 +2655,12 @@ export default function ManagerReview() {
           setQuickAddUnits("");
         }
       }}>
-        <DrawerContent 
-          className="flex flex-col h-[90vh]"
+        <DrawerContent
+          className="mr-details-drawer"
           containerClassName="warehouse-entries-drawer"
         >
-          <DrawerHeader className="pb-2 flex-shrink-0">
-            <div className="flex items-center gap-2 mb-1">
+          <DrawerHeader className="mr-details-header">
+            <div className="mr-details-back-row">
               <Button
                 variant="ghost"
                 size="sm"
@@ -2240,67 +2671,59 @@ export default function ManagerReview() {
                     setItemsDrawerOpen(true);
                   }, 200);
                 }}
-                className="mr-auto h-8"
+                className="mr-details-back-btn"
               >
-                <ArrowLeft className="w-3 h-3 mr-1" />
-                <span className="text-xs">Back</span>
+                <ArrowLeft className="mr-details-back-icon" />
+                <span className="mr-details-back-text">Back</span>
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setShowQuickAddEntry(!showQuickAddEntry)}
-                className="h-8 px-2.5 border-primary/40 text-primary hover:bg-primary/10"
+                className="mr-details-add-btn"
               >
-                <Plus className="w-3.5 h-3.5 mr-1" />
-                <span className="text-xs">Add Units</span>
+                <Plus className="mr-details-add-icon" />
+                <span className="mr-details-add-text">Add Units</span>
               </Button>
             </div>
-            <DrawerTitle className="text-sm font-semibold leading-tight">
+            <DrawerTitle className="mr-details-title">
               {selectedItemName}
             </DrawerTitle>
             {selectedItemName && (
-              <div className="mt-1.5 p-1.5 bg-muted/50 rounded text-[10px]">
-                <span className="text-muted-foreground">
-                  <span className="font-medium text-foreground">
+              <div className="mr-details-counter">
+                <span className="mr-details-counter-label">
+                  <span className="mr-details-counter-value">
                     {getItemEntries(selectedItemName).filter(entry => checkedEntries[entry.id]).length}
                   </span> of{" "}
-                  <span className="font-medium text-foreground">
+                  <span className="mr-details-counter-value">
                     {getItemEntries(selectedItemName).length}
                   </span> entries checked
                 </span>
               </div>
             )}
           </DrawerHeader>
-          <div className="flex-1 overflow-y-auto px-3 pb-2 min-h-0">
+          <div className="mr-drawer-body-compact">
             {/* Quick Add Entry Form */}
             {showQuickAddEntry && selectedItemName && (
-              <div className="mb-3 p-3 bg-primary/5 border-2 border-primary/20 rounded-lg">
-                <p className="text-xs font-semibold text-foreground mb-2">Add new entry for this item</p>
-                <div className="flex gap-2 mb-2">
+              <div className="mr-quick-add">
+                <p className="mr-quick-add-title">Add new entry for this item</p>
+                <div className="mr-quick-add-stock-row">
                   <button
                     type="button"
                     onClick={() => setQuickAddStockType("Fresh Stock")}
-                    className={`flex-1 text-[10px] font-medium py-1.5 rounded-md border transition-colors ${
-                      quickAddStockType === "Fresh Stock"
-                        ? "bg-green-600 text-white border-green-600"
-                        : "bg-background text-muted-foreground border-border hover:bg-green-50 dark:hover:bg-green-950"
-                    }`}
+                    className={`mr-quick-add-stock-btn ${quickAddStockType === "Fresh Stock" ? "fresh-active" : ""}`}
                   >
                     Fresh
                   </button>
                   <button
                     type="button"
                     onClick={() => setQuickAddStockType("Off Grade/Rejection")}
-                    className={`flex-1 text-[10px] font-medium py-1.5 rounded-md border transition-colors ${
-                      quickAddStockType === "Off Grade/Rejection"
-                        ? "bg-orange-600 text-white border-orange-600"
-                        : "bg-background text-muted-foreground border-border hover:bg-orange-50 dark:hover:bg-orange-950"
-                    }`}
+                    className={`mr-quick-add-stock-btn ${quickAddStockType === "Off Grade/Rejection" ? "reject-active" : ""}`}
                   >
                     Rejection
                   </button>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="mr-quick-add-input-row">
                   <Input
                     type="number"
                     step="0.01"
@@ -2308,7 +2731,7 @@ export default function ManagerReview() {
                     placeholder="Units / Qty"
                     value={quickAddUnits}
                     onChange={(e) => setQuickAddUnits(e.target.value)}
-                    className="h-9 text-sm flex-1 bg-background"
+                    className="mr-quick-add-input"
                     autoFocus
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
@@ -2324,21 +2747,21 @@ export default function ManagerReview() {
                     size="sm"
                     onClick={handleQuickAddEntry}
                     disabled={submittingQuickAdd || !quickAddUnits || parseFloat(quickAddUnits) <= 0}
-                    className="h-9 px-3 bg-green-600 hover:bg-green-700 text-white"
+                    className="mr-quick-add-submit"
                   >
-                    {submittingQuickAdd ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    {submittingQuickAdd ? <Loader className="mr-loader-xs" /> : <Check className="mr-details-add-icon" />}
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
                     onClick={() => { setShowQuickAddEntry(false); setQuickAddUnits(""); }}
-                    className="h-9 px-3"
+                    className="mr-quick-add-cancel"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="mr-details-add-icon" />
                   </Button>
                 </div>
                 {quickAddUnits && !isNaN(parseFloat(quickAddUnits)) && parseFloat(quickAddUnits) > 0 && selectedItemName && getItemEntries(selectedItemName).length > 0 && (
-                  <p className="text-[10px] text-muted-foreground mt-1.5">
+                  <p className="mr-quick-add-weight">
                     Weight: {(parseFloat(quickAddUnits) * getItemEntries(selectedItemName)[0].packageSize).toFixed(2)} kg
                     {" "}(UOM: {getItemEntries(selectedItemName)[0].packageSize.toFixed(3)}kg)
                   </p>
@@ -2347,7 +2770,7 @@ export default function ManagerReview() {
             )}
             {selectedItemName && getItemEntries(selectedItemName).length > 0 ? (
               <>
-                <div className="space-y-2.5">
+                <div className="mr-entries-space">
                   {Object.entries(getEntriesByUsername(getItemEntries(selectedItemName))).map(([username, entries]) => {
                     const userTotalQuantity = entries.reduce((sum, e) => sum + e.units, 0);
                     const userTotalWeight = entries.reduce((sum, e) => sum + e.totalWeight, 0);
@@ -2359,33 +2782,33 @@ export default function ManagerReview() {
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.3 }}
                       >
-                        <Card className="p-2.5 border-border">
-                          <div className="mb-2">
-                            <p className="font-medium text-foreground text-xs">
+                        <Card className="mr-entry-card">
+                          <div style={{ marginBottom: '0.5rem' }}>
+                            <p className="mr-entry-username">
                               {username}
                             </p>
-                            <p className="text-[10px] mt-0.5">
-                              <span className="text-black dark:text-white font-medium">
+                            <p className="mr-entry-summary">
+                              <span className="mr-entry-summary-count">
                                 {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
                               </span>
-                              <span className="text-muted-foreground">
+                              <span className="mr-entry-summary-detail">
                                 {' '}• {userTotalQuantity} units • {userTotalWeight.toFixed(2)} kg
                               </span>
                             </p>
                           </div>
                           
                           {/* Quantity Boxes */}
-                          <div className="flex flex-wrap gap-2 mt-2">
+                          <div className="mr-qty-boxes">
                             {entries.map((entry, idx) => {
                               const isChecked = checkedEntries[entry.id] || false;
                               const isEditing = editingQuantity?.entryId === entry.id;
                               return (
                                 <div
                                   key={entry.id}
-                                  className="relative group"
+                                  className="mr-qty-box-wrap"
                                 >
                                   {isEditing ? (
-                                    <div className="relative bg-primary/10 border-2 border-primary rounded-lg p-2 min-w-[90px]">
+                                    <div className="mr-qty-editing">
                                       <Input
                                         type="number"
                                         step="0.1"
@@ -2393,7 +2816,7 @@ export default function ManagerReview() {
                                         onChange={(e) => {
                                           setEditingQuantity({ entryId: entry.id, value: e.target.value });
                                         }}
-                                        className="text-center text-sm font-bold h-8 px-1 mb-1.5"
+                                        className="mr-qty-edit-input"
                                         autoFocus
                                         min="0.1"
                                         onKeyDown={(e) => {
@@ -2405,7 +2828,7 @@ export default function ManagerReview() {
                                           }
                                         }}
                                       />
-                                      <div className="flex gap-0.5 justify-center">
+                                      <div className="mr-qty-edit-actions">
                                         <button
                                           onClick={(e) => {
                                             e.stopPropagation();
@@ -2418,9 +2841,9 @@ export default function ManagerReview() {
                                             const val = parseFloat(editingQuantity.value) || 0;
                                             handleSaveEditedQuantity(entry.id, val);
                                           }}
-                                          className="h-6 w-6 flex items-center justify-center rounded bg-green-600 text-white"
+                                          className="mr-qty-edit-save"
                                         >
-                                          <Check className="w-3 h-3" />
+                                          <Check className="mr-qty-edit-icon" />
                                         </button>
                                         <button
                                           onClick={(e) => {
@@ -2432,36 +2855,35 @@ export default function ManagerReview() {
                                             e.preventDefault();
                                             handleCancelEdit();
                                           }}
-                                          className="h-6 w-6 flex items-center justify-center rounded bg-muted text-muted-foreground"
+                                          className="mr-qty-edit-cancel"
                                         >
-                                          <X className="w-3 h-3" />
+                                          <X className="mr-qty-edit-icon" />
                                         </button>
+                                        {/* E7: Delete via modal — INVENTORY_MANAGER only */}
+                                        {(user?.role === 'INVENTORY_MANAGER' || user?.role === 'ADMIN' || user?.role === 'SUPERUSER') && (
                                         <button
                                           onClick={(e) => {
                                             e.stopPropagation();
-                                            handleDeleteEntry(entry.id);
+                                            openDeleteModal(entry);
                                           }}
                                           onTouchEnd={(e) => {
                                             e.stopPropagation();
                                             e.preventDefault();
-                                            handleDeleteEntry(entry.id);
+                                            openDeleteModal(entry);
                                           }}
-                                          className="h-6 w-6 flex items-center justify-center rounded bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
+                                          className="mr-qty-edit-delete"
                                         >
-                                          <Trash2 className="w-3 h-3" />
+                                          <Trash2 className="mr-qty-edit-icon" />
                                         </button>
+                                        )}
                                       </div>
                                     </div>
                                   ) : (
                                     <div
-                                      className={`relative rounded-lg p-2.5 min-w-[90px] text-center transition-all duration-200 hover:scale-105 cursor-pointer border-2 ${
+                                      className={`mr-qty-box ${
                                         (entry as any).stockType === "Off Grade/Rejection" || (entry as any).stockType === "Rejection"
-                                          ? isChecked
-                                            ? "bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/40 border-red-500 shadow-md"
-                                            : "bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 border-red-300 dark:border-red-700"
-                                          : isChecked
-                                            ? "bg-primary/20 hover:bg-primary/30 border-primary shadow-md"
-                                            : "bg-primary/10 hover:bg-primary/20 border-primary/30"
+                                          ? isChecked ? "mr-qty-box-reject-checked" : "mr-qty-box-reject"
+                                          : isChecked ? "mr-qty-box-fresh-checked" : "mr-qty-box-fresh"
                                       }`}
                                       onMouseDown={(e) => {
                                         if (e.button === 0 && !editingQuantity) {
@@ -2498,46 +2920,106 @@ export default function ManagerReview() {
                                       }}
                                     >
                                       {isChecked && (
-                                        <div className="absolute top-1 right-1 bg-white rounded-full p-0.5 shadow-md">
-                                          <Check className="w-3 h-3 text-green-600 stroke-[2.5]" />
+                                        <div className="mr-qty-check-badge">
+                                          <Check className="mr-qty-check-icon" />
                                         </div>
                                       )}
-                                      <p className="text-[9px] text-muted-foreground mb-0.5">
+                                      <p className="mr-qty-hint">
                                         Long press to edit
                                       </p>
                                       {(entry as any).floorName && (
-                                        <div 
-                                          className="text-[8px] text-blue-600 dark:text-blue-400 mb-1 cursor-pointer hover:underline"
+                                        <div
+                                          className="mr-qty-floor-link"
 
                                         >
                                           Floor: {(entry as any).floorName}
                                         </div>
                                       )}
-                                      <p className="text-xl font-bold text-black dark:text-white">
+                                      <p className="mr-qty-value">
                                         {entry.units % 1 === 0 ? entry.units : entry.units.toFixed(1)}
                                       </p>
-                                      <p className="text-[9px] text-muted-foreground mt-1">
+                                      <p className="mr-qty-uom-text">
                                         UOM: {entry.packageSize.toFixed(3)}kg
                                       </p>
-                                      <p className={`text-[9px] font-semibold mt-0.5 ${
+                                      <p className={
                                         (entry as any).stockType === "Off Grade/Rejection" || (entry as any).stockType === "Rejection"
-                                          ? "text-red-600 dark:text-red-400"
-                                          : "text-primary"
-                                      }`}>
+                                          ? "mr-qty-weight-reject"
+                                          : "mr-qty-weight-fresh"
+                                      }>
                                         {entry.totalWeight.toFixed(2)}kg
                                       </p>
                                       {/* Stock Type Badge */}
                                       {((entry as any).stockType === "Off Grade/Rejection" || (entry as any).stockType === "Rejection") && (
-                                        <p className="text-[8px] font-bold text-red-600 dark:text-red-400 mt-1 uppercase">
+                                        <p className="mr-qty-reject-badge">
                                           Rejection
                                         </p>
                                       )}
+                                      {/* E5: Change item button — INVENTORY_MANAGER only */}
+                                      {user?.role === "INVENTORY_MANAGER" && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setReassignTarget({
+                                              entryId: entry.id,
+                                              currentDescription: entry.description,
+                                              itemType: (entry.itemType || "fg").toLowerCase(),
+                                            });
+                                            setReassignSearchQuery("");
+                                            setReassignResults([]);
+                                            setReassignDrawerOpen(true);
+                                          }}
+                                          onTouchEnd={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            setReassignTarget({
+                                              entryId: entry.id,
+                                              currentDescription: entry.description,
+                                              itemType: (entry.itemType || "fg").toLowerCase(),
+                                            });
+                                            setReassignSearchQuery("");
+                                            setReassignResults([]);
+                                            setReassignDrawerOpen(true);
+                                          }}
+                                          style={{
+                                            background: "none",
+                                            border: "none",
+                                            padding: 0,
+                                            cursor: "pointer",
+                                            color: "#1B6FC8",
+                                            fontSize: 9,
+                                            fontWeight: 500,
+                                            marginTop: 4,
+                                            display: "block",
+                                            textDecoration: "underline",
+                                          }}
+                                        >
+                                          Change item
+                                        </button>
+                                      )}
+                                      {/* Direct delete — INVENTORY_MANAGER, no edit mode needed */}
+                                      {(user?.role === 'INVENTORY_MANAGER' || user?.role === 'ADMIN' || user?.role === 'SUPERUSER') && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            openDeleteModal(entry);
+                                          }}
+                                          onTouchEnd={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            openDeleteModal(entry);
+                                          }}
+                                          className="mr-qty-delete-btn"
+                                          title="Delete entry"
+                                        >
+                                          <Trash2 className="mr-qty-delete-icon" />
+                                        </button>
+                                      )}
                                     </div>
                                   )}
-                                  <div className={`absolute -top-1.5 -left-1.5 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity ${
+                                  <div className={`mr-qty-box-index ${
                                     (entry as any).stockType === "Off Grade/Rejection" || (entry as any).stockType === "Rejection"
-                                      ? "bg-red-500"
-                                      : "bg-primary"
+                                      ? "mr-qty-box-index-reject"
+                                      : "mr-qty-box-index-fresh"
                                   }`}>
                                     {idx + 1}
                                   </div>
@@ -2552,7 +3034,7 @@ export default function ManagerReview() {
                 </div>
                 
                 {/* Save Button */}
-                <div className="bg-background pt-3 border-t border-border -mx-3 px-3 pb-3 mt-4">
+                <div className="mr-save-footer">
                   {/* <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200 dark:border-blue-800">
                     <p className="text-xs text-blue-900 dark:text-blue-100 font-semibold mb-1">
                       Checked Entries: <span className="text-primary">{
@@ -2567,16 +3049,16 @@ export default function ManagerReview() {
                   <Button
                     onClick={handleSaveCheckedEntries}
                     disabled={saving}
-                    className="w-full h-9 bg-primary hover:bg-primary/90 text-white text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="mr-save-state-btn"
                   >
                     {saving ? (
                       <>
-                        <Loader className="w-3 h-3 mr-1.5 animate-spin" />
+                        <Loader className="mr-save-state-icon mr-loader-xs" />
                         Saving...
                       </>
                     ) : (
                       <>
-                        <Save className="w-3 h-3 mr-1.5" />
+                        <Save className="mr-save-state-icon" />
                         Save State
                       </>
                     )}
@@ -2584,9 +3066,9 @@ export default function ManagerReview() {
                 </div>
               </>
             ) : (
-              <div className="text-center py-8">
-                <Package className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">No entries found for this item</p>
+              <div className="mr-empty">
+                <Package className="mr-empty-icon" />
+                <p className="mr-empty-text">No entries found for this item</p>
               </div>
             )}
           </div>
@@ -2594,6 +3076,190 @@ export default function ManagerReview() {
       </Drawer>
 
 
+      {/* E7: Delete Confirmation Modal */}
+      {deleteModalOpen && deleteTarget && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: 20, paddingBottom: 'max(20px, env(safe-area-inset-bottom))', width: '100%', maxWidth: 480 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <AlertTriangle style={{ color: '#A32D2D', width: 20, height: 20 }} />
+              <h3 style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>Delete this entry?</h3>
+            </div>
+            <div style={{ background: '#F4F6FA', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+              <p style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>Item: {deleteTarget.itemName}</p>
+              <p style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>Qty: {deleteTarget.units} units · {deleteTarget.totalWeight.toFixed(2)} kg</p>
+              <p style={{ fontSize: 12, color: '#6B7280' }}>By: {deleteTarget.userName} {deleteTarget.createdAt ? `· ${new Date(deleteTarget.createdAt).toLocaleDateString()}` : ''}</p>
+              <p style={{ fontSize: 12, color: '#6B7280' }}>Type: {deleteTarget.stockType}</p>
+            </div>
+            <label style={{ fontSize: 12, color: '#374151', display: 'block', marginBottom: 4 }}>Reason (optional, max 120 chars):</label>
+            <input
+              type="text"
+              maxLength={120}
+              value={deleteReason}
+              onChange={e => setDeleteReason(e.target.value)}
+              placeholder="Reason for deletion..."
+              style={{ width: '100%', border: '1px solid #D1D5DB', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 8, boxSizing: 'border-box', minHeight: 44 }}
+            />
+            {deleteConfirmStep === 2 && (
+              <p style={{ fontSize: 12, color: '#A32D2D', marginBottom: 8, fontWeight: 500 }}>
+                This is permanent. A log is recorded. Click Delete again to confirm.
+              </p>
+            )}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => { setDeleteModalOpen(false); setDeleteConfirmStep(1); }}
+                style={{ flex: 1, minHeight: 44, borderRadius: 8, border: '1px solid #D1D5DB', background: '#F4F6FA', fontSize: 14, cursor: 'pointer', fontWeight: 500 }}
+              >Cancel</button>
+              <button
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                style={{ flex: 1, minHeight: 44, borderRadius: 8, border: '1px solid #F09595', background: '#FCEBEB', color: '#791F1F', fontSize: 14, cursor: 'pointer', fontWeight: 600, opacity: isDeleting ? 0.6 : 1 }}
+              >{isDeleting ? 'Deleting…' : deleteConfirmStep === 1 ? 'Delete entry' : 'Confirm delete'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* G5: Changelog Panel */}
+      {changelogOpen && changelogEntry && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1001, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div style={{ background: '#111827', borderRadius: '12px 12px 0 0', padding: 0, paddingBottom: 'env(safe-area-inset-bottom)', width: '100%', maxWidth: 520, maxHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '12px 16px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <p style={{ fontSize: 14, fontWeight: 600, color: '#F9FAFB' }}>Change log — {changelogEntry.itemName}</p>
+              <button onClick={() => setChangelogOpen(false)} style={{ background: 'none', border: 'none', color: '#9CA3AF', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ background: '#fff', flex: 1, overflowX: 'auto', overflowY: 'auto', borderRadius: 12, margin: '0 8px 8px' }}>
+              {changelogEntry.edits.length === 0 ? (
+                <p style={{ padding: 24, textAlign: 'center', color: '#6B7280', fontSize: 13 }}>No edits recorded.</p>
+              ) : (
+                <table style={{ minWidth: 520, width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: '#F4F6FA' }}>
+                      {['Entry date','Amended on','By','Field','Before','After'].map(h => (
+                        <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600, color: '#374151', borderBottom: '1px solid #E5E7EB', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...changelogEntry.edits].reverse().map((edit: any, i: number) => (
+                      <tr key={i} style={{ borderBottom: '1px solid #F3F4F6' }}>
+                        <td style={{ padding: '8px 10px', color: '#6B7280', whiteSpace: 'nowrap' }}>{edit.entryDate ? new Date(edit.entryDate).toLocaleDateString() : '—'}</td>
+                        <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                          <span style={{ background: '#FAEEDA', color: '#633806', borderRadius: 12, padding: '2px 8px', fontSize: 11 }}>
+                            {edit.editedAt ? new Date(edit.editedAt).toLocaleString() : '—'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px 10px', color: '#374151', whiteSpace: 'nowrap' }}>{edit.editedBy || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#374151', whiteSpace: 'nowrap' }}>{edit.field || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#A32D2D', textDecoration: 'line-through', whiteSpace: 'nowrap' }}>{edit.oldValue ?? '—'}</td>
+                        <td style={{ padding: '8px 10px', color: '#27500A', fontWeight: 500, whiteSpace: 'nowrap' }}>{edit.newValue ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <p style={{ padding: '8px 12px', fontSize: 11, color: '#9CA3AF', borderTop: '1px solid #F3F4F6' }}>Entry date is locked. Edits are append-only.</p>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* H8: Color legend floating button */}
+      <ColorLegend />
+
+      {/* E5: Reassign Entry Drawer (INVENTORY_MANAGER only) */}
+      <Drawer open={reassignDrawerOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
+        setReassignDrawerOpen(open);
+        if (!open) {
+          setReassignTarget(null);
+          setReassignSearchQuery("");
+          setReassignResults([]);
+        }
+      }}>
+        <DrawerContent className="mr-drawer-content">
+          <DrawerHeader className="mr-drawer-header">
+            <div className="mr-drawer-back-row">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setReassignDrawerOpen(false)}
+                className="mr-drawer-back-btn"
+              >
+                <ArrowLeft className="mr-download-icon" />
+                Back
+              </Button>
+            </div>
+            <DrawerTitle className="mr-drawer-title">Reassign Entry</DrawerTitle>
+            {reassignTarget && (
+              <DrawerDescription>
+                Currently: {reassignTarget.currentDescription}
+              </DrawerDescription>
+            )}
+          </DrawerHeader>
+          <div className="mr-drawer-body">
+            <div className="mr-reassign-search">
+              <Search className="mr-search-icon" />
+              <Input
+                placeholder="Search items..."
+                value={reassignSearchQuery}
+                onChange={(e) => setReassignSearchQuery(e.target.value)}
+                style={{ paddingLeft: '2.25rem' }}
+                autoFocus
+              />
+              {reassignSearching && (
+                <Loader className="mr-loader-sm" style={{ position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)' }} />
+              )}
+            </div>
+            {reassignResults.length > 0 ? (
+              <div className="mr-reassign-results">
+                {reassignResults.map((result, index) => (
+                  <button
+                    key={`${result.name}-${index}`}
+                    disabled={reassigning}
+                    onClick={async () => {
+                      if (!reassignTarget) return;
+                      setReassigning(true);
+                      try {
+                        await stocktakeEntriesAPI.updateEntry(reassignTarget.entryId, {
+                          itemName: result.name,
+                          itemCategory: result.group,
+                          itemSubcategory: result.subgroup,
+                        });
+                        if (selectedWarehouse && selectedFloor) {
+                          const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
+                          setGroupedItemsData(data.groups || []);
+                        }
+                        toast({ title: "Entry reassigned", description: `Reassigned to "${result.name}"` });
+                        setReassignDrawerOpen(false);
+                      } catch (err: any) {
+                        console.error("Reassign error:", err);
+                        toast({ title: "Reassign failed", description: err.message || "Failed to reassign entry", variant: "destructive" });
+                      } finally {
+                        setReassigning(false);
+                      }
+                    }}
+                    className="mr-reassign-btn"
+                  >
+                    <p className="mr-reassign-name">{result.name}</p>
+                    <p className="mr-reassign-meta">
+                      {result.group} / {result.subgroup}
+                      {result.uom != null && ` • ${result.uom.toFixed(3)} kg`}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            ) : reassignSearchQuery.length >= 2 && !reassignSearching ? (
+              <p className="mr-reassign-empty">No items found</p>
+            ) : (
+              <p className="mr-reassign-hint">Type at least 2 characters to search</p>
+            )}
+            {reassigning && (
+              <div className="mr-reassign-loading">
+                <Loader className="mr-reassign-loading-icon" />
+                <span className="mr-reassign-loading-text">Reassigning…</span>
+              </div>
+            )}
+          </div>
+        </DrawerContent>
+      </Drawer>
     </motion.div>
   );
 }

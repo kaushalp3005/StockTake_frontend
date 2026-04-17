@@ -46,14 +46,17 @@ const DrawerContent = React.forwardRef<
       <DrawerPrimitive.Content
         ref={ref}
         className={cn(
-          "fixed inset-x-0 bottom-0 z-50 flex h-auto max-h-[85vh] flex-col rounded-t-[10px] border bg-background shadow-lg",
+          "fixed inset-x-0 bottom-0 z-50 flex min-h-[75vh] max-h-[85vh] flex-col rounded-t-[10px] border bg-background shadow-lg",
           isWarehouseDrawer && "warehouse-entries-drawer-content",
           className,
         )}
         {...props}
       >
-        <div className="mx-auto mt-4 h-2 w-[100px] rounded-full bg-muted" />
-        {children}
+        {/* D3: Handle is the ONLY drag target; wrap children in no-drag zone */}
+        <div className="mx-auto mt-4 h-2 w-[100px] rounded-full bg-muted cursor-grab active:cursor-grabbing" style={{ touchAction: "none" }} />
+        <div className="flex flex-col flex-1 min-h-0" data-vaul-no-drag>
+          {children}
+        </div>
       </DrawerPrimitive.Content>
     </DrawerPortal>
   );

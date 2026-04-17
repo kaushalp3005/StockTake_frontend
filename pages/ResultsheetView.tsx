@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ArrowLeft, Package, Loader, Eye, Calendar, Clock, X, Download, Trash2 } from "lucide-react";
+import { ArrowLeft, Package, Loader, Eye, Calendar, Clock, X, Download, Trash2, Layers } from "lucide-react";
+import { DatePillSelector } from "@/components/DatePillSelector";
 import {
   Table,
   TableBody,
@@ -72,6 +73,14 @@ export default function ResultsheetView() {
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
 
+  // Multi-date merge state
+  const [mergeSelectedDates, setMergeSelectedDates] = useState<string[]>([]);
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergedSheetData, setMergedSheetData] = useState<ResultsheetData | null>(null);
+  const [isMergedDialogOpen, setIsMergedDialogOpen] = useState(false);
+  const [exportingMerged, setExportingMerged] = useState(false);
+
   useEffect(() => {
     fetchEntries();
   }, []);
@@ -85,6 +94,16 @@ export default function ResultsheetView() {
       const entries = response.entries || [];
       console.log("Parsed entries:", entries, "Count:", entries.length);
       setEntries(entries);
+      // Extract unique dates for DatePillSelector
+      const dates = entries
+        .map((e: ResultsheetEntry) => e.date)
+        .filter(Boolean)
+        .map((d: string) => d.split("T")[0])
+        .filter((v: string, i: number, a: string[]) => a.indexOf(v) === i)
+        .sort() as string[];
+      setAvailableDates(dates);
+      // Default select last 3 dates
+      setMergeSelectedDates(dates.slice(-3));
     } catch (error: any) {
       console.error("Error fetching resultsheet entries:", error);
       console.error("Error details:", error.status, error.data);
@@ -437,6 +456,168 @@ export default function ResultsheetView() {
     }
   };
 
+  // ── Merged view handler ──────────────────────────────────────────
+  const handleViewMerged = async () => {
+    if (mergeSelectedDates.length === 0) return;
+    setIsMerging(true);
+    try {
+      const response = await resultsheetAPI.getMergedData(mergeSelectedDates);
+      setMergedSheetData(response as ResultsheetData);
+      setIsMergedDialogOpen(true);
+    } catch (error: any) {
+      console.error("Error fetching merged data:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to fetch merged resultsheet",
+        variant: "destructive",
+      });
+    } finally {
+      setIsMerging(false);
+    }
+  };
+
+  // ── Merged export handler ──────────────────────────────────────────
+  const handleExportMergedToExcel = async () => {
+    if (!mergedSheetData) return;
+    setExportingMerged(true);
+    try {
+      const ExcelJS = (await import("exceljs")).default;
+      const workbook = new ExcelJS.Workbook();
+
+      const createWorksheet = (
+        worksheetName: string,
+        stockData: StockTypeData,
+        headerColor: string,
+        totalHeaderColor: string
+      ) => {
+        if (stockData.items.length === 0) return;
+        const worksheet = workbook.addWorksheet(worksheetName);
+
+        const headerRow1 = ["Group", "Subgroup", "Item Name", "UOM (kg)", "Item Type", "Status"];
+        stockData.warehouses.forEach((warehouse) => {
+          for (let i = 0; i < warehouse.floors.length * 2; i++) {
+            headerRow1.push(i === 0 ? warehouse.name : "");
+          }
+        });
+        headerRow1.push("Total Weight (kg)");
+        const row1 = worksheet.addRow(headerRow1);
+        row1.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+        row1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: headerColor } };
+        row1.alignment = { horizontal: "center", vertical: "middle" };
+
+        const headerRow2 = ["", "", "", "", "", ""];
+        stockData.warehouses.forEach((warehouse) => {
+          warehouse.floors.forEach((floor) => { headerRow2.push(floor); headerRow2.push(""); });
+        });
+        headerRow2.push("");
+        const row2 = worksheet.addRow(headerRow2);
+        row2.font = { bold: true, size: 11 };
+        row2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
+        row2.alignment = { horizontal: "center", vertical: "middle" };
+
+        const headerRow3 = ["", "", "", "", "", ""];
+        stockData.warehouses.forEach((warehouse) => {
+          warehouse.floors.forEach(() => { headerRow3.push("Qty"); headerRow3.push("Weight (kg)"); });
+        });
+        headerRow3.push("");
+        const row3 = worksheet.addRow(headerRow3);
+        row3.font = { bold: true, size: 10 };
+        row3.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7E6E6" } };
+        row3.alignment = { horizontal: "center", vertical: "middle" };
+
+        worksheet.mergeCells(1, 4, 3, 4);
+        worksheet.mergeCells(1, 5, 3, 5);
+        worksheet.mergeCells(1, 6, 3, 6);
+
+        let colIndex = 7;
+        stockData.warehouses.forEach((warehouse) => {
+          const colspan = warehouse.floors.length * 2;
+          if (colspan > 1) worksheet.mergeCells(1, colIndex, 1, colIndex + colspan - 1);
+          warehouse.floors.forEach((_, fi) => {
+            worksheet.mergeCells(2, colIndex + fi * 2, 2, colIndex + fi * 2 + 1);
+          });
+          colIndex += colspan;
+        });
+
+        stockData.items.forEach((item) => {
+          const itemKey = `${item.item_name?.toUpperCase()}_${item.group?.toUpperCase()}_${item.subgroup?.toUpperCase()}`;
+          const row = [item.group, item.subgroup, item.item_name, "", item.item_type || "", ""];
+          let totalWeight = 0;
+          let uomVal = 0;
+          stockData.warehouses.forEach((warehouse) => {
+            warehouse.floors.forEach((floor) => {
+              const cell = stockData.data?.[itemKey]?.[warehouse.name]?.[floor];
+              const qty = cell?.quantity || 0;
+              const wt = cell?.weight || 0;
+              if (cell?.uom) uomVal = cell.uom;
+              row.push(qty > 0 ? String(qty) : "");
+              row.push(wt > 0 ? wt.toFixed(2) : "");
+              totalWeight += wt;
+            });
+          });
+          row[3] = uomVal > 0 ? uomVal.toFixed(3) : "";
+          row.push(totalWeight > 0 ? totalWeight.toFixed(2) : "");
+          worksheet.addRow(row);
+        });
+
+        const totalRow = ["", "", "TOTAL", "", "", ""];
+        let grandTotal = 0;
+        stockData.warehouses.forEach((warehouse) => {
+          warehouse.floors.forEach((floor) => {
+            let floorTotal = 0;
+            stockData.items.forEach((item) => {
+              const itemKey = `${item.item_name?.toUpperCase()}_${item.group?.toUpperCase()}_${item.subgroup?.toUpperCase()}`;
+              floorTotal += stockData.data?.[itemKey]?.[warehouse.name]?.[floor]?.weight || 0;
+            });
+            totalRow.push("");
+            totalRow.push(floorTotal > 0 ? floorTotal.toFixed(2) : "");
+            grandTotal += floorTotal;
+          });
+        });
+        totalRow.push(grandTotal > 0 ? grandTotal.toFixed(2) : "");
+        const tRow = worksheet.addRow(totalRow);
+        tRow.font = { bold: true };
+        tRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: totalHeaderColor } };
+
+        worksheet.columns.forEach((col) => { if (col) col.width = 14; });
+        if (worksheet.getColumn(1)) worksheet.getColumn(1).width = 18;
+        if (worksheet.getColumn(2)) worksheet.getColumn(2).width = 18;
+        if (worksheet.getColumn(3)) worksheet.getColumn(3).width = 28;
+      };
+
+      if (mergedSheetData.freshStock && mergedSheetData.freshStock.items.length > 0) {
+        createWorksheet("Fresh Stock", mergedSheetData.freshStock, "FF228B22", "FF92D050");
+      } else if (mergedSheetData.items && mergedSheetData.items.length > 0) {
+        createWorksheet("Fresh Stock", {
+          items: mergedSheetData.items,
+          warehouses: mergedSheetData.warehouses,
+          data: mergedSheetData.data,
+        }, "FF228B22", "FF92D050");
+      }
+      if (mergedSheetData.rejection && mergedSheetData.rejection.items.length > 0) {
+        createWorksheet("Rejection", mergedSheetData.rejection, "FFB22222", "FFFF6B6B");
+      }
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `Resultsheet_Merged_${mergeSelectedDates.join("_")}.xlsx`;
+      link.click();
+      window.URL.revokeObjectURL(url);
+
+      toast({ title: "Success", description: "Merged resultsheet exported to Excel" });
+    } catch (err) {
+      console.error("Failed to export merged:", err);
+      toast({ title: "Error", description: "Failed to export merged resultsheet", variant: "destructive" });
+    } finally {
+      setExportingMerged(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-background to-muted/30 flex items-center justify-center">
@@ -447,23 +628,18 @@ export default function ResultsheetView() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-      {/* Navigation */}
-      <nav className="sticky top-0 z-50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
-        <div className="container flex h-16 items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2">
-            <Package className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
-            <span className="text-lg sm:text-xl font-bold text-foreground">StockTake</span>
+      {/* H1: Dark Topbar */}
+      <nav style={{ background: "#111827", minHeight: 52 }} className="sticky top-0 z-50 flex items-center justify-between px-3 sm:px-5 sm:min-h-[56px]">
+        <div className="flex items-center gap-2">
+          <div style={{ background: "#185FA5", borderRadius: 8, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Package className="w-4 h-4 text-white" />
           </div>
-          <Button
-            variant="ghost"
-            onClick={() => navigate("/dashboard")}
-            size="sm"
-            className="text-xs sm:text-sm"
-          >
-            <ArrowLeft className="w-4 h-4 sm:mr-2" />
-            <span className="hidden sm:inline">Back</span>
-          </Button>
+          <span style={{ color: "#FFFFFF", fontWeight: 700, fontSize: 16 }}>StockTake</span>
         </div>
+        <button onClick={() => navigate("/dashboard")} style={{ display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 6, color: "#D1D5DB", fontSize: 12, fontWeight: 500, padding: "6px 10px", cursor: "pointer", touchAction: "manipulation", minHeight: 32 }}>
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Back</span>
+        </button>
       </nav>
 
       {/* Main Content */}
@@ -478,6 +654,42 @@ export default function ResultsheetView() {
               View saved stock take results by date and time
             </p>
           </div>
+
+          {/* Multi-date merge section */}
+          {availableDates.length > 1 && (
+            <div className="mb-6">
+              <Card className="p-4 border-border">
+                <div className="flex items-center gap-2 mb-3">
+                  <Layers className="w-5 h-5 text-primary" />
+                  <h3 className="font-semibold text-foreground">Merge & Download Multiple Dates</h3>
+                </div>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Select dates below to view a combined resultsheet across multiple stocktake sessions
+                </p>
+                <div className="relative z-10 mb-3">
+                  <DatePillSelector
+                    entryDates={availableDates}
+                    selectedDates={mergeSelectedDates}
+                    onChange={(dates) => setMergeSelectedDates(dates)}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleViewMerged}
+                    disabled={mergeSelectedDates.length === 0 || isMerging}
+                    className="bg-primary hover:bg-primary/90 text-white flex-1 sm:flex-none"
+                    size="sm"
+                  >
+                    {isMerging ? (
+                      <><Loader className="w-4 h-4 mr-2 animate-spin" />Merging...</>
+                    ) : (
+                      <><Eye className="w-4 h-4 mr-2" />View Merged ({mergeSelectedDates.length} date{mergeSelectedDates.length !== 1 ? "s" : ""})</>
+                    )}
+                  </Button>
+                </div>
+              </Card>
+            </div>
+          )}
 
           {/* Entries List */}
           {entries.length === 0 ? (
@@ -831,6 +1043,129 @@ export default function ResultsheetView() {
             ) : (
               <div className="text-center py-12 text-muted-foreground">
                 No data available for this date
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Merged Sheet Dialog */}
+      <Dialog open={isMergedDialogOpen} onOpenChange={setIsMergedDialogOpen}>
+        <DialogContent className="max-w-[95vw] lg:max-w-[98vw] h-[90vh] lg:h-[95vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6 pb-4 flex-shrink-0 border-b bg-background">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pr-8 sm:pr-10">
+              <DialogTitle className="flex items-center gap-2 text-base sm:text-lg font-bold">
+                <Layers className="w-5 h-5 text-primary" />
+                Merged Resultsheet — {mergeSelectedDates.length} date{mergeSelectedDates.length !== 1 ? "s" : ""}
+              </DialogTitle>
+              {mergedSheetData && mergedSheetData.items && mergedSheetData.items.length > 0 && (
+                <Button
+                  onClick={handleExportMergedToExcel}
+                  className="bg-green-600 hover:bg-green-700 text-white w-full sm:w-auto"
+                  disabled={exportingMerged}
+                  size="sm"
+                >
+                  {exportingMerged ? (
+                    <><Loader className="w-4 h-4 mr-2 animate-spin" />Exporting...</>
+                  ) : (
+                    <><Download className="w-4 h-4 mr-2" />Download Merged Excel</>
+                  )}
+                </Button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1 mt-2">
+              {mergeSelectedDates.map(d => (
+                <span key={d} className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                  {formatDate(d)}
+                </span>
+              ))}
+            </div>
+          </DialogHeader>
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+            {!mergedSheetData ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader className="w-8 h-8 animate-spin text-primary" />
+              </div>
+            ) : mergedSheetData.items && mergedSheetData.items.length > 0 ? (
+              <div className="flex-1 overflow-auto px-4 sm:px-6 pb-4">
+                <div className="overflow-x-auto -mx-4 sm:mx-0">
+                  <div className="border-2 border-gray-300 rounded-lg inline-block min-w-full shadow-sm" style={{ maxHeight: 'calc(85vh - 150px)' }}>
+                    <Table className="border-collapse w-full min-w-[1000px]">
+                      <TableHeader>
+                        <TableRow className="bg-blue-700 border-b-2 border-gray-400">
+                          <TableHead className="sticky left-0 z-10 bg-blue-700 text-white text-center border border-gray-400 text-xs py-1 px-2" style={{ minWidth: 120 }}>Group</TableHead>
+                          <TableHead className="sticky left-[120px] z-10 bg-blue-700 text-white text-center border border-gray-400 text-xs py-1 px-2" style={{ minWidth: 120 }}>Subgroup</TableHead>
+                          <TableHead className="sticky left-[240px] z-10 bg-blue-700 text-white text-center border border-gray-400 text-xs py-1 px-2" style={{ minWidth: 200 }}>Item Name</TableHead>
+                          <TableHead className="bg-blue-700 text-white text-center border border-gray-400 text-xs py-1 px-2" style={{ minWidth: 80 }}>UOM</TableHead>
+                          <TableHead className="bg-blue-700 text-white text-center border border-gray-400 text-xs py-1 px-2" style={{ minWidth: 60 }}>Type</TableHead>
+                          {mergedSheetData.warehouses.map(wh => (
+                            wh.floors.map(floor => (
+                              <React.Fragment key={`${wh.name}-${floor}`}>
+                                <TableHead className="bg-blue-600 text-white text-center border border-gray-400 text-[10px] py-1 px-1" style={{ minWidth: 50 }}>
+                                  {wh.name}<br/>{floor}<br/>Qty
+                                </TableHead>
+                                <TableHead className="bg-blue-600 text-white text-center border border-gray-400 text-[10px] py-1 px-1" style={{ minWidth: 60 }}>
+                                  {wh.name}<br/>{floor}<br/>Wt(kg)
+                                </TableHead>
+                              </React.Fragment>
+                            ))
+                          ))}
+                          <TableHead className="bg-green-700 text-white text-center border border-gray-400 text-xs py-1 px-2" style={{ minWidth: 90 }}>Total Wt</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {mergedSheetData.items.map((item, idx) => {
+                          const itemKey = `${item.item_name?.toUpperCase()}_${item.group?.toUpperCase()}_${item.subgroup?.toUpperCase()}`;
+                          let totalWt = 0;
+                          return (
+                            <TableRow key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
+                              <TableCell className="sticky left-0 z-10 border border-gray-300 text-xs py-1 px-2 font-medium" style={{ background: idx % 2 === 0 ? "#fff" : "#f9fafb" }}>{item.group}</TableCell>
+                              <TableCell className="sticky left-[120px] z-10 border border-gray-300 text-xs py-1 px-2" style={{ background: idx % 2 === 0 ? "#fff" : "#f9fafb" }}>{item.subgroup}</TableCell>
+                              <TableCell className="sticky left-[240px] z-10 border border-gray-300 text-xs py-1 px-2 font-medium" style={{ background: idx % 2 === 0 ? "#fff" : "#f9fafb" }}>{item.item_name}</TableCell>
+                              <TableCell className="text-center border border-gray-300 text-xs py-1 px-2">
+                                {(() => {
+                                  for (const wh of mergedSheetData.warehouses) {
+                                    for (const fl of wh.floors) {
+                                      const c = mergedSheetData.data?.[itemKey]?.[wh.name]?.[fl];
+                                      if (c?.uom) return c.uom.toFixed(3);
+                                    }
+                                  }
+                                  return "-";
+                                })()}
+                              </TableCell>
+                              <TableCell className="text-center border border-gray-300 text-xs py-1 px-2 uppercase">{item.item_type || "-"}</TableCell>
+                              {mergedSheetData.warehouses.map(wh =>
+                                wh.floors.map(floor => {
+                                  const cell = mergedSheetData.data?.[itemKey]?.[wh.name]?.[floor];
+                                  const wt = cell?.weight || 0;
+                                  const qty = cell?.quantity || 0;
+                                  totalWt += wt;
+                                  return (
+                                    <React.Fragment key={`${wh.name}-${floor}`}>
+                                      <TableCell className="text-center border border-gray-300 text-xs py-1 px-1 text-purple-700 font-semibold">
+                                        {qty > 0 ? qty : "-"}
+                                      </TableCell>
+                                      <TableCell className="text-center border border-gray-300 text-xs py-1 px-1">
+                                        {wt > 0 ? wt.toFixed(2) : "-"}
+                                      </TableCell>
+                                    </React.Fragment>
+                                  );
+                                })
+                              )}
+                              <TableCell className="text-center font-bold bg-green-50 border border-gray-300 text-xs py-1 px-2">
+                                {totalWt > 0 ? totalWt.toFixed(2) : "-"}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-12 text-muted-foreground">
+                No data available for selected dates
               </div>
             )}
           </div>

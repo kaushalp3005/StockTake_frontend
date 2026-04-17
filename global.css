@@ -72,6 +72,12 @@
   }
 }
 
+/* Remove vaul drawer ::after pseudo-element that creates a white wash overlay */
+[data-vaul-drawer][data-vaul-drawer-direction="bottom"]::after {
+  display: none !important;
+}
+
+
 /* Warehouse entries drawer - side panel on desktop, bottom sheet on mobile */
 /* Uses class applied directly to DrawerContent element */
 .warehouse-entries-drawer-content {
@@ -157,6 +163,48 @@
 /* Ensure select items don't cause scroll */
 [data-radix-select-item] {
   touch-action: manipulation;
+}
+
+/* ============================================================
+   H2 — StockTake Design System Color Tokens
+   ============================================================ */
+:root {
+  /* Verification state colors */
+  --st-verified:        #3B6D11;
+  --st-verified-bg:     #EAF3DE;
+  --st-amended:         #B35800;
+  --st-amended-bg:      #FAEEDA;
+  --st-unverified:      #6B7280;
+  --st-unverified-bg:   #F3F4F6;
+
+  /* Stock type colors */
+  --st-fresh:           #3B6D11;
+  --st-fresh-bg:        #EAF3DE;
+  --st-offgrade:        #633806;
+  --st-offgrade-bg:     #FAEEDA;
+
+  /* Brand blues */
+  --st-blue-dark:       #0C447C;
+  --st-blue-mid:        #1B6FC8;
+  --st-blue-light:      #E6F1FB;
+}
+
+/* ============================================================
+   H3 — Typography Scale (rem-based)
+   ============================================================ */
+:root {
+  --font-xs:   0.75rem;   /* 12px */
+  --font-sm:   0.875rem;  /* 14px */
+  --font-base: 1rem;      /* 16px */
+  --font-md:   1.125rem;  /* 18px */
+  --font-lg:   1.25rem;   /* 20px */
+  --font-xl:   1.5rem;    /* 24px */
+  --font-2xl:  1.875rem;  /* 30px */
+  --font-3xl:  2.25rem;   /* 36px */
+
+  --leading-tight:  1.25;
+  --leading-normal: 1.5;
+  --leading-loose:  1.75;
 }
 
 @layer base {
@@ -405,4 +453,125 @@
   [data-radix-select-trigger]:hover:not([data-disabled]) {
     border-color: hsl(var(--ring) / 0.5);
   }
+}
+
+/* ============================================================
+   A2 — Keyboard / viewport whitewash fix
+   Prevents the page from going white when the software keyboard
+   opens on iOS/Android (shrinks visual viewport).
+   ============================================================ */
+#root {
+  min-height: 100dvh;          /* Dynamic viewport — shrinks with keyboard */
+  min-height: -webkit-fill-available;
+}
+
+/* Fallback for browsers without dvh support */
+@supports not (min-height: 100dvh) {
+  #root {
+    min-height: 100vh;
+  }
+}
+
+/* ============================================================
+   H7 — Mobile touch targets + safe-area padding
+   ============================================================ */
+
+/* Fixed bottom action bars must clear iOS home-indicator */
+.bottom-action-bar,
+.fixed-bottom-sheet,
+[data-bottom-bar] {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+/* All interactive tap targets minimum 44×44px on mobile */
+@media (max-width: 640px) {
+  button:not(.rdp-day):not([class*="rdp"]):not([data-chip]):not(.icon-xs),
+  a[role="button"],
+  [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Chip strip items are deliberately compact — opt out */
+  [data-chip] {
+    min-height: unset;
+    min-width: unset;
+  }
+}
+
+/* Safe area padding for pages that extend to bottom edge */
+.page-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ============================================================
+   H8 — Color legend trigger
+   ============================================================ */
+.color-legend-trigger {
+  position: fixed;
+  bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
+  right: 1rem;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: hsl(var(--background));
+  border: 1.5px solid hsl(var(--border));
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 40;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: hsl(var(--foreground));
+  transition: box-shadow 200ms, transform 200ms;
+}
+
+.color-legend-trigger:hover {
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
+  transform: scale(1.05);
+}
+
+/* ============================================================
+   H4 — Card style (0.5px border, 12px radius, hover lift)
+   ============================================================ */
+.card,
+[class*="card"] {
+  border-width: 0.5px;
+  border-radius: 12px;
+}
+
+@media (hover: hover) {
+  .card:not([disabled]):hover,
+  [class*="card"]:not([disabled]):hover {
+    border-color: #85B7EB;
+    transform: translateY(-1px);
+    transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  }
+}
+
+/* H5 — Button types: ensure min-height 44px for all button variants */
+button,
+[role="button"] {
+  min-height: 36px; /* desktop floor — mobile gets 44px override via H7 */
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+/* Press scale effect */
+button:active:not([disabled]),
+[role="button"]:active:not([disabled]) {
+  transform: scale(0.98);
+}
+
+/* ============================================================
+   H6 — Animation reference tokens
+   ============================================================ */
+:root {
+  --anim-hover:    0.15s ease;
+  --anim-nav:      0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  --anim-filter:   0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --anim-sheet:    0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  --anim-sort:     0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --anim-count:    0.6s ease-out;
 }

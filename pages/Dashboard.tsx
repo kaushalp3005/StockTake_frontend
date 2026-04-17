@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/accordion";
 import { stocktakeEntriesAPI } from "@/utils/api";
 import { useToast } from "@/hooks/use-toast";
+import { downloadEntriesAsExcel } from "@/services/excelService";
+import { DatePillSelector } from "@/components/DatePillSelector";
 
 interface User {
   id: string;
@@ -68,18 +70,27 @@ export default function Dashboard() {
   const [downloadingSession, setDownloadingSession] = useState<string | null>(null);
   const [recentEntries, setRecentEntries] = useState<RecentEntry[]>([]);
   const [loadingRecentEntries, setLoadingRecentEntries] = useState(false);
+  const [entriesSelectedDates, setEntriesSelectedDates] = useState<string[]>([]);
+  const [entriesAvailableDates, setEntriesAvailableDates] = useState<string[]>([]);
+  const [loadingEntryDates, setLoadingEntryDates] = useState(false);
 
   // Memoized submitted sessions calculations
   const { submittedSessions, submittedItems, submittedWeight } = useMemo(() => {
-    const filteredSessions = userSessions.filter(
+    const allSubmitted = userSessions.filter(
       session => session.status === "SUBMITTED" || session.status === "APPROVED"
     );
-    
+    const filteredSessions = entriesSelectedDates.length > 0
+      ? allSubmitted.filter(session => {
+          const sessionDate = (session.createdAt || session.submittedAt || "").split("T")[0];
+          return entriesSelectedDates.includes(sessionDate);
+        })
+      : allSubmitted;
+
     const totalItems = filteredSessions.reduce(
       (sum, session) => sum + (session.items?.length || 0),
       0
     );
-    
+
     const totalWeight = filteredSessions.reduce((sum, session) => {
       const sessionWeight = session.items?.reduce(
         (itemSum: number, item: any) => itemSum + (item.totalWeight || 0),
@@ -93,66 +104,58 @@ export default function Dashboard() {
       submittedItems: totalItems,
       submittedWeight: totalWeight
     };
-  }, [userSessions]);
+  }, [userSessions, entriesSelectedDates]);
 
-  // Memoized function to render individual items
+  // D4: Memoized function to render individual items as compact blocks
   const renderItem = useCallback((item: any, idx: number, sessionId: string) => {
     try {
-      // For custom category items (no subcategory), the category field contains the item name
       const isCustomCategory = item.category && !item.subcategory;
-      const itemName = isCustomCategory 
-        ? item.category 
+      const itemName = isCustomCategory
+        ? item.category
         : (item.description || item.subcategory || item.category || "Unknown Item");
-      
+      const isFresh = !item.stockType || item.stockType === "Fresh Stock";
+      const barColor = isFresh ? "#3B6D11" : "#633806";
+      const bgColor  = isFresh ? "#EAF3DE" : "#FAEEDA";
+
       return (
         <div
           key={`${sessionId}-item-${idx}`}
-          className="p-3 sm:p-4 bg-muted/50 rounded-lg text-sm border border-border/50"
+          className="flex rounded-lg overflow-hidden border border-border/50 text-sm"
+          style={{ minHeight: 52 }}
         >
-          <div className="flex justify-between items-start mb-2">
-            <div className="flex-1">
-              <p className="font-semibold text-foreground text-sm sm:text-base">
-                {itemName}
+          {/* Stock-type left bar */}
+          <div className="shrink-0 w-1" style={{ background: barColor }} />
+
+          {/* Content */}
+          <div className="flex-1 flex items-center justify-between gap-2 px-3 py-2" style={{ background: bgColor + "44" }}>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-foreground leading-tight truncate">{itemName}</p>
+              <div className="flex flex-wrap gap-2 mt-0.5 text-xs text-muted-foreground">
+                {item.subcategory && !isCustomCategory && (
+                  <span>{item.category} › {item.subcategory}</span>
+                )}
+                {item.itemType && (
+                  <span className="uppercase font-medium" style={{ color: "#0C447C" }}>{item.itemType}</span>
+                )}
+                {item.units != null && (
+                  <span>{item.units % 1 === 0 ? item.units : Number(item.units).toFixed(2)} pcs</span>
+                )}
+                {item.packageSize && (
+                  <span>UOM {Number(item.packageSize).toFixed(3)} kg</span>
+                )}
+              </div>
+            </div>
+
+            <div className="text-right shrink-0">
+              <p className="font-bold text-primary text-base leading-tight">
+                {Number(item.totalWeight || 0).toFixed(2)} kg
               </p>
-              {!isCustomCategory && item.category && item.subcategory && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  {item.category} → {item.subcategory}
-                </p>
-              )}
-              {isCustomCategory && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Unlisted Item
-                </p>
+              {!isFresh && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: "#FAEEDA", color: "#633806" }}>
+                  Off Grade
+                </span>
               )}
             </div>
-            <span className="font-bold text-primary ml-2 text-base sm:text-lg">
-              {item.totalWeight?.toFixed(2) || "0.00"} kg
-            </span>
-          </div>
-          <div className="text-xs text-muted-foreground flex flex-wrap gap-3 mt-2">
-            {item.entryId && (
-              <span className="font-medium text-primary">
-                ID: {item.entryId}
-              </span>
-            )}
-            {item.packageSize && (
-              <span>
-                UOM: {item.packageSize?.toFixed(3) || "0.000"} kg
-              </span>
-            )}
-            {item.units && (
-              <span>Qty: {item.units || 0}</span>
-            )}
-            {item.stockType && (
-              <span className="capitalize">
-                Type: {item.stockType}
-              </span>
-            )}
-            {item.itemType && (
-              <span className="uppercase">
-                {item.itemType}
-              </span>
-            )}
           </div>
         </div>
       );
@@ -343,6 +346,24 @@ export default function Dashboard() {
         if (parsedUser.role === "INVENTORY_MANAGER" || parsedUser.role === "SUPERUSER") {
           loadRecentEntries();
         }
+
+        // Fetch available entry dates for DatePillSelector (floor managers and above)
+        setLoadingEntryDates(true);
+        stocktakeEntriesAPI.getAvailableDates().then((response) => {
+          if (response?.dates && response.dates.length > 0) {
+            const sorted: string[] = response.dates
+              .map((d: { date: string }) => d.date)
+              .sort(); // ascending for DatePillSelector
+            setEntriesAvailableDates(sorted);
+            // Default to last 3 available dates (most recent)
+            const defaultDates = sorted.slice(-3);
+            setEntriesSelectedDates(defaultDates);
+          }
+        }).catch(err => {
+          console.error("Failed to fetch available dates:", err);
+        }).finally(() => {
+          setLoadingEntryDates(false);
+        });
       } catch (err) {
         console.error("Failed to parse user", err);
       }
@@ -444,13 +465,12 @@ export default function Dashboard() {
     navigate("/audit/entries");
   };
 
+  // F4: Per-session Excel export with F1 (verified cols) + F2 (signature cols + footer)
   const handleDownloadEntries = async (session: FloorSession) => {
-    // Download the items from this specific session (same items shown in view details)
-    // Segregates Fresh Stock and Off Grade/Rejection items into separate Excel sheets
-    if (!session.warehouse || !session.floorName || !session.items || session.items.length === 0) {
+    if (!session.warehouse || !session.floorName) {
       toast({
         title: "Error",
-        description: "Session missing required information or has no items",
+        description: "Session missing warehouse or floor information",
         variant: "destructive",
       });
       return;
@@ -458,161 +478,43 @@ export default function Dashboard() {
 
     setDownloadingSession(session.id);
     try {
-      // Dynamic import of exceljs
-      const ExcelJS = (await import("exceljs")).default;
-      const workbook = new ExcelJS.Workbook();
-      
-      // Separate items by stock type for different sheets
-      const freshStockItems = session.items.filter(
-        (item: any) => item.stockType === "Fresh Stock" || !item.stockType
-      );
-      const offGradeItems = session.items.filter(
-        (item: any) => item.stockType === "Off Grade/Rejection"
-      );
-
-      // Helper function to create a worksheet with items
-      const createWorksheet = (ws: any, items: any[], sheetTitle: string) => {
-        // Add title
-        ws.mergeCells('A1:H1');
-        const titleCell = ws.getCell('A1');
-        titleCell.value = sheetTitle;
-        titleCell.font = { bold: true, size: 16, color: { argb: 'FF1e3a8a' } };
-        titleCell.alignment = { horizontal: 'center' };
-        titleCell.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFf8fafc' }
-        };
-
-        // Add headers
-        const headers = [
-          "Category",
-          "Subcategory", 
-          "Description",
-          "Package Size (kg)",
-          "Units",
-          "Total Weight (kg)",
-          "Date Submitted",
-          "Submitted By"
-        ];
-        
-        ws.getRow(3).values = headers;
-        ws.getRow(3).font = { bold: true, color: { argb: 'FF1e3a8a' } };
-        ws.getRow(3).fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFe0f2fe' }
-        };
-
-        // Add data
-        items.forEach((item: any, index: number) => {
-          const row = ws.getRow(4 + index);
-          // For custom category items (no subcategory), the category field contains the item name
-          const isCustomCategory = item.category && !item.subcategory;
-          const itemName = isCustomCategory ? item.category : (item.description || item.subcategory || item.category || "Unknown Item");
-          
-          row.values = [
-            isCustomCategory ? "Unlisted Item" : item.category,
-            isCustomCategory ? "" : item.subcategory,
-            itemName,
-            item.packageSize?.toFixed(3) || "0.000",
-            item.units || 0,
-            item.totalWeight?.toFixed(2) || "0.00",
-            session.submittedAt ? new Date(session.submittedAt).toLocaleString() : 
-              (session.createdAt ? new Date(session.createdAt).toLocaleString() : "N/A"),
-            session.userName || session.userEmail || "N/A"
-          ];
-          
-          if (index % 2 === 0) {
-            row.fill = {
-              type: 'pattern',
-              pattern: 'solid',
-              fgColor: { argb: 'FFfcfcfd' }
-            };
-          }
-        });
-
-        // Auto-fit columns
-        headers.forEach((_, index) => {
-          const column = ws.getColumn(index + 1);
-          let maxLength = headers[index].length;
-          
-          items.forEach((item: any) => {
-            const rowData = [
-              item.category,
-              item.subcategory,
-              item.description,
-              item.packageSize?.toFixed(3),
-              item.units,
-              item.totalWeight?.toFixed(2),
-              session.submittedAt || session.createdAt,
-              session.userName || session.userEmail
-            ];
-            const cellValue = String(rowData[index] || "");
-            maxLength = Math.max(maxLength, cellValue.length);
-          });
-          
-          column.width = Math.min(Math.max(maxLength + 2, 10), 50);
-        });
-
-        // Add summary row
-        const summaryRowIndex = 4 + items.length + 1;
-        const summaryRow = ws.getRow(summaryRowIndex);
-        const totalWeight = items.reduce((sum: number, item: any) => sum + (item.totalWeight || 0), 0);
-        const totalUnits = items.reduce((sum: number, item: any) => sum + (item.units || 0), 0);
-        
-        summaryRow.values = ["", "", "TOTAL:", "", totalUnits, totalWeight.toFixed(2), "", ""];
-        summaryRow.font = { bold: true };
-        summaryRow.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFe0f2fe' }
-        };
-      };
-
-      // Create worksheets based on available stock types
-      if (freshStockItems.length > 0) {
-        const freshStockWs = workbook.addWorksheet("Fresh Stock");
-        createWorksheet(freshStockWs, freshStockItems, `Fresh Stock - ${session.warehouse} - ${session.floorName}`);
-      }
-
-      if (offGradeItems.length > 0) {
-        const offGradeWs = workbook.addWorksheet("Off Grade Rejection");
-        createWorksheet(offGradeWs, offGradeItems, `Off Grade Rejection - ${session.warehouse} - ${session.floorName}`);
-      }
-
-      // If no items or all items are fresh stock, create a single sheet
-      if (freshStockItems.length === 0 && offGradeItems.length === 0) {
-        throw new Error("No items found in session");
-      }
-
-      // Generate Excel file
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      // Fetch entries fresh from API so we get verified / verifiedBy / verifiedAt / remark fields
+      const userEmail = session.userEmail;
+      const response = await stocktakeEntriesAPI.getEntries({
+        enteredBy: userEmail,
+        warehouse: session.warehouse,
+        floorName: session.floorName,
       });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      document.body.appendChild(link);
-      link.href = url;
-      
-      // Generate filename
+
+      const entries: any[] = response?.entries ?? [];
+
+      if (entries.length === 0) {
+        throw new Error("No entries found for this session");
+      }
+
+      const verifiedCount = entries.filter((e: any) => e.verified).length;
+      const unverifiedCount = entries.length - verifiedCount;
+
       const dateStr = session.submittedAt
         ? new Date(session.submittedAt).toISOString().split("T")[0]
         : new Date(session.createdAt).toISOString().split("T")[0];
-      const warehouse = session.warehouse.replace(/[\\s]/g, "_");
-      const floor = session.floorName.replace(/[\\s]/g, "_");
-      link.download = `StockTakeEntries_${warehouse}_${floor}_${dateStr}.xlsx`;
-      
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
+      const safeWarehouse = session.warehouse.replace(/\s+/g, "_");
+      const safeFloor = (session.floorName || "").replace(/\s+/g, "_");
+      const filename = `StockTakeEntries_${safeWarehouse}_${safeFloor}_${dateStr}.xlsx`;
 
-      // Use timeout to prevent toast blocking
+      await downloadEntriesAsExcel({
+        entries,
+        title: `${session.warehouse} — ${session.floorName}`,
+        warehouse: session.warehouse,
+        floorName: session.floorName,
+        exportedBy: session.userName || session.userEmail || user?.username || "",
+        filename,
+      });
+
       setTimeout(() => {
         toast({
           title: "Success",
-          description: `Entries exported successfully${offGradeItems.length > 0 ? " with separate sheets for Fresh Stock and Off Grade items" : ""}`,
+          description: `Exported ${verifiedCount} verified + ${unverifiedCount} unverified entries`,
         });
       }, 100);
 
@@ -776,43 +678,51 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background via-muted/20 to-background">
-      {/* Navigation */}
-      <nav className="sticky top-0 z-50 bg-white/95 backdrop-blur-md supports-[backdrop-filter]:bg-white/80 border-b border-border/50 shadow-sm">
-        <div className="container flex h-16 items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-[#1e3a8a] flex items-center justify-center">
-              <Package className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-            </div>
-            <span className="text-lg sm:text-xl font-bold">
-              <span className="text-[#1e3a8a]">STOCK</span>
-              <span className="text-[#3b82f6]">TAKE</span>
-            </span>
+      {/* H1: Dark Topbar */}
+      <nav
+        style={{ background: "#111827", minHeight: 52 }}
+        className="sticky top-0 z-50 flex items-center justify-between px-3 sm:px-5 sm:min-h-[56px]"
+      >
+        <div className="flex items-center gap-2">
+          <div style={{ background: "#185FA5", borderRadius: 8, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Package className="w-4 h-4 text-white" />
           </div>
-          <div className="flex items-center gap-2 sm:gap-4">
-            <div className="text-right">
-              <p className="font-semibold text-foreground text-sm">{user?.username}</p>
-              <p className="text-xs text-muted-foreground">{user?.role}</p>
+          <span style={{ color: "#FFFFFF", fontWeight: 700, fontSize: 16 }}>StockTake</span>
+        </div>
+        <div className="flex items-center gap-2 sm:gap-3">
+          {user && (
+            <div className="hidden sm:flex items-center gap-2">
+              <div style={{ background: "#185FA5", borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff" }}>
+                {(user?.username || user?.name || "U").slice(0, 2).toUpperCase()}
+              </div>
+              <div className="text-right">
+                <p style={{ color: "#F9FAFB", fontSize: 12, fontWeight: 600, lineHeight: 1 }}>{user?.username || user?.name}</p>
+                <p style={{ color: "#9CA3AF", fontSize: 10, lineHeight: 1, marginTop: 2 }}>{user?.role}</p>
+              </div>
             </div>
-            <Button variant="ghost" onClick={handleLogout} size="sm" className="text-xs sm:text-sm">
-              <LogOut className="w-4 h-4 sm:mr-2" />
-              <span className="hidden sm:inline">Sign Out</span>
-            </Button>
-          </div>
+          )}
+          <button
+            onClick={handleLogout}
+            style={{ display: "flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 6, color: "#D1D5DB", fontSize: 12, fontWeight: 500, padding: "6px 10px", cursor: "pointer", touchAction: "manipulation", minHeight: 32 }}
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Sign Out</span>
+          </button>
         </div>
       </nav>
 
       {/* Dashboard Content */}
-      <div className="container py-6 sm:py-12 px-4 sm:px-6">
+      <div className="container py-4 sm:py-8 px-4 sm:px-6">
         <div className="max-w-5xl mx-auto">
-          <div className="mb-6 sm:mb-8">
-            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mb-2">
+          <div className="mb-3 sm:mb-5">
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-foreground mb-1">
               {content?.title || "Dashboard"}
             </h1>
-            <p className="text-base sm:text-lg text-muted-foreground">{content?.description || "Welcome to your dashboard"}</p>
+            <p className="text-sm sm:text-base text-muted-foreground">{content?.description || "Welcome to your dashboard"}</p>
           </div>
 
           {/* Action Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 mb-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4">
             {(content?.actions || []).map((action: any, idx: number) => (
               <Card
                 key={idx}
@@ -844,9 +754,7 @@ export default function Dashboard() {
 
           {/* Analytics and Stats - Only for INVENTORY_MANAGER and SUPERUSER */}
           {(user?.role === "INVENTORY_MANAGER" || user?.role === "SUPERUSER") && (
-            <div className="mt-8 sm:mt-12 space-y-6">
-
-    
+            <div className="mt-4 sm:mt-6 space-y-4">
 
               {/* Recent Activity */}
               <Card className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300">
@@ -930,27 +838,25 @@ export default function Dashboard() {
 
           {/* My Entries Section - Only show for FLOOR_MANAGER and SUPERUSER */}
           {(user?.role === "FLOOR_MANAGER" || user?.role === "SUPERUSER") && (
-            <div className="mt-8 sm:mt-12">
-              <div className="mb-6">
-                <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-2 flex items-center gap-2">
+            <div className="mt-4 sm:mt-6">
+              <div className="mb-3">
+                <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-1 flex items-center gap-2">
                   <FileText className="w-5 h-5 text-primary" />
                   My Entries
                 </h2>
-                <p className="text-sm sm:text-base text-muted-foreground">
-                  All stock entries - submitted and in progress
+                <p className="text-sm text-muted-foreground">
+                  Stock entries - submitted and in progress
                 </p>
               </div>
 
-              {/* Entry Status Tabs */}
-              <div className="flex gap-1 mb-6 p-1 bg-muted rounded-lg w-fit">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="data-[active=true]:bg-background data-[active=true]:shadow-sm"
-                  data-active={true}
-                >
-                  All Entries
-                </Button>
+              {/* DatePillSelector for My Entries — same as Summary page */}
+              <div className="mb-4 relative z-10">
+                <DatePillSelector
+                  entryDates={entriesAvailableDates}
+                  selectedDates={entriesSelectedDates}
+                  onChange={(dates) => setEntriesSelectedDates(dates)}
+                  loading={loadingEntryDates}
+                />
               </div>
 
               {/* Filter sessions to show only submitted/approved entries */}

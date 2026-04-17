@@ -44,6 +44,7 @@
     "embla-carousel-react": "^8.6.0",
     "exceljs": "^4.4.0",
     "framer-motion": "^12.23.12",
+    "html5-qrcode": "^2.3.8",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.539.0",
     "next-themes": "^0.4.6",
@@ -72,4 +73,3 @@
     "vite": "^7.1.2"
   }
 }
-

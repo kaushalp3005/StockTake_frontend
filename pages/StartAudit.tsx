@@ -12,17 +12,26 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Loader, Package, ArrowLeft } from "lucide-react";
-import { auditsAPI, warehousesAPI } from "@/utils/api";
+import { auditsAPI } from "@/utils/api";
 import { useToast } from "@/hooks/use-toast";
 
 // Warehouse names used in the system
 const WAREHOUSES = ["W202", "A185", "F53", "A68", "Savla", "Rishi"];
+
+// Authority persons (managers who can authorise a stocktake)
+const MOCK_WAREHOUSES = WAREHOUSES.map((w) => ({ id: w, name: w }));
+const MOCK_AUTHORITIES = [
+  { id: "manager", name: "Inventory Manager" },
+  { id: "admin", name: "Admin" },
+  { id: "superuser", name: "Super User" },
+];
 
 export default function StartAudit() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [warehouse, setWarehouse] = useState("");
   const [auditDate, setAuditDate] = useState("");
+  const [authority, setAuthority] = useState("manager");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -38,7 +47,7 @@ export default function StartAudit() {
 
     // Validation
     if (!warehouse || !auditDate) {
-      setError("Warehouse and audit date are required");
+      setError("Warehouse and stocktake date are required");
       return;
     }
 
@@ -47,11 +56,11 @@ export default function StartAudit() {
     try {
       // Call backend API to start audit
       // Use warehouse name (backend will look it up)
-      const auditSession = await auditsAPI.startAudit(warehouse, auditDate, undefined, true);
+      await auditsAPI.startAudit(warehouse, auditDate, undefined, true);
 
       toast({
-        title: "Audit Started",
-        description: `Audit session started for ${warehouse} on ${auditDate}`,
+        title: "Stocktake Started",
+        description: `Stocktake session started for ${warehouse} on ${auditDate}`,
       });
 
       // Redirect to manager review page to see entries
@@ -97,11 +106,11 @@ export default function StartAudit() {
           {/* Header */}
           <div className="mb-6 sm:mb-8">
             <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mb-2">
-              Start New Audit
+              Start New Stocktake
             </h1>
             <p className="text-base sm:text-lg text-muted-foreground">
-              Select a warehouse and provide audit details to begin the stock
-              audit process
+              Select a warehouse and provide stocktake details to begin the stock
+              count process
             </p>
           </div>
 
@@ -136,14 +145,14 @@ export default function StartAudit() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Choose the warehouse where this audit will be conducted
+                  Choose the warehouse where this stocktake will be conducted
                 </p>
               </div>
 
               {/* Audit Date */}
               <div className="space-y-2">
                 <Label htmlFor="auditDate" className="text-foreground font-semibold">
-                  Audit Date
+                  Stocktake Date
                 </Label>
                 <Input
                   id="auditDate"
@@ -154,14 +163,14 @@ export default function StartAudit() {
                   className="bg-input border-input"
                 />
                 <p className="text-xs text-muted-foreground">
-                  The date on which this audit is being conducted
+                  The date on which this stocktake is being conducted
                 </p>
               </div>
 
               {/* Authority Person */}
               <div className="space-y-2">
                 <Label htmlFor="authority" className="text-foreground font-semibold">
-                  Authority Person (Auditor)
+                  Authority Person (Stocktaker)
                 </Label>
                 <Select value={authority} onValueChange={setAuthority}>
                   <SelectTrigger
@@ -180,7 +189,7 @@ export default function StartAudit() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  The person authorized to conduct and approve this audit
+                  The person authorized to conduct and approve this stocktake
                 </p>
               </div>
 
@@ -194,10 +203,10 @@ export default function StartAudit() {
                   {isLoading ? (
                     <>
                       <Loader className="w-4 h-4 mr-2 animate-spin" />
-                      Starting Audit...
+                      Starting Stocktake...
                     </>
                   ) : (
-                    "Start Audit"
+                    "Start Stocktake"
                   )}
                 </Button>
                 <Button
@@ -216,10 +225,10 @@ export default function StartAudit() {
           {/* Info Box */}
           <Card className="p-4 sm:p-6 mt-6 sm:mt-8 bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
             <h3 className="font-semibold text-sm sm:text-base text-blue-900 dark:text-blue-100 mb-2">
-              About Audit Sessions
+              About Stocktake Sessions
             </h3>
             <p className="text-xs sm:text-sm text-blue-800 dark:text-blue-200">
-              Once you start an audit, floor managers will be able to access the
+              Once you start a stocktake, floor managers will be able to access the
               system and enter stock counts for their assigned floors. You can review
               and approve entries once they are submitted.
             </p>

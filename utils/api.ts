@@ -318,8 +318,16 @@ export const stocktakeEntriesAPI = {
     return apiFetch(`/stocktake-entries?limit=${limit}`);
   },
 
-  getGroupedEntries: (warehouse: string, floorName: string) =>
-    apiFetch(`/stocktake-entries/grouped?warehouse=${encodeURIComponent(warehouse)}&floorName=${encodeURIComponent(floorName)}`),
+  getAvailableDates: () => apiFetch("/stocktake-entries/available-dates"),
+
+  getGroupedEntries: (warehouse: string, floorName: string, date?: string) => {
+    const params = new URLSearchParams({
+      warehouse: warehouse,
+      floorName: floorName,
+    });
+    if (date) params.append("date", date);
+    return apiFetch(`/stocktake-entries/grouped?${params.toString()}`);
+  },
 
   updateEntry: (entryId: string, data: any) =>
     apiFetch(`/stocktake-entries/${entryId}`, {
@@ -352,10 +360,10 @@ export const stocktakeEntriesAPI = {
   getAuditStatus: (warehouse: string) =>
     apiFetch(`/stocktake-entries/audit-status?warehouse=${encodeURIComponent(warehouse)}`),
 
-  saveResultsheet: (entries: Array<{ entryId: string; warehouse: string; floorName: string }>) =>
+  saveResultsheet: (entries: Array<{ entryId: string; warehouse: string; floorName: string }>, date?: string) =>
     apiFetch("/stocktake-entries/save-resultsheet", {
       method: "POST",
-      body: { entries },
+      body: { entries, date },
     }),
 
   clearAllEntries: () =>
@@ -409,6 +417,9 @@ export const resultsheetAPI = {
   getList: () => apiFetch("/stocktake-resultsheet/list"),
 
   getData: (date: string) => apiFetch(`/stocktake-resultsheet/${encodeURIComponent(date)}`),
+
+  getMergedData: (dates: string[]) =>
+    apiFetch(`/stocktake-resultsheet/merged?dates=${dates.join(",")}`),
 
   delete: (date: string) =>
     apiFetch(`/stocktake-resultsheet/${encodeURIComponent(date)}`, {
@@ -476,4 +487,24 @@ export const floorReviewAPI = {
 
   getFloorReview: (warehouse: string, floorName: string) =>
     apiFetch(`/floor-review-records?warehouse=${encodeURIComponent(warehouse)}&floorName=${encodeURIComponent(floorName)}`),
+};
+
+
+// Box QR-code lookup (CDPL / CFPL)
+export const boxesAPI = {
+  /**
+   * Look up a box by its QR-code data.
+   * Returns item details for StockTake form pre-fill.
+   */
+  lookup: (boxId: string, txnNo: string): Promise<{
+    boxId: string;
+    txnNo: string;
+    itemName: string;
+    itemType: string;
+    category: string;
+    subcategory: string;
+    unitUom: number;
+    source: "CDPL" | "CFPL";
+  }> =>
+    apiFetch(`/boxes/lookup?box_id=${encodeURIComponent(boxId)}&txn_no=${encodeURIComponent(txnNo)}`),
 };
