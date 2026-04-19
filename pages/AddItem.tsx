@@ -124,6 +124,9 @@ export default function AddItem() {
   // Pending search selection (for auto-fill after categorialData loads)
   const [pendingSelection, setPendingSelection] = useState<{group: string; subgroup: string; particulars: string; uom: number | null} | null>(null);
 
+  // Pending reverse-fill (BE-prefix bulk-entry scans: only itemName known, look up cat/subcat from categorialData)
+  const [pendingReverseFill, setPendingReverseFill] = useState<{particulars: string; uom: number | null} | null>(null);
+
   // Lock fields after search auto-fill
   const [isGroupLocked, setIsGroupLocked] = useState(false);
   const [isSubgroupLocked, setIsSubgroupLocked] = useState(false);
@@ -355,6 +358,55 @@ export default function AddItem() {
     }
   }, [pendingSelection, categorialData, isLoadingData]);
 
+  // Apply pending reverse-fill (BE-prefix bulk-entry scans) once categorialData loads
+  useEffect(() => {
+    if (pendingReverseFill && categorialData.length > 0 && !isLoadingData) {
+      const target = pendingReverseFill.particulars.trim().toUpperCase();
+      const fallbackUom = pendingReverseFill.uom;
+
+      let matched: { group: string; subgroup: string; uom: number | null } | null = null;
+      for (const g of categorialData) {
+        for (const sg of g.subgroups) {
+          const p = sg.particulars.find((x) => x.name.trim().toUpperCase() === target);
+          if (p) {
+            matched = { group: g.name, subgroup: sg.name, uom: p.uom ?? fallbackUom };
+            break;
+          }
+        }
+        if (matched) break;
+      }
+
+      if (matched) {
+        setTimeout(() => {
+          setCategory(matched!.group);
+          setTimeout(() => {
+            setSubcategory(matched!.subgroup);
+            setTimeout(() => {
+              setDescription(target);
+              const uomVal = matched!.uom;
+              if (uomVal !== null && uomVal !== undefined && !isNaN(uomVal)) {
+                setPackageSize(uomVal.toFixed(3));
+              }
+              setPendingReverseFill(null);
+            }, 100);
+          }, 100);
+        }, 100);
+      } else {
+        // No match — fall into OTHER category, prefill custom item name
+        setTimeout(() => {
+          setCategory("OTHER");
+          setTimeout(() => {
+            setCustomItemName(target);
+            if (fallbackUom !== null && fallbackUom !== undefined && !isNaN(fallbackUom)) {
+              setPackageSize(fallbackUom.toFixed(3));
+            }
+            setPendingReverseFill(null);
+          }, 100);
+        }, 100);
+      }
+    }
+  }, [pendingReverseFill, categorialData, isLoadingData]);
+
   // Reset subcategory and description when category changes
   useEffect(() => {
     if (!category) {
@@ -550,11 +602,17 @@ export default function AddItem() {
       setItemType(normalised);
     }
 
-    // Store as pending selection so it applies once categorialData loads
     if (result.category && result.subcategory) {
+      // Standard path — backend gave us full cat/subcat
       setPendingSelection({
         group: result.category.toUpperCase(),
         subgroup: result.subcategory.toUpperCase(),
+        particulars: result.itemName.toUpperCase(),
+        uom: result.unitUom || null,
+      });
+    } else if (result.itemName) {
+      // BE-prefix bulk-entry path — only itemName known, reverse-fill cat/subcat from categorialData
+      setPendingReverseFill({
         particulars: result.itemName.toUpperCase(),
         uom: result.unitUom || null,
       });

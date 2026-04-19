@@ -20,6 +20,7 @@ import ManagerReview from "./pages/ManagerReview";
 import AllEntriesSummary from "./pages/AllEntriesSummary";
 import ResultsheetView from "./pages/ResultsheetView";
 import UpdateSku from "./pages/UpdateSku";
+import ManageUsers from "./pages/ManageUsers";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -45,10 +46,11 @@ function AnimatedRoutes() {
         <Route path="/resultsheet" element={<ErrorBoundary pageName="Resultsheet"><PageTransition><ResultsheetView /></PageTransition></ErrorBoundary>} />
         <Route path="/resultsheet/:date" element={<ErrorBoundary pageName="Resultsheet"><PageTransition><ResultsheetView /></PageTransition></ErrorBoundary>} />
         <Route path="/update-sku" element={<ErrorBoundary pageName="Update SKU"><PageTransition><UpdateSku /></PageTransition></ErrorBoundary>} />
+        <Route path="/manage-users" element={<ErrorBoundary pageName="Manage Users"><PageTransition><ManageUsers /></PageTransition></ErrorBoundary>} />
 
         {/* Placeholder routes */}
         <Route path="/reports" element={<NotFound />} />
-        <Route path="/admin/users" element={<NotFound />} />
+        <Route path="/admin/users" element={<ErrorBoundary pageName="Manage Users"><PageTransition><ManageUsers /></PageTransition></ErrorBoundary>} />
         <Route path="/admin/floors" element={<NotFound />} />
         <Route path="/admin/items" element={<NotFound />} />
         <Route path="/admin/exports" element={<NotFound />} />

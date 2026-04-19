@@ -490,6 +490,43 @@ export const floorReviewAPI = {
 };
 
 
+export interface ManagedUser {
+  id: string;
+  username: string;
+  warehouse: string | null;
+  role: string;
+  name: string | null;
+  email: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedUserInput {
+  username?: string;
+  password?: string;
+  name?: string | null;
+  email?: string | null;
+  warehouse?: string | null;
+  role?: string;
+  isActive?: boolean;
+}
+
+// Manage Users CRUD (FLOOR_MANAGER only)
+export const usersAPI = {
+  list: (): Promise<{ success: boolean; count: number; users: ManagedUser[] }> =>
+    apiFetch("/users"),
+
+  create: (payload: ManagedUserInput): Promise<{ success: boolean; user: ManagedUser }> =>
+    apiFetch("/users", { method: "POST", body: payload }),
+
+  update: (id: string, payload: ManagedUserInput): Promise<{ success: boolean; user: ManagedUser }> =>
+    apiFetch(`/users/${encodeURIComponent(id)}`, { method: "PUT", body: payload }),
+
+  remove: (id: string): Promise<{ success: boolean; deletedId: string }> =>
+    apiFetch(`/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};
+
 // Box QR-code lookup (CDPL / CFPL)
 export const boxesAPI = {
   /**

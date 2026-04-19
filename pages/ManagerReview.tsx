@@ -467,19 +467,30 @@ export default function ManagerReview() {
       }
     }
 
-    if (checkedEntryIds.length === 0) {
-      toast({ title: "No checked items", description: "Please check at least one entry before saving", variant: "destructive" });
-      return;
-    }
-
     setSavingFloorReview(true);
     try {
-      await floorReviewAPI.saveFloorReview(checkedEntryIds);
+      // Skip the API call when nothing is checked — the backend SQL would build an
+      // invalid `WHERE id IN ()` clause. Still treat it as a successful save so the
+      // user can proceed (Excel download will flag unchecked rows).
+      if (checkedEntryIds.length > 0) {
+        await floorReviewAPI.saveFloorReview(checkedEntryIds);
+      }
 
       toast({
         title: "Floor saved",
-        description: `${checkedEntryIds.length} entries marked as checked for ${selectedWarehouse} - ${selectedFloor}`,
+        description:
+          checkedEntryIds.length > 0
+            ? `${checkedEntryIds.length} entries marked as checked. Downloading Excel…`
+            : `No entries were checked. Downloading Excel with all rows flagged as "Unchecked"…`,
       });
+
+      // Auto-download warehouse Excel right after a successful save.
+      // Wrapped in try/catch so a download failure doesn't undo the save toast.
+      try {
+        await handleDownloadWarehouseEntries();
+      } catch (dlErr: any) {
+        console.error("Auto-download after save failed:", dlErr);
+      }
     } catch (err: any) {
       console.error("Save floor review error:", err);
       toast({
@@ -1273,12 +1284,13 @@ export default function ManagerReview() {
         return stockType === "Off Grade/Rejection" || stockType === "Rejection";
       });
 
-      // Define headers
+      // Define headers — added "Checked" column so unchecked rows are flagged
       const headers = [
         "Entry ID",
-        "Item Name", 
+        "Checked",
+        "Item Name",
         "Item Type",
-        "Category", 
+        "Category",
         "Subcategory",
         "Floor Name",
         "Warehouse",
@@ -1292,8 +1304,9 @@ export default function ManagerReview() {
         "Date Updated"
       ];
 
-      // Check verification status: are ALL entries for this warehouse on the selected date checked?
-      let allVerified = true;
+      // Build a single Set of checked entry IDs from localStorage. Used both for
+      // the per-row "Checked" column and to compute the overall verification banner.
+      const checkedIds = new Set<string>();
       const floorItemMap = new Map<string, Set<string>>();
       response.entries.forEach((entry: any) => {
         const floor = (entry.floorName || entry.floor_name || "Unknown").toUpperCase();
@@ -1305,25 +1318,25 @@ export default function ManagerReview() {
         for (const itemName of itemNames) {
           const storageKey = `checkedEntries_${selectedWarehouse}_${floor}_${itemName}`;
           const saved = localStorage.getItem(storageKey);
-          if (!saved) {
-            allVerified = false;
-            break;
-          }
-          const checkedMap = JSON.parse(saved);
-          const floorEntries = response.entries.filter((e: any) =>
-            (e.floorName || e.floor_name || "").toUpperCase() === floor &&
-            (e.itemName || e.item_name || "").toUpperCase() === itemName
-          );
-          for (const e of floorEntries) {
-            if (!checkedMap[e.id]) {
-              allVerified = false;
-              break;
+          if (!saved) continue;
+          try {
+            const checkedMap = JSON.parse(saved) as Record<string, boolean>;
+            for (const [id, isChecked] of Object.entries(checkedMap)) {
+              if (isChecked) checkedIds.add(String(id));
             }
+          } catch {
+            // ignore malformed entries
           }
-          if (!allVerified) break;
         }
-        if (!allVerified) break;
       }
+
+      const isEntryChecked = (entry: any): boolean => {
+        if (entry.id !== undefined && checkedIds.has(String(entry.id))) return true;
+        // Fallback: trust the backend's persisted is_checked flag if it's already true
+        return entry.isChecked === true || entry.is_checked === true;
+      };
+
+      const allVerified = response.entries.length > 0 && response.entries.every(isEntryChecked);
 
       // Helper function to create a worksheet with data
       const createWorksheet = (sheetName: string, entries: any[], headerColor: string) => {
@@ -1383,8 +1396,10 @@ export default function ManagerReview() {
 
         // Add data rows
         entries.forEach((entry: any) => {
+          const checked = isEntryChecked(entry);
           const dataRow = [
             entry.id || "",
+            checked ? "Checked" : "Unchecked",
             entry.itemName || entry.item_name || "",
             entry.itemType || entry.item_type || "",
             entry.itemCategory || entry.item_category || "",
@@ -1400,10 +1415,10 @@ export default function ManagerReview() {
             entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "",
             entry.updatedAt ? new Date(entry.updatedAt).toLocaleString() : "",
           ];
-          
+
           const row = worksheet.addRow(dataRow);
-          
-          // Add borders to data cells
+
+          // Borders on every cell
           row.eachCell((cell) => {
             cell.border = {
               top: { style: "thin" },
@@ -1412,6 +1427,31 @@ export default function ManagerReview() {
               right: { style: "thin" },
             };
           });
+
+          // Style the Checked column itself (column index 2) and flag unchecked rows
+          const checkedCell = row.getCell(2);
+          checkedCell.alignment = { horizontal: "center", vertical: "middle" };
+          checkedCell.font = {
+            bold: true,
+            color: { argb: checked ? "FF1B5E20" : "FFB71C1C" },
+          };
+          checkedCell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: checked ? "FFE2EFDA" : "FFFCE4EC" },
+          };
+
+          if (!checked) {
+            // Tint the whole row light red so unchecked entries stand out
+            row.eachCell((cell, colNumber) => {
+              if (colNumber === 2) return; // already styled above
+              cell.fill = {
+                type: "pattern",
+                pattern: "solid",
+                fgColor: { argb: "FFFDECEA" },
+              };
+            });
+          }
         });
 
         // Auto-fit columns
@@ -2884,6 +2924,10 @@ export default function ManagerReview() {
                                         (entry as any).stockType === "Off Grade/Rejection" || (entry as any).stockType === "Rejection"
                                           ? isChecked ? "mr-qty-box-reject-checked" : "mr-qty-box-reject"
                                           : isChecked ? "mr-qty-box-fresh-checked" : "mr-qty-box-fresh"
+                                      } ${
+                                        (user?.role === 'INVENTORY_MANAGER' || user?.role === 'ADMIN' || user?.role === 'SUPERUSER')
+                                          ? 'mr-qty-box-with-delete'
+                                          : ''
                                       }`}
                                       onMouseDown={(e) => {
                                         if (e.button === 0 && !editingQuantity) {

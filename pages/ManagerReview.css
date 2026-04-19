@@ -1552,6 +1552,21 @@
   user-select: none;
 }
 
+/* Widen card when delete btn is present so it doesn't collide with UOM / weight text */
+.mr-qty-box-with-delete,
+.mr-qty-box:has(.mr-qty-delete-btn) {
+  min-width: 120px !important;
+  padding-bottom: 2.25rem !important;
+}
+
+/* Anchor delete button below the text instead of overlapping it */
+.mr-qty-box-with-delete .mr-qty-delete-btn,
+.mr-qty-box:has(.mr-qty-delete-btn) .mr-qty-delete-btn {
+  bottom: 0.375rem;
+  right: 50%;
+  transform: translateX(50%);
+}
+
 .mr-qty-box:hover {
   transform: scale(1.05);
 }

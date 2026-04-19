@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loader, LogOut, Package, FileText, Calendar, Warehouse, Edit2, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight, Trash2, Download } from "lucide-react";
+import { Loader, LogOut, Package, FileText, Calendar, Warehouse, Edit2, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight, Trash2, Download, Users } from "lucide-react";
 import {
   Accordion,
   AccordionContent,
@@ -549,6 +549,11 @@ export default function Dashboard() {
           label: "Enter Stock for Floor",
           icon: Package,
           action: () => navigate("/audit/floor-selection"),
+        },
+        {
+          label: "Manage Users",
+          icon: Users,
+          action: () => navigate("/manage-users"),
         },
       ],
     },
