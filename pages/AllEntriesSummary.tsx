@@ -743,7 +743,10 @@ export default function AllEntriesSummary() {
                         <span className="font-medium text-foreground truncate mr-2">{whInfo.name}</span>
                         <span className="shrink-0">{whInfo.totalWeight.toFixed(2)} kg ({pct.toFixed(1)}%)</span>
                       </div>
-                      <div className="w-full h-5 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="w-full h-5 bg-muted rounded-full overflow-hidden cursor-help"
+                        title={`${whInfo.name}: ${whInfo.totalWeight.toFixed(2)} kg (${pct.toFixed(1)}%)`}
+                      >
                         <div
                           className="h-full rounded-full transition-all duration-500"
                           style={{ width: `${pct}%`, backgroundColor: "#3B6D11" }}
@@ -761,11 +764,23 @@ export default function AllEntriesSummary() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 sm:mb-8">
               <div className="rounded-xl p-4 sm:p-6" style={{ backgroundColor: "#EAF3DE" }}>
                 <p className="text-xs sm:text-sm font-medium mb-1" style={{ color: "#3B6D11" }}>Fresh Stock Weight</p>
-                <p className="text-2xl sm:text-3xl font-bold" style={{ color: "#3B6D11" }}>{totalFreshWeight.toFixed(2)} kg</p>
+                <p className="text-2xl sm:text-3xl font-bold" style={{ color: "#3B6D11" }}>
+                  <AnimatedNumber
+                    value={totalFreshWeight}
+                    format={(n) => n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                  />
+                  {" "}kg
+                </p>
               </div>
               <div className="rounded-xl p-4 sm:p-6" style={{ backgroundColor: "#FAEEDA" }}>
                 <p className="text-xs sm:text-sm font-medium mb-1" style={{ color: "#633806" }}>Off Grade / Rejection Weight</p>
-                <p className="text-2xl sm:text-3xl font-bold" style={{ color: "#633806" }}>{totalOffGradeWeight.toFixed(2)} kg</p>
+                <p className="text-2xl sm:text-3xl font-bold" style={{ color: "#633806" }}>
+                  <AnimatedNumber
+                    value={totalOffGradeWeight}
+                    format={(n) => n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                  />
+                  {" "}kg
+                </p>
               </div>
             </div>
           )}
@@ -960,7 +975,10 @@ export default function AllEntriesSummary() {
                             {i4SortMode === 'weight' ? `${item.weight.toFixed(1)} kg` : `${item.count} entries`}
                           </span>
                         </div>
-                        <div className="w-full h-4 bg-muted rounded overflow-hidden">
+                        <div
+                          className="w-full h-4 bg-muted rounded overflow-hidden cursor-help"
+                          title={`${item.name}: ${item.weight.toFixed(2)} kg · ${item.count} entries`}
+                        >
                           <div
                             className="h-full rounded"
                             style={{
