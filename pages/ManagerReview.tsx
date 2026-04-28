@@ -13,6 +13,7 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { motion } from "framer-motion";
 import { stocktakeEntriesAPI, categorialInvAPI, floorReviewAPI } from "@/utils/api";
 import {
@@ -2211,54 +2212,64 @@ export default function ManagerReview() {
                 : allItems;
               return allItems.length > 0 ? (
               <div className="mr-items-space">
-                {/* Save Floor Entry Button */}
+                {/* Compact toolbar — Save Floor + Add Item in a single row */}
                 {!itemSearchQuery && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <Card
-                    className={`mr-save-floor-card ${savingFloorReview ? "saving" : ""}`}
-                    onClick={handleSaveFloorReview}
-                    style={{ touchAction: 'manipulation' }}
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.2 }}
+                    style={{ display: 'flex', gap: 8, marginBottom: 12 }}
                   >
-                    <div className="mr-save-floor-inner">
+                    <button
+                      onClick={handleSaveFloorReview}
+                      disabled={savingFloorReview}
+                      style={{
+                        flex: 1,
+                        minHeight: 40,
+                        borderRadius: 8,
+                        border: '1px solid #1B6FC8',
+                        background: savingFloorReview ? '#94B8DD' : '#1B6FC8',
+                        color: '#fff',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: savingFloorReview ? 'wait' : 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        touchAction: 'manipulation',
+                      }}
+                    >
                       {savingFloorReview ? (
-                        <Loader className="mr-save-floor-icon mr-loader-xs" style={{ animation: 'spin 1s linear infinite' }} />
+                        <Loader style={{ width: 14, height: 14, animation: 'spin 1s linear infinite' }} />
                       ) : (
-                        <div className="mr-save-floor-icon-wrap">
-                          <Save className="mr-save-floor-icon" />
-                        </div>
+                        <Save style={{ width: 14, height: 14 }} />
                       )}
-                      <span className="mr-save-floor-text">
-                        {savingFloorReview ? "Saving..." : "Save Floor Entry"}
-                      </span>
-                    </div>
-                  </Card>
-                </motion.div>
-                )}
-
-                {/* Add Item Card */}
-                {!itemSearchQuery && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <Card
-                    className="mr-add-item-card"
-                    onClick={() => setAddItemDrawerOpen(true)}
-                    style={{ touchAction: 'manipulation' }}
-                  >
-                    <div className="mr-add-item-inner">
-                      <div className="mr-add-item-icon-wrap">
-                        <Plus className="mr-add-item-icon" />
-                      </div>
-                      <span className="mr-add-item-text">Add New Item</span>
-                    </div>
-                  </Card>
-                </motion.div>
+                      {savingFloorReview ? 'Saving…' : 'Save Floor'}
+                    </button>
+                    <button
+                      onClick={() => setAddItemDrawerOpen(true)}
+                      style={{
+                        flex: 1,
+                        minHeight: 40,
+                        borderRadius: 8,
+                        border: '1px dashed #9CA3AF',
+                        background: '#F4F6FA',
+                        color: '#1F2937',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        touchAction: 'manipulation',
+                      }}
+                    >
+                      <Plus style={{ width: 14, height: 14 }} />
+                      Add Item
+                    </button>
+                  </motion.div>
                 )}
 
                 {filteredItems.length === 0 ? (
@@ -3120,48 +3131,50 @@ export default function ManagerReview() {
       </Drawer>
 
 
-      {/* E7: Delete Confirmation Modal */}
-      {deleteModalOpen && deleteTarget && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: 20, paddingBottom: 'max(20px, env(safe-area-inset-bottom))', width: '100%', maxWidth: 480 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <AlertTriangle style={{ color: '#A32D2D', width: 20, height: 20 }} />
-              <h3 style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>Delete this entry?</h3>
-            </div>
-            <div style={{ background: '#F4F6FA', borderRadius: 8, padding: 12, marginBottom: 12 }}>
-              <p style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>Item: {deleteTarget.itemName}</p>
-              <p style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>Qty: {deleteTarget.units} units · {deleteTarget.totalWeight.toFixed(2)} kg</p>
-              <p style={{ fontSize: 12, color: '#6B7280' }}>By: {deleteTarget.userName} {deleteTarget.createdAt ? `· ${new Date(deleteTarget.createdAt).toLocaleDateString()}` : ''}</p>
-              <p style={{ fontSize: 12, color: '#6B7280' }}>Type: {deleteTarget.stockType}</p>
-            </div>
-            <label style={{ fontSize: 12, color: '#374151', display: 'block', marginBottom: 4 }}>Reason (optional, max 120 chars):</label>
-            <input
-              type="text"
-              maxLength={120}
-              value={deleteReason}
-              onChange={e => setDeleteReason(e.target.value)}
-              placeholder="Reason for deletion..."
-              style={{ width: '100%', border: '1px solid #D1D5DB', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 8, boxSizing: 'border-box', minHeight: 44 }}
-            />
-            {deleteConfirmStep === 2 && (
-              <p style={{ fontSize: 12, color: '#A32D2D', marginBottom: 8, fontWeight: 500 }}>
-                This is permanent. A log is recorded. Click Delete again to confirm.
-              </p>
-            )}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                onClick={() => { setDeleteModalOpen(false); setDeleteConfirmStep(1); }}
-                style={{ flex: 1, minHeight: 44, borderRadius: 8, border: '1px solid #D1D5DB', background: '#F4F6FA', fontSize: 14, cursor: 'pointer', fontWeight: 500 }}
-              >Cancel</button>
-              <button
-                onClick={handleConfirmDelete}
-                disabled={isDeleting}
-                style={{ flex: 1, minHeight: 44, borderRadius: 8, border: '1px solid #F09595', background: '#FCEBEB', color: '#791F1F', fontSize: 14, cursor: 'pointer', fontWeight: 600, opacity: isDeleting ? 0.6 : 1 }}
-              >{isDeleting ? 'Deleting…' : deleteConfirmStep === 1 ? 'Delete entry' : 'Confirm delete'}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* E7: Delete Confirmation Modal — uses Dialog for proper focus mgmt over nested drawers */}
+      <Dialog open={deleteModalOpen && !!deleteTarget} onOpenChange={(open) => { if (!open) { setDeleteModalOpen(false); setDeleteConfirmStep(1); } }}>
+        <DialogContent className="max-w-md w-full p-5 z-[99999]">
+          {deleteTarget && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <AlertTriangle style={{ color: '#A32D2D', width: 20, height: 20 }} />
+                <h3 style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>Delete this entry?</h3>
+              </div>
+              <div style={{ background: '#F4F6FA', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <p style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>Item: {deleteTarget.itemName}</p>
+                <p style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>Qty: {deleteTarget.units} units · {deleteTarget.totalWeight.toFixed(2)} kg</p>
+                <p style={{ fontSize: 12, color: '#6B7280' }}>By: {deleteTarget.userName} {deleteTarget.createdAt ? `· ${new Date(deleteTarget.createdAt).toLocaleDateString()}` : ''}</p>
+                <p style={{ fontSize: 12, color: '#6B7280' }}>Type: {deleteTarget.stockType}</p>
+              </div>
+              <label style={{ fontSize: 12, color: '#374151', display: 'block', marginBottom: 4 }}>Reason (optional, max 120 chars):</label>
+              <input
+                type="text"
+                maxLength={120}
+                value={deleteReason}
+                onChange={e => setDeleteReason(e.target.value)}
+                placeholder="Reason for deletion..."
+                style={{ width: '100%', border: '1px solid #D1D5DB', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 8, boxSizing: 'border-box', minHeight: 44 }}
+              />
+              {deleteConfirmStep === 2 && (
+                <p style={{ fontSize: 12, color: '#A32D2D', marginBottom: 8, fontWeight: 500 }}>
+                  This is permanent. A log is recorded. Click Delete again to confirm.
+                </p>
+              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => { setDeleteModalOpen(false); setDeleteConfirmStep(1); }}
+                  style={{ flex: 1, minHeight: 44, borderRadius: 8, border: '1px solid #D1D5DB', background: '#F4F6FA', fontSize: 14, cursor: 'pointer', fontWeight: 500 }}
+                >Cancel</button>
+                <button
+                  onClick={handleConfirmDelete}
+                  disabled={isDeleting}
+                  style={{ flex: 1, minHeight: 44, borderRadius: 8, border: '1px solid #F09595', background: '#FCEBEB', color: '#791F1F', fontSize: 14, cursor: 'pointer', fontWeight: 600, opacity: isDeleting ? 0.6 : 1 }}
+                >{isDeleting ? 'Deleting…' : deleteConfirmStep === 1 ? 'Delete entry' : 'Confirm delete'}</button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* G5: Changelog Panel */}
       {changelogOpen && changelogEntry && (
