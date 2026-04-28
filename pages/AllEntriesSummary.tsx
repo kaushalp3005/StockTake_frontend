@@ -616,39 +616,52 @@ export default function AllEntriesSummary() {
             </Button>
           </div>
 
-          {/* ── I1 KPI Strip – 5 cards */}
+          {/* ── I1 KPI Strip – 5 cards (animated, classic) */}
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 sm:gap-6 mb-6 sm:mb-8">
-            <Card className="p-4 sm:p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
-              <p className="text-xs sm:text-sm text-muted-foreground mb-2">Warehouses</p>
-              <p className="text-3xl sm:text-4xl font-bold text-primary">{Object.keys(warehouseData).length}</p>
-            </Card>
-            <Card className="p-4 sm:p-6 bg-gradient-to-br from-blue-500/10 to-blue-500/5 border-blue-500/20">
-              <p className="text-xs sm:text-sm text-muted-foreground mb-2">Total Entries</p>
-              <p className="text-3xl sm:text-4xl font-bold text-blue-600 dark:text-blue-400">{totalGrandItems}</p>
-            </Card>
-            <Card className="p-4 sm:p-6 bg-gradient-to-br from-green-500/10 to-green-500/5 border-green-500/20">
-              <p className="text-xs sm:text-sm text-muted-foreground mb-2">Total Weight</p>
-              <p className="text-3xl sm:text-4xl font-bold text-green-600 dark:text-green-400">{totalGrandWeight.toFixed(2)} kg</p>
-            </Card>
-            <Card className="p-4 sm:p-6 bg-gradient-to-br from-purple-500/10 to-purple-500/5 border-purple-500/20">
-              <p className="text-xs sm:text-sm text-muted-foreground mb-2">Verified</p>
-              <p className="text-3xl sm:text-4xl font-bold text-purple-600 dark:text-purple-400">
-                {verifiedCount}
-                {totalGrandItems > 0 && (
-                  <span className="text-lg font-normal text-muted-foreground ml-1">
-                    ({Math.round((verifiedCount / totalGrandItems) * 100)}%)
-                  </span>
-                )}
-              </p>
-            </Card>
-            <Card className="p-4 sm:p-6 bg-gradient-to-br from-orange-500/10 to-orange-500/5 border-orange-500/20">
-              <p className="text-xs sm:text-sm text-muted-foreground mb-2">Floors Covered</p>
-              <p className="text-3xl sm:text-4xl font-bold text-orange-600 dark:text-orange-400">{totalFloorsCovered}</p>
-            </Card>
+            <KpiCard
+              label="Warehouses"
+              value={Object.keys(warehouseData).length}
+              gradient="bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20"
+              textColor="text-primary"
+              onClick={() => setActiveTab("warehouses")}
+            />
+            <KpiCard
+              label="Total Entries"
+              value={totalGrandItems}
+              gradient="bg-gradient-to-br from-blue-500/10 to-blue-500/5 border-blue-500/20"
+              textColor="text-blue-600 dark:text-blue-400"
+            />
+            <KpiCard
+              label="Total Weight"
+              value={totalGrandWeight}
+              suffix="kg"
+              gradient="bg-gradient-to-br from-green-500/10 to-green-500/5 border-green-500/20"
+              textColor="text-green-600 dark:text-green-400"
+              format={(n) => n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+            />
+            <KpiCard
+              label="Verified"
+              value={verifiedCount}
+              suffix={
+                totalGrandItems > 0
+                  ? `(${Math.round((verifiedCount / totalGrandItems) * 100)}%)`
+                  : undefined
+              }
+              gradient="bg-gradient-to-br from-purple-500/10 to-purple-500/5 border-purple-500/20"
+              textColor="text-purple-600 dark:text-purple-400"
+            />
+            <KpiCard
+              label="Floors Covered"
+              value={totalFloorsCovered}
+              gradient="bg-gradient-to-br from-orange-500/10 to-orange-500/5 border-orange-500/20"
+              textColor="text-orange-600 dark:text-orange-400"
+            />
           </div>
 
+          <TabBar active={activeTab} onChange={setActiveTab} />
+
           {/* ── I3 Bar chart – weight by warehouse */}
-          {Object.keys(warehouseData).length > 0 && (
+          {activeTab === "overview" && Object.keys(warehouseData).length > 0 && (
             <Card className="p-4 sm:p-6 mb-6 sm:mb-8 border-border">
               <h2 className="text-base sm:text-lg font-semibold text-foreground mb-4">Weight Distribution by Warehouse</h2>
               <div className="space-y-3">
@@ -674,7 +687,7 @@ export default function AllEntriesSummary() {
           )}
 
           {/* ── I5 Fresh vs Off-Grade summary */}
-          {Object.keys(warehouseData).length > 0 && (
+          {activeTab === "overview" && Object.keys(warehouseData).length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 sm:mb-8">
               <div className="rounded-xl p-4 sm:p-6" style={{ backgroundColor: "#EAF3DE" }}>
                 <p className="text-xs sm:text-sm font-medium mb-1" style={{ color: "#3B6D11" }}>Fresh Stock Weight</p>
@@ -688,12 +701,12 @@ export default function AllEntriesSummary() {
           )}
 
           {/* ── Warehouse Breakdown heading */}
-          {Object.keys(warehouseData).length > 0 && (
+          {activeTab === "warehouses" && Object.keys(warehouseData).length > 0 && (
             <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-4 sm:mb-6">Warehouse Breakdown</h2>
           )}
 
           {/* ── I2 Floor breakdown table per warehouse */}
-          {Object.keys(warehouseData).length === 0 ? (
+          {activeTab === "warehouses" && (Object.keys(warehouseData).length === 0 ? (
             <Card className="p-6 sm:p-12 text-center bg-muted/50">
               <BarChart3 className="w-10 h-10 sm:w-12 sm:h-12 text-muted-foreground mx-auto mb-4" />
               <p className="text-base sm:text-lg font-semibold text-foreground mb-1">No entries found</p>
@@ -797,10 +810,10 @@ export default function AllEntriesSummary() {
                 );
               })}
             </div>
-          )}
+          ))}
 
           {/* ── I4 Quantity & Weight Metrics */}
-          {filteredEntries.length > 0 && (
+          {activeTab === "categories" && filteredEntries.length > 0 && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mt-6 sm:mt-8">
               {/* LEFT: Top 10 Items by Weight — horizontal bar chart */}
               <Card className="border-border overflow-hidden">
@@ -906,7 +919,7 @@ export default function AllEntriesSummary() {
           )}
 
           {/* ── I5 Entry Quality & Edit Analysis */}
-          {filteredEntries.length > 0 && (
+          {activeTab === "overview" && filteredEntries.length > 0 && (
             <div className="mt-6 sm:mt-8 space-y-4">
               {/* Part 1: User Activity Table */}
               <Card className="border-border overflow-hidden">
@@ -993,6 +1006,7 @@ export default function AllEntriesSummary() {
           )}
 
           {/* ── I7 AI Analysis panel */}
+          {activeTab === "ai" && (
           <Card className="mt-6 sm:mt-8 border-border overflow-hidden">
             <div className="p-4 sm:p-6 border-b border-border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <h2 className="text-base sm:text-lg font-semibold text-foreground">AI Analysis</h2>
@@ -1040,6 +1054,7 @@ export default function AllEntriesSummary() {
               )}
             </div>
           </Card>
+          )}
 
           {/* Quantity summary */}
           {totalGrandQuantity > 0 && (
