@@ -55,6 +55,119 @@ function isOffGrade(stockType?: string): boolean {
   return stockType === "Off Grade/Rejection";
 }
 
+function AnimatedNumber({
+  value,
+  duration = 600,
+  format = (n: number) => n.toLocaleString("en-IN"),
+}: {
+  value: number;
+  duration?: number;
+  format?: (n: number) => string;
+}) {
+  const [display, setDisplay] = useState(0);
+  const startRef = useRef<number | null>(null);
+  const fromRef = useRef(0);
+
+  useEffect(() => {
+    fromRef.current = display;
+    startRef.current = null;
+    let raf = 0;
+    const step = (ts: number) => {
+      if (startRef.current === null) startRef.current = ts;
+      const elapsed = ts - startRef.current;
+      const t = Math.min(1, elapsed / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const next = fromRef.current + (value - fromRef.current) * eased;
+      setDisplay(next);
+      if (t < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, duration]);
+
+  return <>{format(display)}</>;
+}
+
+function KpiCard({
+  label,
+  value,
+  suffix,
+  gradient,
+  textColor,
+  onClick,
+  format,
+}: {
+  label: string;
+  value: number;
+  suffix?: string;
+  gradient: string;
+  textColor: string;
+  onClick?: () => void;
+  format?: (n: number) => string;
+}) {
+  const interactive = !!onClick;
+  return (
+    <Card
+      onClick={onClick}
+      className={`p-4 sm:p-6 ${gradient} transition-all duration-150 ${
+        interactive ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-md" : ""
+      }`}
+    >
+      <p className="text-xs sm:text-sm text-muted-foreground mb-2">{label}</p>
+      <p className={`text-3xl sm:text-4xl font-bold ${textColor}`}>
+        <AnimatedNumber
+          value={value}
+          format={format ?? ((n) => Math.round(n).toLocaleString("en-IN"))}
+        />
+        {suffix && <span className="text-lg font-normal text-muted-foreground ml-1">{suffix}</span>}
+      </p>
+    </Card>
+  );
+}
+
+type TabKey = "overview" | "warehouses" | "categories" | "ai";
+
+function TabBar({
+  active,
+  onChange,
+}: {
+  active: TabKey;
+  onChange: (k: TabKey) => void;
+}) {
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: "overview", label: "Overview" },
+    { key: "warehouses", label: "Warehouses" },
+    { key: "categories", label: "Categories" },
+    { key: "ai", label: "AI Insights" },
+  ];
+  return (
+    <div className="border-b border-border mb-6 sm:mb-8 -mx-4 sm:mx-0 px-4 sm:px-0 overflow-x-auto">
+      <div className="flex gap-1 sm:gap-2 min-w-max">
+        {tabs.map((t) => {
+          const isActive = active === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => onChange(t.key)}
+              className={`relative px-4 py-3 text-sm sm:text-base font-medium whitespace-nowrap transition-colors ${
+                isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t.label}
+              <span
+                className={`absolute left-2 right-2 -bottom-px h-0.5 rounded-full transition-all duration-200 ${
+                  isActive ? "bg-primary opacity-100" : "bg-transparent opacity-0"
+                }`}
+              />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function AllEntriesSummary() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -71,6 +184,21 @@ export default function AllEntriesSummary() {
   // I4 chart interaction state
   const [i4SortMode, setI4SortMode] = useState<'weight' | 'count'>('weight');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [excludedFloors, setExcludedFloors] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [warehouseSearch, setWarehouseSearch] = useState("");
+  const [warehouseSort, setWarehouseSort] = useState<"weight" | "items" | "name">("weight");
+  const [aiHasLoaded, setAiHasLoaded] = useState(false);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const [filterBarStuck, setFilterBarStuck] = useState(false);
+
+  const toggleFloor = (key: string) => {
+    setExcludedFloors(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
 
   // Auth check — only managers/admins may view this page
   useEffect(() => {
@@ -336,30 +464,6 @@ export default function AllEntriesSummary() {
   const totalOffGradeWeight = filteredEntries.filter((e) => isOffGrade(e.stockType)).reduce((s, e) => s + (Number(e.totalWeight) || 0), 0);
   const verifiedCount = filteredEntries.filter((e) => e.verified).length;
 
-  // I6 — cross-floor item movement
-  const itemFlowData = (() => {
-    const itemFloorMap = new Map<string, { floors: Map<string, number>; itemType: string }>();
-    filteredEntries.forEach((e) => {
-      const key = e.itemName?.toUpperCase() || "";
-      if (!itemFloorMap.has(key)) itemFloorMap.set(key, { floors: new Map(), itemType: e.itemType || "" });
-      const floorKey = (e.floorName || "Unknown").toUpperCase();
-      const cur = itemFloorMap.get(key)!.floors.get(floorKey) || 0;
-      itemFloorMap.get(key)!.floors.set(floorKey, cur + (Number(e.totalWeight) || 0));
-    });
-
-    return Array.from(itemFloorMap.entries())
-      .filter(([, v]) => v.floors.size >= 2)
-      .map(([itemName, v]) => {
-        const weights = Array.from(v.floors.values());
-        const total = weights.reduce((s, w) => s + w, 0);
-        const avg = total / weights.length;
-        const variance = avg > 0 ? ((Math.max(...weights) - Math.min(...weights)) / avg) * 100 : 0;
-        return { itemName, itemType: v.itemType, floors: v.floors.size, total, variance };
-      })
-      .sort((a, b) => b.variance - a.variance)
-      .slice(0, 30);
-  })();
-
   // I4 – Top items by weight + category breakdown
   const itemWeightMap = (() => {
     const m = new Map<string, { weight: number; count: number; itemType: string }>();
@@ -599,22 +703,48 @@ export default function AllEntriesSummary() {
             </Card>
           ) : (
             <div className="space-y-4 sm:space-y-6">
-              {Object.entries(warehouseData).map(([warehouseId, warehouseInfo]) => (
+              {Object.entries(warehouseData).map(([warehouseId, warehouseInfo]) => {
+                const visibleFloorTotal = Object.entries(warehouseInfo.floors).reduce((sum, [floorId, info]) => {
+                  return excludedFloors.has(`${warehouseId}::${floorId}`) ? sum : sum + info.totalWeight;
+                }, 0);
+                const allFloorKeys = Object.keys(warehouseInfo.floors).map(f => `${warehouseId}::${f}`);
+                const allExcluded = allFloorKeys.every(k => excludedFloors.has(k));
+                const toggleAll = () => {
+                  setExcludedFloors(prev => {
+                    const next = new Set(prev);
+                    if (allExcluded) {
+                      allFloorKeys.forEach(k => next.delete(k));
+                    } else {
+                      allFloorKeys.forEach(k => next.add(k));
+                    }
+                    return next;
+                  });
+                };
+                return (
                 <Card key={warehouseId} className="border-border overflow-hidden">
                   <div className="p-4 sm:p-6 bg-gradient-to-r from-primary/10 to-primary/5 border-b border-border">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                       <h3 className="text-xl sm:text-2xl font-bold text-foreground">{warehouseInfo.name}</h3>
                       <div className="text-left sm:text-right">
-                        <p className="text-xs sm:text-sm text-muted-foreground">Total Weight</p>
-                        <p className="text-xl sm:text-2xl font-bold text-primary">{warehouseInfo.totalWeight.toFixed(2)} kg</p>
+                        <p className="text-xs sm:text-sm text-muted-foreground">Total Weight (selected)</p>
+                        <p className="text-xl sm:text-2xl font-bold text-primary">{visibleFloorTotal.toFixed(2)} kg</p>
                       </div>
                     </div>
                   </div>
 
                   <div className="p-4 sm:p-6 overflow-x-auto">
-                    <table className="text-sm border-collapse min-w-[520px] w-full">
+                    <table className="text-sm border-collapse min-w-[560px] w-full">
                       <thead>
                         <tr className="border-b border-border bg-muted/40">
+                          <th className="py-2 px-3 font-semibold text-foreground whitespace-nowrap text-center" style={{ width: 36 }}>
+                            <input
+                              type="checkbox"
+                              checked={!allExcluded}
+                              onChange={toggleAll}
+                              className="cursor-pointer"
+                              title={allExcluded ? "Select all floors" : "Deselect all floors"}
+                            />
+                          </th>
                           <th className="text-left py-2 px-3 font-semibold text-foreground whitespace-nowrap" style={{ minWidth: 130 }}>Floor</th>
                           <th className="text-right py-2 px-3 font-semibold text-foreground whitespace-nowrap">Entries</th>
                           <th className="text-right py-2 px-3 font-semibold text-foreground whitespace-nowrap">Fresh Weight</th>
@@ -630,7 +760,8 @@ export default function AllEntriesSummary() {
                             return a.localeCompare(b);
                           })
                           .map(([floorId, floorInfo]) => {
-                            // Compute fresh/offgrade from the raw entries
+                            const floorKey = `${warehouseId}::${floorId}`;
+                            const isExcluded = excludedFloors.has(floorKey);
                             const floorEntries = filteredEntries.filter(
                               (e) => e.warehouse === warehouseId && (e.floorName || "Unknown").toUpperCase() === floorId
                             );
@@ -638,7 +769,19 @@ export default function AllEntriesSummary() {
                             const offW = floorEntries.filter((e) => isOffGrade(e.stockType)).reduce((s, e) => s + (Number(e.totalWeight) || 0), 0);
 
                             return (
-                              <tr key={floorId} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
+                              <tr
+                                key={floorId}
+                                className={`border-b border-border/50 hover:bg-muted/30 transition-colors cursor-pointer ${isExcluded ? "opacity-40" : ""}`}
+                                onClick={() => toggleFloor(floorKey)}
+                              >
+                                <td className="py-2 px-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!isExcluded}
+                                    onChange={() => toggleFloor(floorKey)}
+                                    className="cursor-pointer"
+                                  />
+                                </td>
                                 <td className="py-2 px-3 font-medium text-foreground whitespace-nowrap">{floorId}</td>
                                 <td className="py-2 px-3 text-right text-muted-foreground whitespace-nowrap">{floorInfo.itemCount}</td>
                                 <td className="py-2 px-3 text-right font-medium whitespace-nowrap" style={{ color: "#3B6D11" }}>{freshW.toFixed(2)} kg</td>
@@ -651,7 +794,8 @@ export default function AllEntriesSummary() {
                     </table>
                   </div>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -847,58 +991,6 @@ export default function AllEntriesSummary() {
               )}
             </div>
           )}
-
-          {/* ── I6 Item Movement panel */}
-          <Card className="mt-6 sm:mt-8 border-border overflow-hidden">
-            <div className="p-4 sm:p-6 border-b border-border">
-              <h2 className="text-base sm:text-lg font-semibold text-foreground">Item Movement</h2>
-            </div>
-            <div className="p-4 sm:p-6">
-              {itemFlowData.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No cross-floor items found.</p>
-              ) : (
-                <div className="overflow-x-auto -mx-4 sm:mx-0">
-                  <table className="text-sm border-collapse min-w-[600px] w-full">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/40">
-                        <th className="text-left py-2 px-3 font-semibold text-foreground whitespace-nowrap" style={{ minWidth: 180 }}>Item</th>
-                        <th className="text-left py-2 px-3 font-semibold text-foreground whitespace-nowrap" style={{ minWidth: 70 }}>Item Type</th>
-                        <th className="text-right py-2 px-3 font-semibold text-foreground whitespace-nowrap">Floors</th>
-                        <th className="text-right py-2 px-3 font-semibold text-foreground whitespace-nowrap">Total Weight (kg)</th>
-                        <th className="text-right py-2 px-3 font-semibold text-foreground whitespace-nowrap">Variance</th>
-                        <th className="text-center py-2 px-3 font-semibold text-foreground whitespace-nowrap">Flag</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {itemFlowData.map((row) => {
-                        const isAmber = row.variance > 5;
-                        return (
-                          <tr
-                            key={row.itemName}
-                            className="border-b border-border/50 transition-colors"
-                            style={isAmber ? { backgroundColor: "#FAEEDA", color: "#633806" } : undefined}
-                          >
-                            <td className="py-2 px-3 font-medium whitespace-nowrap">{row.itemName}</td>
-                            <td className="py-2 px-3 whitespace-nowrap">{row.itemType || "—"}</td>
-                            <td className="py-2 px-3 text-right whitespace-nowrap">{row.floors}</td>
-                            <td className="py-2 px-3 text-right whitespace-nowrap">{row.total.toFixed(2)}</td>
-                            <td className="py-2 px-3 text-right whitespace-nowrap">{row.variance.toFixed(1)}%</td>
-                            <td className="py-2 px-3 text-center whitespace-nowrap">
-                              {isAmber ? (
-                                <span style={{ color: "#B45309", fontWeight: 600 }}>⚠ High</span>
-                              ) : (
-                                <span style={{ color: "#16A34A", fontWeight: 600 }}>✓ OK</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </Card>
 
           {/* ── I7 AI Analysis panel */}
           <Card className="mt-6 sm:mt-8 border-border overflow-hidden">
