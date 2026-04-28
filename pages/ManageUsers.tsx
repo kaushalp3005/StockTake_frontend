@@ -63,7 +63,7 @@ export default function ManageUsers() {
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState("");
 
-  // Auth gate — FLOOR_MANAGER, ADMIN, and SUPERUSER may view this page
+  // Auth gate — only FLOOR_MANAGER and SUPERUSER (not FLOORHEAD, not ADMIN)
   useEffect(() => {
     const userStr = localStorage.getItem("user");
     if (!userStr) {
@@ -71,8 +71,10 @@ export default function ManageUsers() {
       return;
     }
     const u = JSON.parse(userStr);
-    const allowed = ["FLOOR_MANAGER", "ADMIN", "SUPERUSER"];
-    if (!allowed.includes(u.role)) {
+    const dbRoleUpper = (u.dbRole || "").toUpperCase();
+    const isFloorHead = dbRoleUpper === "FLOORHEAD" || dbRoleUpper === "FLOOR_HEAD";
+    const allowed = ["FLOOR_MANAGER", "SUPERUSER"];
+    if (!allowed.includes(u.role) || isFloorHead) {
       toast({
         title: "Access denied",
         description: "You do not have permission to manage users.",

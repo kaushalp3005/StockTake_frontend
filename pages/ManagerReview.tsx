@@ -1974,7 +1974,7 @@ export default function ManagerReview() {
       </div>
 
       {/* Floors Drawer */}
-      <Drawer open={drawerOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
+      <Drawer open={drawerOpen} onOpenChange={(open) => {
         if (!open && deleteModalOpen) return; // keep open while delete modal is active
         setDrawerOpen(open);
         if (!open) {

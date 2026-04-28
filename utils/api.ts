@@ -3,6 +3,7 @@
 // Use environment variable or default to local proxy
 // For local development with Render backend, set VITE_API_URL=https://stocktake-backend2.onrender.com
 
+
 // Debug environment variables
 console.log("🔍 VITE_API_URL from env:", import.meta.env.VITE_API_URL);
 console.log("🔍 All env vars:", import.meta.env);

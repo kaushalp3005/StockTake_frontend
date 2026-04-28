@@ -1,14 +1,9 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loader, LogOut, Package, FileText, Calendar, Warehouse, Edit2, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight, Trash2, Download, Users } from "lucide-react";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
+import { Loader, LogOut, Package, FileText, Calendar, Warehouse, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight, Trash2, Download, Users, X, Edit2 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { stocktakeEntriesAPI } from "@/utils/api";
 import { useToast } from "@/hooks/use-toast";
 import { downloadEntriesAsExcel } from "@/services/excelService";
@@ -20,6 +15,7 @@ interface User {
   name: string;
   email: string;
   role: string;
+  dbRole?: string;
 }
 
 interface FloorSession {
@@ -71,8 +67,9 @@ export default function Dashboard() {
   const [recentEntries, setRecentEntries] = useState<RecentEntry[]>([]);
   const [loadingRecentEntries, setLoadingRecentEntries] = useState(false);
   const [entriesSelectedDates, setEntriesSelectedDates] = useState<string[]>([]);
-  const [entriesAvailableDates, setEntriesAvailableDates] = useState<string[]>([]);
-  const [loadingEntryDates, setLoadingEntryDates] = useState(false);
+  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
+  const [selectedSession, setSelectedSession] = useState<FloorSession | null>(null);
+  const [activityExpanded, setActivityExpanded] = useState(false);
 
   // Memoized submitted sessions calculations
   const { submittedSessions, submittedItems, submittedWeight } = useMemo(() => {
@@ -106,68 +103,16 @@ export default function Dashboard() {
     };
   }, [userSessions, entriesSelectedDates]);
 
-  // D4: Memoized function to render individual items as compact blocks
-  const renderItem = useCallback((item: any, idx: number, sessionId: string) => {
-    try {
-      const isCustomCategory = item.category && !item.subcategory;
-      const itemName = isCustomCategory
-        ? item.category
-        : (item.description || item.subcategory || item.category || "Unknown Item");
-      const isFresh = !item.stockType || item.stockType === "Fresh Stock";
-      const barColor = isFresh ? "#3B6D11" : "#633806";
-      const bgColor  = isFresh ? "#EAF3DE" : "#FAEEDA";
+  // Dates on which THIS user has entries — drives DatePillSelector
+  const entriesAvailableDates = useMemo(() => {
+    const dateSet = new Set<string>();
+    userSessions.forEach(s => {
+      const d = (s.createdAt || s.submittedAt || "").split("T")[0];
+      if (d) dateSet.add(d);
+    });
+    return Array.from(dateSet).sort();
+  }, [userSessions]);
 
-      return (
-        <div
-          key={`${sessionId}-item-${idx}`}
-          className="flex rounded-lg overflow-hidden border border-border/50 text-sm"
-          style={{ minHeight: 52 }}
-        >
-          {/* Stock-type left bar */}
-          <div className="shrink-0 w-1" style={{ background: barColor }} />
-
-          {/* Content */}
-          <div className="flex-1 flex items-center justify-between gap-2 px-3 py-2" style={{ background: bgColor + "44" }}>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-foreground leading-tight truncate">{itemName}</p>
-              <div className="flex flex-wrap gap-2 mt-0.5 text-xs text-muted-foreground">
-                {item.subcategory && !isCustomCategory && (
-                  <span>{item.category} › {item.subcategory}</span>
-                )}
-                {item.itemType && (
-                  <span className="uppercase font-medium" style={{ color: "#0C447C" }}>{item.itemType}</span>
-                )}
-                {item.units != null && (
-                  <span>{item.units % 1 === 0 ? item.units : Number(item.units).toFixed(2)} pcs</span>
-                )}
-                {item.packageSize && (
-                  <span>UOM {Number(item.packageSize).toFixed(3)} kg</span>
-                )}
-              </div>
-            </div>
-
-            <div className="text-right shrink-0">
-              <p className="font-bold text-primary text-base leading-tight">
-                {Number(item.totalWeight || 0).toFixed(2)} kg
-              </p>
-              {!isFresh && (
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: "#FAEEDA", color: "#633806" }}>
-                  Off Grade
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      );
-    } catch (error) {
-      console.error('Error rendering item:', error, item);
-      return (
-        <div key={`${sessionId}-error-${idx}`} className="p-2 bg-red-50 text-red-600 rounded">
-          Error rendering item {idx + 1}
-        </div>
-      );
-    }
-  }, []);
 
   // Check for draft entries in DB and show as pending session
   const checkDraftEntries = async (userEmail: string) => {
@@ -347,23 +292,6 @@ export default function Dashboard() {
           loadRecentEntries();
         }
 
-        // Fetch available entry dates for DatePillSelector (floor managers and above)
-        setLoadingEntryDates(true);
-        stocktakeEntriesAPI.getAvailableDates().then((response) => {
-          if (response?.dates && response.dates.length > 0) {
-            const sorted: string[] = response.dates
-              .map((d: { date: string }) => d.date)
-              .sort(); // ascending for DatePillSelector
-            setEntriesAvailableDates(sorted);
-            // Default to last 3 available dates (most recent)
-            const defaultDates = sorted.slice(-3);
-            setEntriesSelectedDates(defaultDates);
-          }
-        }).catch(err => {
-          console.error("Failed to fetch available dates:", err);
-        }).finally(() => {
-          setLoadingEntryDates(false);
-        });
       } catch (err) {
         console.error("Failed to parse user", err);
       }
@@ -371,6 +299,13 @@ export default function Dashboard() {
 
     setIsLoading(false);
   }, [navigate]);
+
+  // Auto-select last 3 dates when user's sessions first load
+  useEffect(() => {
+    if (entriesAvailableDates.length > 0 && entriesSelectedDates.length === 0) {
+      setEntriesSelectedDates(entriesAvailableDates.slice(-3));
+    }
+  }, [entriesAvailableDates]);
 
   // Refresh sessions when component comes into focus (e.g., returning from edit page)
   useEffect(() => {
@@ -423,6 +358,24 @@ export default function Dashboard() {
     localStorage.setItem("currentFloorSession", JSON.stringify(editSession));
     // Navigate to add-item page where user can edit
     navigate("/audit/add-item");
+  };
+
+  const handleViewSession = (session: FloorSession) => {
+    const entryId = session.items?.[0]?.entryId || null;
+    const viewSession = {
+      ...session,
+      isEditing: false,
+      entryId,
+      originalSessionId: session.id,
+      originalStatus: session.status,
+      originalItemIds: session.items?.map((item: any) => item.databaseId).filter(Boolean) || [],
+    };
+    localStorage.setItem("currentFloorSession", JSON.stringify(viewSession));
+    navigate("/audit/add-item");
+  };
+
+  const handleSessionCardClick = (session: FloorSession) => {
+    setSelectedSession(session);
   };
 
   const handleResumeSession = async () => {
@@ -596,13 +549,8 @@ export default function Dashboard() {
     },
     ADMIN: {
       title: "Admin Dashboard",
-      description: "Manage users, floors, and items",
+      description: "Manage floors and items",
       actions: [
-        {
-          label: "Manage Users",
-          icon: Package,
-          action: () => navigate("/admin/users"),
-        },
         {
           label: "Manage Floors",
           icon: Package,
@@ -666,7 +614,11 @@ export default function Dashboard() {
   // Debug: log user role to help troubleshoot
   console.log("Dashboard - User role:", user?.role, "Content found:", !!roleContent[user?.role || "FLOOR_MANAGER"]);
 
-  const content = roleContent[user?.role || "FLOOR_MANAGER"] || roleContent["FLOOR_MANAGER"];
+  const rawContent = roleContent[user?.role || "FLOOR_MANAGER"] || roleContent["FLOOR_MANAGER"];
+  const isFloorHead = user?.dbRole?.toUpperCase() === "FLOORHEAD" || user?.dbRole?.toUpperCase() === "FLOOR_HEAD";
+  const content = isFloorHead
+    ? { ...rawContent, actions: rawContent.actions.filter((a) => a.label !== "Manage Users") }
+    : rawContent;
 
   // Calculate total items and weight for all user sessions
   const totalItems = userSessions.reduce(
@@ -682,6 +634,7 @@ export default function Dashboard() {
   }, 0);
 
   return (
+    <>
     <div className="min-h-screen bg-gradient-to-b from-background via-muted/20 to-background">
       {/* H1: Dark Topbar */}
       <nav
@@ -762,15 +715,25 @@ export default function Dashboard() {
             <div className="mt-4 sm:mt-6 space-y-4">
 
               {/* Recent Activity */}
-              <Card className="p-4 sm:p-6 border-border hover:shadow-lg transition-all duration-300">
-                <div className="flex items-center justify-between mb-4">
+              <Card className="border-border hover:shadow-lg transition-all duration-300">
+                <button
+                  className="w-full flex items-center justify-between p-4 sm:p-6 text-left"
+                  onClick={() => setActivityExpanded(prev => !prev)}
+                >
                   <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
                     <Activity className="w-5 h-5 text-primary" />
                     Recent Activity
                   </h3>
-                  <span className="text-xs text-muted-foreground">Last 10 entries</span>
-                </div>
-                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Last 10 entries</span>
+                    <ChevronRight
+                      className="w-4 h-4 text-muted-foreground transition-transform duration-200"
+                      style={{ transform: activityExpanded ? "rotate(90deg)" : "rotate(0deg)" }}
+                    />
+                  </div>
+                </button>
+                {activityExpanded && (
+                <div className="px-4 sm:px-6 pb-4 sm:pb-6 space-y-3">
                   {loadingRecentEntries ? (
                     <div className="flex items-center justify-center py-8">
                       <Loader className="w-6 h-6 animate-spin text-primary" />
@@ -835,6 +798,7 @@ export default function Dashboard() {
                     })
                   )}
                 </div>
+                )}
               </Card>
             </div>
           )}
@@ -860,7 +824,6 @@ export default function Dashboard() {
                   entryDates={entriesAvailableDates}
                   selectedDates={entriesSelectedDates}
                   onChange={(dates) => setEntriesSelectedDates(dates)}
-                  loading={loadingEntryDates}
                 />
               </div>
 
@@ -922,240 +885,234 @@ export default function Dashboard() {
                   </Button>
                 </Card>
               ) : (
-                <div className="space-y-4 lg:space-y-6">
-                  {/* Pending Session Card - Show first if exists */}
-                  {pendingSession && (
-                    <Card
-                      className="p-4 sm:p-6 lg:p-8 border-orange-200 dark:border-orange-800 bg-gradient-to-r from-orange-50/50 to-yellow-50/50 dark:from-orange-950/10 dark:to-yellow-950/10 hover:shadow-md transition-all duration-200"
-                    >
-                      <div className="space-y-4">
-                        {/* Pending Session Header */}
-                        <div className="flex flex-col gap-4">
-                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 ">
+                  {/* Pending Session compact card */}
+                  {pendingSession && (() => {
+                    const pendingWeight = pendingSession.items?.reduce(
+                      (sum: number, item: any) => sum + (item.totalWeight || 0), 0
+                    ) || 0;
+                    return (
+                      <div
+                        className="relative"
+                        onMouseEnter={() => setHoveredSessionId("pending")}
+                        onMouseLeave={() => setHoveredSessionId(null)}
+                      >
+                        <Card
+                          className="p-4 border-orange-200 dark:border-orange-800 bg-gradient-to-br from-orange-50/50 to-yellow-50/50 dark:from-orange-950/10 dark:to-yellow-950/10 hover:shadow-lg transition-all duration-200 cursor-pointer h-full flex flex-col gap-3"
+                          onClick={handleResumeSession}
+                        >
+                          <div className="flex items-start justify-between gap-2">
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-orange-600" />
-                                <h3 className="text-base sm:text-lg font-bold text-foreground truncate">
-                                  {pendingSession.warehouse} - {pendingSession.floorName || 'Floor'}
-                                </h3>
-                                <span className="px-2 py-1 bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300 rounded text-xs font-semibold">
-                                  IN PROGRESS
-                                </span>
+                              <div className="flex items-center gap-1 mb-1">
+                                <Clock className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                                <p className="text-sm font-bold text-foreground truncate">
+                                  {pendingSession.warehouse}
+                                </p>
                               </div>
-                              <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
-                                <div className="flex items-center gap-1">
-                                  <Calendar className="w-3 h-3 sm:w-4 sm:h-4" />
-                                  <span>
-                                    {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleDateString()} at {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleTimeString()}
-                                  </span>
-                                </div>
-                              </div>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {pendingSession.floorName || "Floor"}
+                              </p>
                             </div>
+                            <span className="px-2 py-0.5 bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300 rounded text-[10px] font-semibold shrink-0">
+                              IN PROGRESS
+                            </span>
                           </div>
-                          {/* Action Buttons Row */}
-                          <div className="flex flex-wrap gap-2 justify-end border-t pt-4">
+
+                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                            <Calendar className="w-3 h-3" />
+                            <span>
+                              {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+
+                          <div className="mt-auto">
+                            <p className="text-xl font-bold text-orange-600 dark:text-orange-400">
+                              {pendingWeight.toFixed(2)} kg
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {pendingSession.items?.length || 0} items
+                            </p>
+                          </div>
+
+                          <div className="flex gap-2 border-t pt-3 mt-1">
                             <Button
-                              onClick={handleResumeSession}
+                              onClick={(e) => { e.stopPropagation(); handleResumeSession(); }}
                               size="sm"
-                              className="bg-orange-600 hover:bg-orange-700 text-white min-w-[120px]"
+                              className="flex-1 bg-orange-600 hover:bg-orange-700 text-white text-xs"
                             >
-                              Resume Work
+                              Resume
                             </Button>
                             <Button
-                              onClick={handleDiscardSession}
+                              onClick={(e) => { e.stopPropagation(); handleDiscardSession(); }}
                               variant="outline"
                               size="sm"
-                              className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/20 dark:hover:text-red-300 min-w-[100px]"
+                              className="border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 text-xs"
                             >
-                              <Trash2 className="w-4 h-4 mr-2" />
-                              Discard
+                              <Trash2 className="w-3.5 h-3.5" />
                             </Button>
                           </div>
-                        </div>
+                        </Card>
 
-                        {/* Pending Session Stats */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-                          <div className="text-center p-3 bg-orange-100/50 dark:bg-orange-900/20 rounded">
-                            <p className="text-xs text-muted-foreground">Items</p>
-                            <p className="text-lg font-bold text-orange-800 dark:text-orange-200">
-                              {pendingSession.items?.length || 0}
+                        {hoveredSessionId === "pending" && pendingSession.items && pendingSession.items.length > 0 && (
+                          <div className="absolute left-0 top-full mt-1 z-50 w-72 bg-popover border border-border rounded-lg shadow-xl p-3 pointer-events-none">
+                            <p className="text-xs font-semibold text-muted-foreground mb-2">
+                              Items in progress ({pendingSession.items.length})
                             </p>
+                            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                              {pendingSession.items.slice(0, 5).map((item: any, idx: number) => {
+                                const name = item.description || item.subcategory || item.category || "Item";
+                                return (
+                                  <div key={idx} className="flex justify-between items-center text-xs">
+                                    <span className="text-foreground truncate flex-1 mr-2">{name}</span>
+                                    <span className="text-primary font-semibold shrink-0">
+                                      {Number(item.totalWeight || 0).toFixed(2)} kg
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                              {pendingSession.items.length > 5 && (
+                                <p className="text-xs text-muted-foreground text-center pt-1">
+                                  +{pendingSession.items.length - 5} more items
+                                </p>
+                              )}
+                            </div>
                           </div>
-                          <div className="text-center p-3 bg-orange-100/50 dark:bg-orange-900/20 rounded">
-                            <p className="text-xs text-muted-foreground">Weight</p>
-                            <p className="text-lg font-bold text-orange-800 dark:text-orange-200">
-                              {(pendingSession.items?.reduce((sum, item) => sum + (item.totalWeight || 0), 0) || 0).toFixed(1)} kg
-                            </p>
-                          </div>
-                          <div className="text-center p-3 bg-orange-100/50 dark:bg-orange-900/20 rounded">
-                            <p className="text-xs text-muted-foreground">Form Status</p>
-                            <p className="text-lg font-bold text-orange-800 dark:text-orange-200">
-                              {pendingSession.currentFormState?.category ? 'Filling' : 'Ready'}
-                            </p>
-                          </div>
-                          <div className="text-center p-3 bg-orange-100/50 dark:bg-orange-900/20 rounded">
-                            <p className="text-xs text-muted-foreground">Auto-Saved</p>
-                            <p className="text-lg font-bold text-orange-800 dark:text-orange-200">
-                              ✓
-                            </p>
-                          </div>
-                        </div>
+                        )}
                       </div>
-                    </Card>
-                  )}
+                    );
+                  })()}
 
-                  {/* Submitted Sessions */}
+                  {/* Submitted session compact cards */}
                   {submittedSessions.map((session, sessionIndex) => {
                     const sessionWeight = session.items?.reduce(
-                      (sum: number, item: any) => sum + (item.totalWeight || 0),
-                      0
+                      (sum: number, item: any) => sum + (item.totalWeight || 0), 0
                     ) || 0;
-                    const sessionDate = session.createdAt ? new Date(session.createdAt).toLocaleDateString() : "N/A";
-                    const sessionTime = session.createdAt ? new Date(session.createdAt).toLocaleTimeString() : "";
-
-                    // Floor managers can only edit today's entries; previous dates are view-only
-                    const todayStr = new Date().toISOString().split('T')[0];
-                    const entryDateStr = session.createdAt ? new Date(session.createdAt).toISOString().split('T')[0] : "";
+                    const sessionDate = session.createdAt
+                      ? new Date(session.createdAt).toLocaleDateString()
+                      : "N/A";
+                    const sessionTime = session.createdAt
+                      ? new Date(session.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                      : "";
+                    const todayStr = new Date().toISOString().split("T")[0];
+                    const entryDateStr = session.createdAt
+                      ? new Date(session.createdAt).toISOString().split("T")[0]
+                      : "";
                     const isToday = todayStr === entryDateStr;
                     const isFloorManager = user?.role === "FLOOR_MANAGER";
                     const canEdit = session.status === "SUBMITTED" && (!isFloorManager || isToday);
+                    const cardId = `${session.id}-${sessionIndex}`;
 
                     return (
-                      <Card
-                        key={`${session.id}-${sessionIndex}`}
-                        className="p-4 sm:p-6 lg:p-8 border-border hover:shadow-md transition-all duration-200"
+                      <div
+                        key={cardId}
+                        className="relative"
+                        onMouseEnter={() => setHoveredSessionId(cardId)}
+                        onMouseLeave={() => setHoveredSessionId(null)}
                       >
-                        <div className="space-y-4">
-                          {/* Session Header */}
-                          <div className="flex flex-col gap-4">
-                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-2">
-                                  <Warehouse className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
-                                  <h3 className="text-base sm:text-lg font-bold text-foreground truncate">
-                                    {session.warehouse} - {session.floorName || 'Floor'}
-                                  </h3>
-                                </div>
-                                <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
-                                  <div className="flex items-center gap-1">
-                                    <Calendar className="w-3 h-3 sm:w-4 sm:h-4" />
-                                    <span>{sessionDate} at {sessionTime}</span>
-                                  </div>
-                                  {session.status && (
-                                    <span
-                                      className={`px-2 py-1 rounded text-xs font-semibold ${
-                                        session.status === "SUBMITTED"
-                                          ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
-                                          : session.status === "APPROVED"
-                                          ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
-                                          : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                                      }`}
-                                    >
-                                      {session.status}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="text-center sm:text-right flex-shrink-0">
-                                <p className="text-xs sm:text-sm text-muted-foreground">
-                                  Total Weight
-                                </p>
-                                <p className="text-xl sm:text-2xl font-bold text-primary">
-                                  {sessionWeight.toFixed(2)} kg
+                        <Card
+                          className="p-4 border-border hover:shadow-lg transition-all duration-200 cursor-pointer h-full flex flex-col gap-3"
+                          onClick={() => handleSessionCardClick(session)}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1 mb-1">
+                                <Warehouse className="w-3.5 h-3.5 text-primary shrink-0" />
+                                <p className="text-sm font-bold text-foreground truncate">
+                                  {session.warehouse}
                                 </p>
                               </div>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {session.floorName || session.floor || "Floor"}
+                              </p>
                             </div>
-                            {/* Action Buttons Row */}
-                            <div className="flex flex-wrap gap-2 justify-end border-t pt-4">
-                              {/* Download Button - Show for both SUBMITTED and APPROVED */}
-                              <Button
-                                onClick={() => handleDownloadEntries(session)}
-                                disabled={downloadingSession === session.id}
-                                variant="outline"
-                                size="sm"
-                                className="min-w-[120px]"
+                            {session.status && (
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
+                                  session.status === "SUBMITTED"
+                                    ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                                    : session.status === "APPROVED"
+                                    ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+                                    : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                                }`}
                               >
-                                {downloadingSession === session.id ? (
-                                  <>
-                                    <Loader className="w-4 h-4 mr-2 animate-spin" />
-                                    Exporting...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Download className="w-4 h-4 mr-2" />
-                                    Download
-                                  </>
-                                )}
-                              </Button>
-                              {/* Edit Button - Only show for SUBMITTED status and today's date for floor managers */}
-                              {canEdit && (
-                                <Button
-                                  onClick={() => handleEditEntry(session)}
-                                  variant="outline"
-                                  size="sm"
-                                  className="min-w-[100px]"
-                                >
-                                  <Edit2 className="w-4 h-4 mr-2" />
-                                  Edit
-                                </Button>
-                              )}
-                              {session.status === "SUBMITTED" && isFloorManager && !isToday && (
-                                <span className="text-xs text-muted-foreground italic self-center">
-                                  View only (previous date)
-                                </span>
-                              )}
-                              {session.status === "APPROVED" && (
-                                <span className="text-xs text-muted-foreground italic self-center">
-                                  Cannot edit approved entries
-                                </span>
-                              )}
-                            </div>
+                                {session.status}
+                              </span>
+                            )}
                           </div>
 
-                          {/* Items List */}
-                          {session.items && session.items.length > 0 && (
-                            <div className="w-full">
-                              <details className="w-full">
-                                <summary 
-                                  className="py-2 text-sm text-muted-foreground hover:text-foreground cursor-pointer list-none flex items-center justify-between"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    const details = e.currentTarget.parentElement as HTMLDetailsElement;
-                                    const wasOpen = details.open;
-                                    details.open = !wasOpen;
-                                    
-                                    // Rotate arrow
-                                    const arrow = e.currentTarget.querySelector('svg');
-                                    if (arrow) {
-                                      arrow.style.transform = details.open ? 'rotate(180deg)' : 'rotate(0deg)';
-                                    }
-                                  }}
-                                >
-                                  View {session.items?.length || 0} item(s)
-                                  <svg
-                                    className="w-4 h-4 transition-transform duration-200"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth={2}
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    style={{ transform: 'rotate(0deg)' }}
-                                  >
-                                    <polyline points="6 9 12 15 18 9" />
-                                  </svg>
-                                </summary>
-                                <div className="space-y-2 pt-2 border-t border-border">
-                                  {session.items?.slice(0, 100)?.map((item: any, idx: number) => 
-                                    renderItem(item, idx, session.id)
-                                  )}
-                                </div>
-                              </details>
+                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                            <Calendar className="w-3 h-3" />
+                            <span>{sessionDate} {sessionTime}</span>
+                          </div>
+
+                          <div className="mt-auto">
+                            <p className="text-xl font-bold text-primary">
+                              {sessionWeight.toFixed(2)} kg
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {session.items?.length || 0} items
+                            </p>
+                          </div>
+
+                          <div className="border-t pt-3 mt-1 flex justify-end">
+                            <Button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDownloadEntries(session);
+                              }}
+                              disabled={downloadingSession === session.id}
+                              variant="outline"
+                              size="sm"
+                              className="text-xs"
+                            >
+                              {downloadingSession === session.id ? (
+                                <Loader className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Download className="w-3.5 h-3.5" />
+                              )}
+                            </Button>
+                          </div>
+                        </Card>
+
+                        {hoveredSessionId === cardId && session.items && session.items.length > 0 && (
+                          <div className="absolute left-0 top-full mt-1 z-50 w-72 bg-popover border border-border rounded-lg shadow-xl p-3 pointer-events-none">
+                            <p className="text-xs font-semibold text-muted-foreground mb-2">
+                              {session.warehouse} — {session.floorName || "Floor"} ({session.items.length} items)
+                            </p>
+                            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                              {session.items.slice(0, 5).map((item: any, idx: number) => {
+                                const isCustom = item.category && !item.subcategory;
+                                const name = isCustom
+                                  ? item.category
+                                  : item.description || item.subcategory || item.category || "Item";
+                                const isFresh = !item.stockType || item.stockType === "Fresh Stock";
+                                return (
+                                  <div key={idx} className="flex justify-between items-center text-xs">
+                                    <div className="flex items-center gap-1.5 flex-1 min-w-0 mr-2">
+                                      <span
+                                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                                        style={{ background: isFresh ? "#3B6D11" : "#633806" }}
+                                      />
+                                      <span className="text-foreground truncate">{name}</span>
+                                    </div>
+                                    <span className="text-primary font-semibold shrink-0">
+                                      {Number(item.totalWeight || 0).toFixed(2)} kg
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                              {session.items.length > 5 && (
+                                <p className="text-xs text-muted-foreground text-center pt-1">
+                                  +{session.items.length - 5} more — click to view all
+                                </p>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      </Card>
+                            <p className="text-[10px] text-muted-foreground mt-2 border-t pt-2">
+                              {canEdit ? "Click to edit" : "Click to view"}
+                            </p>
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -1181,5 +1138,149 @@ export default function Dashboard() {
         </div>
       </div>
     </div>
+
+    {/* Session Detail Modal */}
+
+    {selectedSession && (() => {
+      const todayStr = new Date().toISOString().split("T")[0];
+      const entryDateStr = (selectedSession.createdAt || "").split("T")[0];
+      const isToday = todayStr === entryDateStr;
+      const isFloorManager = user?.role === "FLOOR_MANAGER";
+      const canEdit = selectedSession.status === "SUBMITTED" && (!isFloorManager || isToday);
+      const totalWeight = selectedSession.items?.reduce(
+        (sum: number, item: any) => sum + (item.totalWeight || 0), 0
+      ) || 0;
+
+      return (
+        <Dialog open={!!selectedSession} onOpenChange={(open) => { if (!open) setSelectedSession(null); }}>
+          <DialogContent className="max-w-lg w-full max-h-[85vh] flex flex-col p-0 gap-0">
+            <DialogHeader className="px-5 pt-5 pb-4 border-b shrink-0">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <DialogTitle className="text-base font-bold flex items-center gap-2">
+                    <Warehouse className="w-4 h-4 text-primary shrink-0" />
+                    <span className="truncate">{selectedSession.warehouse} — {selectedSession.floorName || selectedSession.floor || "Floor"}</span>
+                  </DialogTitle>
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      {selectedSession.createdAt ? new Date(selectedSession.createdAt).toLocaleString() : "N/A"}
+                    </span>
+                    {selectedSession.status && (
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                        selectedSession.status === "SUBMITTED"
+                          ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                          : selectedSession.status === "APPROVED"
+                          ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+                          : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                      }`}>
+                        {selectedSession.status}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Summary row */}
+              <div className="flex gap-4 mt-3 text-sm">
+                <div>
+                  <span className="text-muted-foreground text-xs">Items</span>
+                  <p className="font-bold text-foreground">{selectedSession.items?.length || 0}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs">Total Weight</span>
+                  <p className="font-bold text-primary">{totalWeight.toFixed(2)} kg</p>
+                </div>
+              </div>
+            </DialogHeader>
+
+            {/* Items list */}
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
+              {selectedSession.items && selectedSession.items.length > 0 ? (
+                selectedSession.items.map((item: any, idx: number) => {
+                  const isCustom = item.category && !item.subcategory;
+                  const name = isCustom
+                    ? item.category
+                    : item.description || item.subcategory || item.category || "Unknown Item";
+                  const isFresh = !item.stockType || item.stockType === "Fresh Stock";
+                  const barColor = isFresh ? "#3B6D11" : "#633806";
+                  const bgColor = isFresh ? "#EAF3DE" : "#FAEEDA";
+
+                  return (
+                    <div
+                      key={idx}
+                      className="flex rounded-lg overflow-hidden border border-border/50 text-sm"
+                    >
+                      <div className="shrink-0 w-1" style={{ background: barColor }} />
+                      <div
+                        className="flex-1 flex items-center justify-between gap-2 px-3 py-2"
+                        style={{ background: bgColor + "44" }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-foreground leading-tight truncate">{name}</p>
+                          <div className="flex flex-wrap gap-2 mt-0.5 text-xs text-muted-foreground">
+                            {item.subcategory && !isCustom && (
+                              <span>{item.category} › {item.subcategory}</span>
+                            )}
+                            {item.itemType && (
+                              <span className="uppercase font-medium" style={{ color: "#0C447C" }}>{item.itemType}</span>
+                            )}
+                            {item.units != null && (
+                              <span>{item.units % 1 === 0 ? item.units : Number(item.units).toFixed(2)} pcs</span>
+                            )}
+                            {item.packageSize && (
+                              <span>UOM {Number(item.packageSize).toFixed(3)} kg</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="font-bold text-primary text-base leading-tight">
+                            {Number(item.totalWeight || 0).toFixed(2)} kg
+                          </p>
+                          {!isFresh && (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: "#FAEEDA", color: "#633806" }}>
+                              Off Grade
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-8">No items found.</p>
+              )}
+            </div>
+
+            {/* Footer actions */}
+            <div className="px-5 py-4 border-t shrink-0 flex gap-2 justify-end">
+              <Button
+                onClick={() => handleDownloadEntries(selectedSession)}
+                disabled={downloadingSession === selectedSession.id}
+                variant="outline"
+                size="sm"
+              >
+                {downloadingSession === selectedSession.id ? (
+                  <Loader className="w-4 h-4 animate-spin mr-2" />
+                ) : (
+                  <Download className="w-4 h-4 mr-2" />
+                )}
+                Download
+              </Button>
+              {canEdit && (
+                <Button
+                  onClick={() => { setSelectedSession(null); handleEditEntry(selectedSession); }}
+                  size="sm"
+                >
+                  <Edit2 className="w-4 h-4 mr-2" />
+                  Edit
+                </Button>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      );
+    })()}
+    </>
   );
 }
