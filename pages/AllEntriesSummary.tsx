@@ -382,6 +382,14 @@ export default function AllEntriesSummary() {
     }
   };
 
+  useEffect(() => {
+    if (activeTab === "ai" && !aiHasLoaded && !aiAnalysis && !aiLoading && filteredEntries.length > 0) {
+      setAiHasLoaded(true);
+      handleGenerateAnalysis();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, aiHasLoaded, aiAnalysis, aiLoading]);
+
   const handleExportToExcel = async () => {
     setExporting(true);
     try {
@@ -456,8 +464,28 @@ export default function AllEntriesSummary() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-muted/30 flex items-center justify-center">
-        <Loader className="w-8 h-8 animate-spin text-primary" />
+      <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
+        <nav style={{ background: "#111827", minHeight: 52 }} className="sticky top-0 z-50 flex items-center justify-between px-3 sm:px-5 sm:min-h-[56px]">
+          <div className="flex items-center gap-2">
+            <div style={{ background: "#185FA5", borderRadius: 8, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Package className="w-4 h-4 text-white" />
+            </div>
+            <span style={{ color: "#FFFFFF", fontWeight: 700, fontSize: 16 }}>StockTake</span>
+          </div>
+        </nav>
+        <div className="container py-4 sm:py-8 px-4 sm:px-6">
+          <div className="max-w-6xl mx-auto space-y-6 animate-pulse">
+            <div className="h-10 w-2/3 bg-muted rounded" />
+            <div className="h-6 w-1/3 bg-muted rounded" />
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 sm:gap-6">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-24 bg-muted rounded-xl" />
+              ))}
+            </div>
+            <div className="h-44 bg-muted rounded-xl" />
+            <div className="h-64 bg-muted rounded-xl" />
+          </div>
+        </div>
       </div>
     );
   }
