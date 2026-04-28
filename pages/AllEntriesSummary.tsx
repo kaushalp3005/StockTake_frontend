@@ -215,6 +215,16 @@ export default function AllEntriesSummary() {
   }, [navigate]);
 
   useEffect(() => {
+    const onScroll = () => {
+      setShowBackToTop(window.scrollY > 800);
+      setFilterBarStuck(window.scrollY > 220);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
     // Fetch available dates for the pill selector
     const fetchDates = async () => {
       setLoadingDates(true);
@@ -582,6 +592,38 @@ export default function AllEntriesSummary() {
           <span className="hidden sm:inline">Back</span>
         </button>
       </nav>
+
+      <div
+        className={`sticky top-[52px] sm:top-[56px] z-40 bg-background/95 backdrop-blur border-b border-border transition-all duration-200 ${
+          filterBarStuck ? "shadow-sm opacity-100" : "opacity-0 pointer-events-none -translate-y-2"
+        }`}
+        style={{ minHeight: 48 }}
+      >
+        <div className="container px-4 sm:px-6 py-2 flex items-center gap-3 max-w-6xl mx-auto">
+          <span className="text-xs sm:text-sm font-medium text-foreground truncate">
+            {totalGrandItems.toLocaleString("en-IN")} entries · {totalGrandWeight.toFixed(2)} kg
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+              className="text-xs"
+            >
+              Top
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleExportToExcel}
+              className="bg-green-600 hover:bg-green-700 text-white text-xs"
+              disabled={exporting || totalGrandItems === 0}
+            >
+              {exporting ? <Loader className="w-3 h-3 mr-1 animate-spin" /> : <Download className="w-3 h-3 mr-1" />}
+              Export
+            </Button>
+          </div>
+        </div>
+      </div>
 
       <div className="container py-4 sm:py-8 px-4 sm:px-6">
         <div className="max-w-6xl mx-auto">
@@ -1106,6 +1148,15 @@ export default function AllEntriesSummary() {
           )}
         </div>
       </div>
+      {showBackToTop && (
+        <button
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className="fixed bottom-6 right-6 z-50 bg-primary text-primary-foreground rounded-full shadow-lg hover:shadow-xl w-11 h-11 flex items-center justify-center transition-all duration-200 hover:-translate-y-0.5"
+          aria-label="Back to top"
+        >
+          ↑
+        </button>
+      )}
     </div>
   );
 }
