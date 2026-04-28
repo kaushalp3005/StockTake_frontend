@@ -700,9 +700,29 @@ export default function AllEntriesSummary() {
             </div>
           )}
 
-          {/* ── Warehouse Breakdown heading */}
+          {/* ── Warehouse Breakdown heading + search/sort */}
           {activeTab === "warehouses" && Object.keys(warehouseData).length > 0 && (
-            <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-4 sm:mb-6">Warehouse Breakdown</h2>
+            <>
+              <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-4 sm:mb-6">Warehouse Breakdown</h2>
+              <div className="flex flex-col sm:flex-row gap-3 mb-4 sm:mb-6">
+                <input
+                  type="text"
+                  value={warehouseSearch}
+                  onChange={(e) => setWarehouseSearch(e.target.value)}
+                  placeholder="Search warehouse…"
+                  className="flex-1 px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+                <select
+                  value={warehouseSort}
+                  onChange={(e) => setWarehouseSort(e.target.value as "weight" | "items" | "name")}
+                  className="px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="weight">Sort: Weight ↓</option>
+                  <option value="items">Sort: Items ↓</option>
+                  <option value="name">Sort: Name A–Z</option>
+                </select>
+              </div>
+            </>
           )}
 
           {/* ── I2 Floor breakdown table per warehouse */}
@@ -716,7 +736,18 @@ export default function AllEntriesSummary() {
             </Card>
           ) : (
             <div className="space-y-4 sm:space-y-6">
-              {Object.entries(warehouseData).map(([warehouseId, warehouseInfo]) => {
+              {Object.entries(warehouseData)
+                .filter(([, info]) =>
+                  warehouseSearch.trim() === ""
+                    ? true
+                    : info.name.toLowerCase().includes(warehouseSearch.trim().toLowerCase())
+                )
+                .sort(([, a], [, b]) => {
+                  if (warehouseSort === "weight") return b.totalWeight - a.totalWeight;
+                  if (warehouseSort === "items") return b.totalItems - a.totalItems;
+                  return a.name.localeCompare(b.name);
+                })
+                .map(([warehouseId, warehouseInfo]) => {
                 const visibleFloorTotal = Object.entries(warehouseInfo.floors).reduce((sum, [floorId, info]) => {
                   return excludedFloors.has(`${warehouseId}::${floorId}`) ? sum : sum + info.totalWeight;
                 }, 0);
@@ -809,6 +840,17 @@ export default function AllEntriesSummary() {
                 </Card>
                 );
               })}
+              {Object.entries(warehouseData).filter(([, info]) =>
+                warehouseSearch.trim() === ""
+                  ? true
+                  : info.name.toLowerCase().includes(warehouseSearch.trim().toLowerCase())
+              ).length === 0 && warehouseSearch.trim() !== "" && (
+                <Card className="p-6 text-center bg-muted/50">
+                  <p className="text-sm text-muted-foreground">
+                    No warehouses match "{warehouseSearch}".
+                  </p>
+                </Card>
+              )}
             </div>
           ))}
 
