@@ -610,13 +610,13 @@
 .mr-drawer-content {
   display: flex;
   flex-direction: column;
-  height: 90vh;
+  height: auto !important;
+  min-height: 0 !important;
   max-height: 90vh;
 }
 
 @media (max-width: 768px) {
   .mr-drawer-content {
-    height: 92vh;
     max-height: 92vh;
   }
 }
