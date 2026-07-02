@@ -3,6 +3,9 @@
 /* ── Page & Loading ── */
 .mr-page {
   min-height: 100vh;
+  /* Positioning context so the breadcrumb can be pulled out of document flow
+     (see .mr-breadcrumb) without shifting the page content on any screen size. */
+  position: relative;
   background: linear-gradient(to bottom, var(--background), hsl(var(--muted) / 0.3));
 }
 
@@ -113,7 +116,20 @@
 }
 
 /* ── Breadcrumb ── */
+/* Pulled out of document flow (absolute within the position:relative .mr-page) so
+   that mounting/unmounting it on warehouse selection does NOT reflow .mr-main and
+   jump the page. Absolute (not fixed) is deliberate: .mr-page is a framer-motion
+   element that carries a transform at rest, which makes any fixed child resolve
+   against .mr-page anyway and misbehave with mobile browser address-bar / visual-
+   viewport changes. It sits right under the 52px topbar and below the drawer
+   overlay (z-50), matching its prior always-behind-the-overlay behaviour on every
+   screen size. */
 .mr-breadcrumb {
+  position: absolute;
+  top: 52px;
+  left: 0;
+  right: 0;
+  z-index: 40;
   padding: 0.375rem 0.75rem;
   display: flex;
   align-items: center;
