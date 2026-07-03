@@ -114,6 +114,9 @@ export default function ManagerReview() {
     totalWeight: number;
   }[]>([]);
   const [loadingFloors, setLoadingFloors] = useState(false);
+  // Name of the warehouse currently being fetched — drives the card spinner
+  // while floors load, before the drawer is opened (see handleWarehouseClick).
+  const [loadingWarehouseName, setLoadingWarehouseName] = useState<string | null>(null);
   const [selectedWarehouse, setSelectedWarehouse] = useState<string | null>(null);
   const [selectedFloor, setSelectedFloor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -381,16 +384,22 @@ export default function ManagerReview() {
     if (isScrollingRef.current) {
       return;
     }
-    
+
+    // Fetch the floors BEFORE opening the drawer. If we open first and then
+    // swap a short "Loading floors..." state for the full floor list, the
+    // bottom-anchored (fit-content) drawer grows upward the moment the fetch
+    // resolves — which reads as the whole page "jumping" on every warehouse
+    // click. Instead we show a spinner on the card while fetching, then open
+    // the drawer once, already at its final content height.
     setSelectedWarehouse(warehouse);
+    setLoadingWarehouseName(warehouse);
     setLoadingFloors(true);
-    setDrawerOpen(true);
-    
+
     try {
       // Fetch entries for this warehouse to get unique floors from database
       const fetchParams: any = { warehouse, ...getDateRange() };
       const entriesResponse = await stocktakeEntriesAPI.getEntries(fetchParams);
-      
+
       if (entriesResponse && entriesResponse.entries && entriesResponse.entries.length > 0) {
         // Group entries by floor name
         const floorMap: Record<string, { itemCount: number; totalWeight: number }> = {};
@@ -420,6 +429,10 @@ export default function ManagerReview() {
       setWarehouseFloors([]);
     } finally {
       setLoadingFloors(false);
+      setLoadingWarehouseName(null);
+      // Floors are ready, so the drawer's content height is now final — open it
+      // in one shot to avoid the resize/jump described above.
+      setDrawerOpen(true);
     }
   };
 
@@ -1911,7 +1924,11 @@ export default function ManagerReview() {
                           <p className="mr-wh-last-entry-list">{lastDateStr}</p>
                         )}
                       </div>
-                      <ChevronRight className="mr-wh-chevron" />
+                      {loadingWarehouseName === warehouse ? (
+                        <Loader className="mr-loader-sm mr-wh-chevron-spin" />
+                      ) : (
+                        <ChevronRight className="mr-wh-chevron" />
+                      )}
                     </div>
 
                     {/* Upload Sheet Button for Savla and Rishi — grid mode only */}

@@ -494,6 +494,13 @@
   .mr-wh-chevron { width: 1.25rem; height: 1.25rem; }
 }
 
+/* Spinner shown in place of the chevron while a warehouse's floors are being
+   fetched (before the drawer opens). Keep it from shrinking in the flex row. */
+.mr-wh-chevron-spin {
+  flex-shrink: 0;
+  color: hsl(var(--primary));
+}
+
 .mr-wh-upload-btn {
   width: 100%;
   margin-top: 0.5rem;
