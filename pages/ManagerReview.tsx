@@ -498,10 +498,11 @@ export default function ManagerReview() {
             : `No entries were checked. Downloading Excel with all rows flagged as "Unchecked"…`,
       });
 
-      // Auto-download warehouse Excel right after a successful save.
+      // Auto-download this floor's Excel right after a successful save.
+      // Scoped to selectedFloor so only the saved floor is exported, not the whole warehouse.
       // Wrapped in try/catch so a download failure doesn't undo the save toast.
       try {
-        await handleDownloadWarehouseEntries();
+        await handleDownloadWarehouseEntries(selectedFloor);
       } catch (dlErr: any) {
         console.error("Auto-download after save failed:", dlErr);
       }
@@ -535,73 +536,99 @@ export default function ManagerReview() {
     
     setCheckedEntries((prev) => {
       const updated: Record<string, boolean> = {};
-      
-      // Initialize with saved state if exists, otherwise unchecked
+
+      let saved: Record<string, boolean> = {};
       if (savedCheckedEntries) {
         try {
-          const saved = JSON.parse(savedCheckedEntries);
-          // Load saved state, but only for entries that exist in current item
-          currentItemEntries.forEach(entry => {
-            updated[entry.id] = saved[entry.id] || false;
-          });
+          saved = JSON.parse(savedCheckedEntries);
         } catch (e) {
-          // If parsing fails, initialize as unchecked
-          currentItemEntries.forEach(entry => {
-            updated[entry.id] = false;
-          });
+          saved = {};
         }
-      } else {
-        // No saved state, initialize all as unchecked
-        currentItemEntries.forEach(entry => {
-          updated[entry.id] = false;
-        });
       }
-      
+
+      // DB is the source of truth (check = verify): an entry is ticked if it is
+      // checked/verified in the DB, or has a pending local tick not yet cleared.
+      currentItemEntries.forEach((entry) => {
+        const dbChecked = entry.verified === true || entry.isChecked === true;
+        updated[entry.id] = dbChecked || saved[entry.id] === true;
+      });
+
       return updated;
     });
     
     setItemDetailsOpen(true);
   };
 
-  const handleEntryCheck = (entryId: string, checked: boolean) => {
+  // Persist localStorage tick state (used by Save Floor + Excel export helpers)
+  const persistCheckedLocal = (map: Record<string, boolean>) => {
+    if (selectedWarehouse && selectedFloor && selectedItemName) {
+      const storageKey = `checkedEntries_${selectedWarehouse}_${selectedFloor}_${selectedItemName.toUpperCase()}`;
+      localStorage.setItem(storageKey, JSON.stringify(map));
+    }
+    localStorage.setItem("checkedEntries", JSON.stringify(map));
+  };
+
+  // Reflect a check's state in the grouped data so the item-row status dot
+  // (driven by `verified`) and the auto-sort update immediately, no refetch.
+  const applyCheckToGrouped = (
+    entryId: string,
+    checked: boolean,
+    verifiedBy: string | null,
+    verifiedAt: string | null,
+  ) => {
+    setGroupedItemsData((prev) =>
+      prev.map((group) => ({
+        ...group,
+        entries: group.entries.map((e) =>
+          e.id === entryId
+            ? { ...e, verified: checked, isChecked: checked, verifiedBy, verifiedAt }
+            : e,
+        ),
+      })),
+    );
+  };
+
+  // A manager's tick = "check + verify". Persist immediately to the DB so
+  // is_checked / verified reflect the tick and the red dot clears at once.
+  const handleEntryCheck = async (entryId: string, checked: boolean) => {
     // Prevent actions during scrolling
     if (isScrollingRef.current) {
       return;
     }
-    
+
+    const prevChecked = checkedEntries[entryId] || false;
+    const verifiedBy = checked ? (user?.username || user?.name || user?.email || "MANAGER") : null;
+    const verifiedAt = checked ? new Date().toISOString() : null;
+
+    // Optimistic UI: tick badge, counter, localStorage, and the status dot.
     setCheckedEntries((prev) => {
-      const updated = {
-        ...prev,
-        [entryId]: checked,
-      };
-      // Save to localStorage immediately with warehouse/floor/item key
-      if (selectedWarehouse && selectedFloor && selectedItemName) {
-        const storageKey = `checkedEntries_${selectedWarehouse}_${selectedFloor}_${selectedItemName.toUpperCase()}`;
-        localStorage.setItem(storageKey, JSON.stringify(updated));
-      }
-      // Also save to general key for backward compatibility
-      localStorage.setItem("checkedEntries", JSON.stringify(updated));
+      const updated = { ...prev, [entryId]: checked };
+      persistCheckedLocal(updated);
       return updated;
     });
-  };
+    applyCheckToGrouped(entryId, checked, verifiedBy, verifiedAt);
 
-  const handleSaveCheckedEntries = () => {
-    setSaving(true);
     try {
-      // Save checked entries to localStorage with warehouse/floor/item key
-      if (selectedWarehouse && selectedFloor && selectedItemName) {
-        const storageKey = `checkedEntries_${selectedWarehouse}_${selectedFloor}_${selectedItemName.toUpperCase()}`;
-        localStorage.setItem(storageKey, JSON.stringify(checkedEntries));
-      }
-      // Also save to general key for backward compatibility
-      localStorage.setItem("checkedEntries", JSON.stringify(checkedEntries));
-      
-      setTimeout(() => {
-        setSaving(false);
-      }, 500);
-    } catch (err) {
-      alert("Failed to save checked entries");
-      setSaving(false);
+      await stocktakeEntriesAPI.updateEntry(entryId, {
+        isChecked: checked,
+        verified: checked,
+        verifiedBy,
+        verifiedAt,
+      });
+    } catch (err: any) {
+      console.error("Failed to persist entry check:", err);
+      // Revert optimistic updates so the UI stays truthful to the DB.
+      setCheckedEntries((prev) => {
+        const reverted = { ...prev, [entryId]: prevChecked };
+        persistCheckedLocal(reverted);
+        return reverted;
+      });
+      applyCheckToGrouped(entryId, prevChecked, prevChecked ? verifiedBy : null, prevChecked ? verifiedAt : null);
+      toast({
+        title: "Save failed",
+        description: err.message || "Could not save the check. Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -1257,8 +1284,10 @@ export default function ManagerReview() {
     );
   }
 
-  // Download all warehouse floor entries as Excel
-  const handleDownloadWarehouseEntries = async () => {
+  // Download warehouse entries as Excel.
+  // Pass a `floorFilter` to scope the sheet to a single floor (used by "Save Floor");
+  // omit it to export every floor in the warehouse (the "Download All" button).
+  const handleDownloadWarehouseEntries = async (floorFilter?: string | null) => {
     if (!selectedWarehouse) {
       toast({
         title: "Error",
@@ -1272,12 +1301,25 @@ export default function ManagerReview() {
     
     try {
       const downloadParams: any = { warehouse: selectedWarehouse, ...getDateRange() };
+      if (floorFilter) downloadParams.floorName = floorFilter;
       const response = await stocktakeEntriesAPI.getEntries(downloadParams);
-      
+
+      // When scoped to a single floor, keep only that floor's rows even if the API
+      // returns more. Defense-in-depth so the sheet matches the floor the manager
+      // just saved rather than the entire warehouse.
+      if (floorFilter && response?.entries) {
+        const target = floorFilter.toUpperCase();
+        response.entries = response.entries.filter((entry: any) =>
+          (entry.floorName || entry.floor_name || "").toUpperCase() === target
+        );
+      }
+
       if (!response?.entries || response.entries.length === 0) {
         toast({
           title: "No Data",
-          description: `No entries found for warehouse ${selectedWarehouse}`,
+          description: floorFilter
+            ? `No entries found for floor ${floorFilter} in warehouse ${selectedWarehouse}`
+            : `No entries found for warehouse ${selectedWarehouse}`,
           variant: "destructive",
         });
         return;
@@ -1374,7 +1416,7 @@ export default function ManagerReview() {
 
         // Row 2: Date and warehouse info
         const infoRow = worksheet.addRow([
-          `Warehouse: ${selectedWarehouse}  |  Date: ${selectedDates.length > 0 ? selectedDates.join(", ") : "All Dates"}  |  Status: ${statusText}`
+          `Warehouse: ${selectedWarehouse}${floorFilter ? `  |  Floor: ${floorFilter}` : ""}  |  Date: ${selectedDates.length > 0 ? selectedDates.join(", ") : "All Dates"}  |  Status: ${statusText}`
         ]);
         worksheet.mergeCells(2, 1, 2, headers.length);
         const infoCell = infoRow.getCell(1);
@@ -1492,7 +1534,8 @@ export default function ManagerReview() {
 
       // Generate filename with timestamp
       const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
-      const filename = `${selectedWarehouse}_All_Entries_${timestamp}.xlsx`;
+      const scopeLabel = floorFilter ? floorFilter.replace(/[^A-Za-z0-9-]+/g, "_") : "All";
+      const filename = `${selectedWarehouse}_${scopeLabel}_Entries_${timestamp}.xlsx`;
 
       // Write to buffer and download
       const buffer = await workbook.xlsx.writeBuffer();
@@ -1512,7 +1555,9 @@ export default function ManagerReview() {
 
       toast({
         title: "Download Complete",
-        description: `Exported ${freshStockEntries.length} fresh stock and ${rejectionEntries.length} rejection entries from ${selectedWarehouse} in separate sheets`,
+        description: floorFilter
+          ? `Exported ${freshStockEntries.length} fresh stock and ${rejectionEntries.length} rejection entries for floor ${floorFilter} (${selectedWarehouse})`
+          : `Exported ${freshStockEntries.length} fresh stock and ${rejectionEntries.length} rejection entries from ${selectedWarehouse} in separate sheets`,
       });
 
     } catch (error: any) {
@@ -2133,7 +2178,7 @@ export default function ManagerReview() {
                 {/* Download Button */}
                 <div className="mr-download-sticky">
                   <Button
-                    onClick={handleDownloadWarehouseEntries}
+                    onClick={() => handleDownloadWarehouseEntries()}
                     disabled={downloadingWarehouse}
                     className="mr-download-btn"
                     size="lg"
@@ -3105,37 +3150,7 @@ export default function ManagerReview() {
                   })}
                 </div>
                 
-                {/* Save Button */}
-                <div className="mr-save-footer">
-                  {/* <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200 dark:border-blue-800">
-                    <p className="text-xs text-blue-900 dark:text-blue-100 font-semibold mb-1">
-                      Checked Entries: <span className="text-primary">{
-                        getItemEntries(selectedItemName || "").filter(entry => checkedEntries[entry.id]).length
-                      }</span> of <span className="text-primary">{getItemEntries(selectedItemName || "").length}</span>
-                    </p>
-                    <p className="text-[10px] text-blue-700 dark:text-blue-300">
-                      Click quantity boxes to check/uncheck. Click "Save State" to persist.
-                    </p>
-                  </div> */}
-                  
-                  <Button
-                    onClick={handleSaveCheckedEntries}
-                    disabled={saving}
-                    className="mr-save-state-btn"
-                  >
-                    {saving ? (
-                      <>
-                        <Loader className="mr-save-state-icon mr-loader-xs" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        <Save className="mr-save-state-icon" />
-                        Save State
-                      </>
-                    )}
-                  </Button>
-                </div>
+                {/* Checks persist immediately on each tick — no manual save needed */}
               </>
             ) : (
               <div className="mr-empty">
