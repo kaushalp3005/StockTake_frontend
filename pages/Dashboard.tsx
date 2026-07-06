@@ -181,12 +181,15 @@ export default function Dashboard() {
         // Check for draft entries in DB
         await checkDraftEntries(parsedUser.email);
 
-        // Fetch submitted entries by email (most reliable identifier)
-        const userEmail = parsedUser.email;
-        console.log("Fetching submitted entries for user email:", userEmail);
+        // Fetch submitted entries by entered_by. Entries are saved with
+        // entered_by = user.username (see AddItem.tsx), so we must query by the
+        // username here — not the email — or nothing matches. Mirror the save-side
+        // precedence (username first, email fallback) for robustness.
+        const enteredByValue = parsedUser.username || parsedUser.email;
+        console.log("Fetching submitted entries for entered_by:", enteredByValue);
 
         const response = await stocktakeEntriesAPI.getEntries({
-          enteredBy: userEmail,
+          enteredBy: enteredByValue,
         });
 
         const entries = response?.entries || [];
@@ -431,10 +434,11 @@ export default function Dashboard() {
 
     setDownloadingSession(session.id);
     try {
-      // Fetch entries fresh from API so we get verified / verifiedBy / verifiedAt / remark fields
-      const userEmail = session.userEmail;
+      // Fetch entries fresh from API so we get verified / verifiedBy / verifiedAt / remark fields.
+      // Match on entered_by (the stored username), same as the list query above.
+      const enteredByValue = session.userName || session.userEmail;
       const response = await stocktakeEntriesAPI.getEntries({
-        enteredBy: userEmail,
+        enteredBy: enteredByValue,
         warehouse: session.warehouse,
         floorName: session.floorName,
       });
@@ -541,9 +545,9 @@ export default function Dashboard() {
           action: () => navigate("/resultsheet"),
         },
         {
-          label: "Update Sku",
-          icon: Package,
-          action: () => navigate("/update-sku"),
+          label: "Manage Users",
+          icon: Users,
+          action: () => navigate("/manage-users"),
         },
       ],
     },
@@ -921,7 +925,7 @@ export default function Dashboard() {
                           <div className="flex items-center gap-1 text-xs text-muted-foreground">
                             <Calendar className="w-3 h-3" />
                             <span>
-                              {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleDateString()}
+                              {new Date(pendingSession.lastModified || pendingSession.createdAt).toLocaleDateString("en-GB")}
                             </span>
                           </div>
 
@@ -988,7 +992,7 @@ export default function Dashboard() {
                       (sum: number, item: any) => sum + (item.totalWeight || 0), 0
                     ) || 0;
                     const sessionDate = session.createdAt
-                      ? new Date(session.createdAt).toLocaleDateString()
+                      ? new Date(session.createdAt).toLocaleDateString("en-GB")
                       : "N/A";
                     const sessionTime = session.createdAt
                       ? new Date(session.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -1164,7 +1168,7 @@ export default function Dashboard() {
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
                     <span className="text-xs text-muted-foreground flex items-center gap-1">
                       <Calendar className="w-3 h-3" />
-                      {selectedSession.createdAt ? new Date(selectedSession.createdAt).toLocaleString() : "N/A"}
+                      {selectedSession.createdAt ? `${new Date(selectedSession.createdAt).toLocaleDateString("en-GB")}, ${new Date(selectedSession.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "N/A"}
                     </span>
                     {selectedSession.status && (
                       <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
