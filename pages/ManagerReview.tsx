@@ -366,7 +366,13 @@ export default function ManagerReview() {
   useEffect(() => {
     if (!isFloorsPage) return;
     const wh = searchParams.get("warehouse");
-    if (wh) fetchFloors(wh);
+    if (wh) {
+      fetchFloors(wh);
+    } else {
+      // No warehouse in the URL (e.g. a stale/corrupted link) — send the user
+      // back to the picker rather than showing an empty "No floors" dead-end.
+      navigate("/review", { replace: true });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -375,13 +381,19 @@ export default function ManagerReview() {
     localStorage.setItem('warehouseViewMode', warehouseViewMode);
   }, [warehouseViewMode]);
 
-  // Sync selectedDates to URL params
+  // Sync selectedDates to URL params. Use the updater form so we only touch the
+  // `dates` key — replacing the whole query (the old behavior) wiped out
+  // `warehouse`/`floor` on the /review/floors and /review/floor routes, which
+  // corrupted history entries and broke the browser Back button.
   useEffect(() => {
-    if (selectedDates.length > 0) {
-      setSearchParams({ dates: selectedDates.join(",") }, { replace: true });
-    } else {
-      setSearchParams({}, { replace: true });
-    }
+    setSearchParams(prev => {
+      if (selectedDates.length > 0) {
+        prev.set("dates", selectedDates.join(","));
+      } else {
+        prev.delete("dates");
+      }
+      return prev;
+    }, { replace: true });
   }, [selectedDates, setSearchParams]);
 
   // Helper: derive start/end date strings for API range queries

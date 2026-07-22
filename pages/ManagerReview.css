@@ -7,6 +7,10 @@
      (see .mr-breadcrumb) without shifting the page content on any screen size. */
   position: relative;
   background: linear-gradient(to bottom, var(--background), hsl(var(--muted) / 0.3));
+  /* Fit the mobile viewport — clip any small horizontal overshoot so the page
+     never scrolls sideways. `clip` keeps sticky children working. */
+  overflow-x: clip;
+  max-width: 100%;
 }
 
 .mr-loading {
@@ -1955,47 +1959,7 @@
 }
 
 /* ── Dark mode overrides for quantity boxes ── */
-@media (prefers-color-scheme: dark) {
-  .mr-qty-value {
-    color: white;
-  }
-  .mr-qty-box-reject {
-    background: rgba(127, 29, 29, 0.2);
-    border-color: rgba(185, 28, 28, 1);
-  }
-  .mr-qty-box-reject:hover {
-    background: rgba(127, 29, 29, 0.3);
-  }
-  .mr-qty-box-reject-checked {
-    background: rgba(127, 29, 29, 0.3);
-  }
-  .mr-qty-box-reject-checked:hover {
-    background: rgba(127, 29, 29, 0.4);
-  }
-  .mr-qty-edit-delete {
-    background: rgba(127, 29, 29, 0.3);
-    color: #f87171;
-  }
-  .mr-qty-floor-link {
-    color: #60a5fa;
-  }
-  .mr-qty-weight-reject {
-    color: #f87171;
-  }
-  .mr-qty-reject-badge {
-    color: #f87171;
-  }
-  .mr-qty-delete-btn {
-    background: rgba(127, 29, 29, 0.3);
-    color: #f87171;
-  }
-  .mr-entry-summary-count {
-    color: white;
-  }
-  .mr-save-floor-icon {
-    color: #34d399;
-  }
-  .mr-save-floor-text {
-    color: #34d399;
-  }
-}
+/* Intentionally no `@media (prefers-color-scheme: dark)` rules here. The app is
+   a fixed light-themed UI; reacting to the phone's dark mode turned qty values
+   white on light boxes (unreadable). Light mode is forced globally via
+   `color-scheme: light` — see global.css. */

@@ -22,6 +22,10 @@
     overscroll-behavior: none;
     height: 100%;
     position: relative;
+    /* Never allow the page to scroll sideways on mobile. `clip` (not `hidden`)
+       so it doesn't turn body into a scroll container and break sticky/fixed. */
+    overflow-x: clip;
+    max-width: 100%;
   }
 
   /* Root app container */
@@ -214,6 +218,10 @@
    * A different format will require also updating the theme in tailwind.config.ts.
   */
   :root {
+    /* Force a light UA rendering regardless of the OS/browser dark setting so
+       inputs, scrollbars and form controls are never auto-darkened. */
+    color-scheme: light;
+
     --background: 0 0% 100%;
     --foreground: 220 13% 18%;
 
