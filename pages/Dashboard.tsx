@@ -570,11 +570,6 @@ export default function Dashboard() {
           icon: Package,
           action: () => navigate("/reports"),
         },
-        {
-          label: "Update Sku",
-          icon: Package,
-          action: () => navigate("/update-sku"),
-        },
       ],
     },
     SUPERUSER: {
@@ -605,11 +600,6 @@ export default function Dashboard() {
           label: "View Resultsheet",
           icon: Package,
           action: () => navigate("/resultsheet"),
-        },
-        {
-          label: "Update Sku",
-          icon: Package,
-          action: () => navigate("/update-sku"),
         },
       ],
     },

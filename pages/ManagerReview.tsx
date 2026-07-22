@@ -1,7 +1,7 @@
 /* MODIFIED: [E1/E2/E3/E6/E7/G4/G5] — compact item cards, auto-sort, auto-verify, verify/remark, delete modal, amber indicator, changelog */
 import "./ManagerReview.css";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -104,7 +104,15 @@ const WAREHOUSES = ["W202", "A185", "F53", "A68", "Savla", "Rishi"];
 
 export default function ManagerReview() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  // Floor entries live on their own route (/review/floor). The component is the
+  // same, but on this path it renders the item list as a full page instead of a
+  // drawer, and hydrates warehouse/floor from the URL (the route remounts on nav).
+  const isFloorPage = location.pathname === "/review/floor";
+  // The floor picker also has its own route (/review/floors) so it renders as a
+  // full page instead of a bottom drawer.
+  const isFloorsPage = location.pathname === "/review/floors";
   const { toast } = useToast();
   const [user, setUser] = useState<any>(null);
   const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
@@ -112,13 +120,18 @@ export default function ManagerReview() {
     floorName: string;
     itemCount: number;
     totalWeight: number;
+    hasUnchecked: boolean;
   }[]>([]);
   const [loadingFloors, setLoadingFloors] = useState(false);
   // Name of the warehouse currently being fetched — drives the card spinner
   // while floors load, before the drawer is opened (see handleWarehouseClick).
   const [loadingWarehouseName, setLoadingWarehouseName] = useState<string | null>(null);
-  const [selectedWarehouse, setSelectedWarehouse] = useState<string | null>(null);
-  const [selectedFloor, setSelectedFloor] = useState<string | null>(null);
+  // Seed from URL so a direct hit / refresh of /review/floor (and the remount
+  // that happens on every route change) restores context without a round-trip
+  // through the warehouse picker. The grouped-items effect keys off these, so
+  // setting them here is enough to trigger the fetch on mount.
+  const [selectedWarehouse, setSelectedWarehouse] = useState<string | null>(() => searchParams.get("warehouse"));
+  const [selectedFloor, setSelectedFloor] = useState<string | null>(() => searchParams.get("floor"));
   const [isLoading, setIsLoading] = useState(true);
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
   const [confirmed, setConfirmed] = useState(false);
@@ -347,6 +360,16 @@ export default function ManagerReview() {
     };
   }, []);
 
+  // On the floors page (direct hit, refresh, or arriving from a warehouse tap or
+  // the item page's "Back" button), load that warehouse's floor list from the
+  // ?warehouse= param. The route remounts per navigation, so this runs each time.
+  useEffect(() => {
+    if (!isFloorsPage) return;
+    const wh = searchParams.get("warehouse");
+    if (wh) fetchFloors(wh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // D1: Persist view mode preference
   useEffect(() => {
     localStorage.setItem('warehouseViewMode', warehouseViewMode);
@@ -379,47 +402,42 @@ export default function ManagerReview() {
 
   const scrollTimeoutRef = useRef<NodeJS.Timeout>();
 
-  const handleWarehouseClick = async (warehouse: string) => {
-    // Prevent clicks during scrolling
-    if (isScrollingRef.current) {
-      return;
-    }
-
-    // Fetch the floors BEFORE opening the drawer. If we open first and then
-    // swap a short "Loading floors..." state for the full floor list, the
-    // bottom-anchored (fit-content) drawer grows upward the moment the fetch
-    // resolves — which reads as the whole page "jumping" on every warehouse
-    // click. Instead we show a spinner on the card while fetching, then open
-    // the drawer once, already at its final content height.
+  // Fetch the unique floors for a warehouse from the database. Data only — the
+  // floors now live on their own page (/review/floors), which calls this on
+  // mount. No drawer / navigation side effects here.
+  const fetchFloors = async (warehouse: string) => {
     setSelectedWarehouse(warehouse);
     setLoadingWarehouseName(warehouse);
     setLoadingFloors(true);
 
     try {
-      // Fetch entries for this warehouse to get unique floors from database
       const fetchParams: any = { warehouse, ...getDateRange() };
       const entriesResponse = await stocktakeEntriesAPI.getEntries(fetchParams);
 
       if (entriesResponse && entriesResponse.entries && entriesResponse.entries.length > 0) {
         // Group entries by floor name
-        const floorMap: Record<string, { itemCount: number; totalWeight: number }> = {};
-        
+        const floorMap: Record<string, { itemCount: number; totalWeight: number; uncheckedCount: number }> = {};
+
         entriesResponse.entries.forEach((entry: any) => {
           const floorName = (entry.floorName || "Unknown").toUpperCase();
           if (!floorMap[floorName]) {
-            floorMap[floorName] = { itemCount: 0, totalWeight: 0 };
+            floorMap[floorName] = { itemCount: 0, totalWeight: 0, uncheckedCount: 0 };
           }
           floorMap[floorName].itemCount += 1;
           floorMap[floorName].totalWeight += entry.totalWeight || 0;
+          // "check = verify": an entry is complete once verified. A floor is
+          // incomplete (red dot) if any of its entries is still unverified.
+          if (entry.verified !== true) floorMap[floorName].uncheckedCount += 1;
         });
-        
+
         // Convert to array
         const floors = Object.entries(floorMap).map(([floorName, data]) => ({
           floorName,
           itemCount: data.itemCount,
           totalWeight: data.totalWeight,
+          hasUnchecked: data.uncheckedCount > 0,
         }));
-        
+
         setWarehouseFloors(floors);
       } else {
         setWarehouseFloors([]);
@@ -430,10 +448,16 @@ export default function ManagerReview() {
     } finally {
       setLoadingFloors(false);
       setLoadingWarehouseName(null);
-      // Floors are ready, so the drawer's content height is now final — open it
-      // in one shot to avoid the resize/jump described above.
-      setDrawerOpen(true);
     }
+  };
+
+  // Warehouse card → open the floors PAGE (context in the URL, refresh-safe).
+  const handleWarehouseClick = (warehouse: string) => {
+    if (isScrollingRef.current) return;
+    const params = new URLSearchParams();
+    params.set("warehouse", warehouse);
+    if (selectedDates.length > 0) params.set("dates", selectedDates.join(","));
+    navigate(`/review/floors?${params.toString()}`);
   };
 
   const handleFloorClick = (floor: string) => {
@@ -442,15 +466,15 @@ export default function ManagerReview() {
       return;
     }
     
-    setSelectedFloor(floor);
-    setSelectedItemName(null);
-    setConfirmed(false); // Reset confirmation when changing floors
-    setCheckedEntries({}); // Reset checked entries when changing floors
-    // Close floors drawer and open items drawer with slight delay for smooth animation
+    // The item list is now its own page. Navigate to /review/floor with the
+    // context in the URL (refresh-safe, back-button friendly) instead of opening
+    // a nested drawer. The route remounts and hydrates from these params.
+    const params = new URLSearchParams();
+    if (selectedWarehouse) params.set("warehouse", selectedWarehouse);
+    params.set("floor", floor);
+    if (selectedDates.length > 0) params.set("dates", selectedDates.join(","));
     setDrawerOpen(false);
-    setTimeout(() => {
-      setItemsDrawerOpen(true);
-    }, 200);
+    navigate(`/review/floor?${params.toString()}`);
   };
 
   const handleSaveFloorReview = async () => {
@@ -730,7 +754,7 @@ export default function ManagerReview() {
 
       // Refresh grouped items data
       if (selectedWarehouse && selectedFloor) {
-        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
+        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
         setGroupedItemsData(data.groups || []);
       }
 
@@ -782,7 +806,7 @@ export default function ManagerReview() {
       await stocktakeEntriesAPI.deleteEntry(deleteTarget.id);
 
       if (selectedWarehouse && selectedFloor) {
-        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
+        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
         setGroupedItemsData(data.groups || []);
       }
       setDeleteModalOpen(false);
@@ -1049,7 +1073,7 @@ export default function ManagerReview() {
       await stocktakeEntriesAPI.submitEntries([entry]);
 
       // Refresh grouped items data
-      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
+      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
       setGroupedItemsData(data.groups || []);
 
       // Reset form and close drawer
@@ -1125,7 +1149,7 @@ export default function ManagerReview() {
 
       await stocktakeEntriesAPI.submitEntries([entry]);
 
-      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
+      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
       setGroupedItemsData(data.groups || []);
 
       setQuickAddUnits("");
@@ -1183,7 +1207,7 @@ export default function ManagerReview() {
         const data = await stocktakeEntriesAPI.getGroupedEntries(
           selectedWarehouse!,
           selectedFloor!,
-          getPrimaryDate()
+          getDateRange()
         );
         setGroupedItemsData(data.groups || []);
         setConfirmed(false);
@@ -1573,29 +1597,23 @@ export default function ManagerReview() {
   };
 
 
-  // Animation variants
+  // Animation variants — fade only (no slide/scale) so route changes don't swipe.
   const pageVariants = {
     initial: {
       opacity: 0,
-      x: 20,
-      scale: 0.98,
     },
     animate: {
       opacity: 1,
-      x: 0,
-      scale: 1,
       transition: {
-        duration: 0.4,
+        duration: 0.12,
         ease: [0.22, 1, 0.36, 1] as const,
-        staggerChildren: 0.1,
+        staggerChildren: 0.04,
       },
     },
     exit: {
       opacity: 0,
-      x: -20,
-      scale: 0.98,
       transition: {
-        duration: 0.3,
+        duration: 0.08,
         ease: [0.22, 1, 0.36, 1] as const,
       },
     },
@@ -1708,10 +1726,20 @@ export default function ManagerReview() {
       {(selectedWarehouse) && (
         <nav style={{ background: "#111827", borderTop: "1px solid rgba(255,255,255,0.06)" }} className="mr-breadcrumb">
           {(() => {
+            // On the floor page the crumbs navigate by route (the component
+            // remounts per route, so clearing state alone would leave a blank
+            // page). Build the warehouse→floors return URL once.
+            const floorsUrl = () => {
+              const params = new URLSearchParams();
+              if (selectedWarehouse) params.set("warehouse", selectedWarehouse);
+              if (selectedDates.length > 0) params.set("dates", selectedDates.join(","));
+              return `/review/floors?${params.toString()}`;
+            };
             const crumbs: { label: string; onClick?: () => void }[] = [
               {
                 label: "Review",
                 onClick: () => {
+                  if (isFloorPage || isFloorsPage) { navigate("/review"); return; }
                   setItemDetailsOpen(false);
                   setItemsDrawerOpen(false);
                   setDrawerOpen(false);
@@ -1726,6 +1754,17 @@ export default function ManagerReview() {
                 label: selectedWarehouse,
                 onClick: (selectedFloor || selectedItemName)
                   ? () => {
+                      if (isFloorPage || isFloorsPage) {
+                        // If an item drawer is open, just close it to reveal the
+                        // items page; otherwise go back to the floors picker.
+                        if (itemDetailsOpen || selectedItemName) {
+                          setItemDetailsOpen(false);
+                          setSelectedItemName(null);
+                        } else {
+                          navigate(floorsUrl());
+                        }
+                        return;
+                      }
                       setItemDetailsOpen(false);
                       setItemsDrawerOpen(false);
                       setSelectedFloor(null);
@@ -1804,6 +1843,9 @@ export default function ManagerReview() {
         </nav>
       )}
 
+      {/* Warehouse picker + floors drawer render only on the /review picker
+          route. On /review/floor the item list takes over as a full page. */}
+      {(!isFloorPage && !isFloorsPage) && (<>
       {/* Main Content */}
       <div className="mr-main">
         <div className="mr-main-inner">
@@ -2035,38 +2077,25 @@ export default function ManagerReview() {
 
         </div>
       </div>
+      </>)}
 
-      {/* Floors Drawer */}
-      <Drawer open={drawerOpen} onOpenChange={(open) => {
-        if (!open && deleteModalOpen) return; // keep open while delete modal is active
-        setDrawerOpen(open);
-        if (!open) {
-          setSelectedWarehouse(null);
-        }
-      }}>
-        <DrawerContent className="mr-drawer-content">
-          <DrawerHeader className="mr-drawer-header">
-            <div className="mr-drawer-back-row">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  if (!isScrollingRef.current) {
-                    setDrawerOpen(false);
-                  }
-                }}
-                className="mr-drawer-back-btn"
+      {/* Floor picker — full page. Was the "Select Floor" bottom drawer; now its
+          own route (/review/floors) so the whole flow is page-based, no drawers. */}
+      {isFloorsPage && (
+        <div className="mr-main">
+          <div className="mr-main-inner">
+            <div className="mr-header mr-floor-page-header" style={{ marginBottom: 12 }}>
+              <button
+                onClick={() => { if (!isScrollingRef.current) navigate("/review"); }}
+                className="mr-drawer-back-btn mr-floor-page-back"
               >
                 <ArrowLeft className="mr-download-icon" />
                 Back
-              </Button>
-            </div>
-            <DrawerTitle className="mr-drawer-title">
-              {selectedWarehouse} - Select Floor
-            </DrawerTitle>
-            <DrawerDescription>
-              Choose a floor to review its entries
-            </DrawerDescription>
+              </button>
+              <h1 className="mr-title">{selectedWarehouse} - Select Floor</h1>
+              <p className="mr-subtitle">
+                Choose a floor to review its entries
+              </p>
             {/* C4: Active date filter badge */}
             <div className="mr-date-badge">
               {selectedDates.length > 0 ? (
@@ -2097,7 +2126,7 @@ export default function ManagerReview() {
                 </span>
               )}
             </div>
-          </DrawerHeader>
+            </div>
           <div className="mr-drawer-body">
             {loadingFloors ? (
               <div className="mr-floor-loading">
@@ -2110,17 +2139,19 @@ export default function ManagerReview() {
                   {(() => {
                     const maxFloorItemCount = Math.max(...warehouseFloors.map(f => f.itemCount), 1);
                     return warehouseFloors.map((floor, index) => {
-                      const hasUnchecked = hasUncheckedEntriesInFloor(floor.floorName);
+                      // Per-floor completion is precomputed from the warehouse fetch
+                      // (groupedItemsData only ever holds the one open floor).
+                      const hasUnchecked = floor.hasUnchecked;
                       const allChecked = !hasUnchecked && floor.itemCount > 0;
                       const progressPct = Math.round((floor.itemCount / maxFloorItemCount) * 100);
                       return (
                     <motion.div
                       key={floor.floorName}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
                       transition={{
-                        duration: 0.3,
-                        delay: index * 0.05,
+                        duration: 0.15,
+                        delay: index * 0.03,
                       }}
                     >
                       <Card
@@ -2203,64 +2234,53 @@ export default function ManagerReview() {
               </p>
             )}
           </div>
-        </DrawerContent>
-      </Drawer>
+          </div>
+        </div>
+      )}
 
-      {/* Items List Drawer - Shows unique item names */}
-      <Drawer open={itemsDrawerOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
-        if (!open && deleteModalOpen) return; // keep open while delete modal is active
-        setItemsDrawerOpen(open);
-        if (!open) {
-          setSelectedFloor(null);
-          setSelectedItemName(null);
-          setItemSearchQuery("");
-        }
-      }}>
-        <DrawerContent className="mr-drawer-content">
-          <DrawerHeader className="mr-drawer-header">
-            <div className="mr-drawer-back-row">
-              <Button
-                variant="ghost"
-                size="sm"
+      {/* Floor items — full page. Replaces the old items-list drawer; opens as
+          its own route (/review/floor) so it is refresh-safe and back-navigable. */}
+      {isFloorPage && (
+        <div className="mr-main">
+          <div className="mr-main-inner">
+            <div className="mr-header mr-floor-page-header" style={{ marginBottom: 12 }}>
+              <button
                 onClick={() => {
-                  if (!isScrollingRef.current) {
-                    setItemsDrawerOpen(false);
-                    setTimeout(() => {
-                      setDrawerOpen(true);
-                    }, 200);
-                  }
+                  if (isScrollingRef.current) return;
+                  // Return to the floor picker page for this warehouse.
+                  const params = new URLSearchParams();
+                  if (selectedWarehouse) params.set("warehouse", selectedWarehouse);
+                  if (selectedDates.length > 0) params.set("dates", selectedDates.join(","));
+                  navigate(`/review/floors?${params.toString()}`);
                 }}
-                className="mr-drawer-back-btn"
+                className="mr-drawer-back-btn mr-floor-page-back"
               >
                 <ArrowLeft className="mr-download-icon" />
                 Back to Floors
-              </Button>
+              </button>
+              <h1 className="mr-title">{selectedWarehouse} - {selectedFloor}</h1>
+              <p className="mr-subtitle">
+                Select an item to view all entries with usernames and quantities
+              </p>
+              <div className="mr-search-wrap">
+                <Search className="mr-search-icon" />
+                <input
+                  type="text"
+                  placeholder="Search items..."
+                  value={itemSearchQuery}
+                  onChange={(e) => setItemSearchQuery(e.target.value)}
+                  className="mr-search-input"
+                />
+                {itemSearchQuery && (
+                  <button
+                    onClick={() => setItemSearchQuery("")}
+                    className="mr-search-clear"
+                  >
+                    <X className="mr-search-clear-icon" />
+                  </button>
+                )}
+              </div>
             </div>
-            <DrawerTitle className="mr-drawer-title">
-              {selectedWarehouse} - {selectedFloor}
-            </DrawerTitle>
-            <DrawerDescription>
-              Select an item to view all entries with usernames and quantities
-            </DrawerDescription>
-            <div className="mr-search-wrap">
-              <Search className="mr-search-icon" />
-              <input
-                type="text"
-                placeholder="Search items..."
-                value={itemSearchQuery}
-                onChange={(e) => setItemSearchQuery(e.target.value)}
-                className="mr-search-input"
-              />
-              {itemSearchQuery && (
-                <button
-                  onClick={() => setItemSearchQuery("")}
-                  className="mr-search-clear"
-                >
-                  <X className="mr-search-clear-icon" />
-                </button>
-              )}
-            </div>
-          </DrawerHeader>
           <div className="mr-drawer-body">
             {loadingGroupedItems ? (
               <div className="mr-floor-loading">
@@ -2277,6 +2297,7 @@ export default function ManagerReview() {
                 {/* Compact toolbar — Save Floor + Add Item in a single row */}
                 {!itemSearchQuery && (
                   <motion.div
+                    className="mr-floor-toolbar"
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.2 }}
@@ -2339,13 +2360,21 @@ export default function ManagerReview() {
                     <Search className="mr-no-results-icon" />
                     <p className="mr-no-results-text">No items matching "{itemSearchQuery}"</p>
                   </div>
-                ) : (() => {
-                  // E2: Auto-sort — unverified items to top, verified to bottom
+                ) : (
+                  <div className="mr-items-grid">
+                  {(() => {
+                  // E2/#7: Auto-sort — items with any unchecked/unverified entry float
+                  // to the top so the manager never has to scroll to find remaining work;
+                  // fully-checked items sink to the bottom (ties: more unchecked first).
+                  const uncheckedCount = (it: any) =>
+                    it.entries.filter((e: any) => e.verified !== true).length;
                   const sortedItems = [...filteredItems].sort((a, b) => {
-                    const aVerified = a.entries.every((e: any) => e.verified);
-                    const bVerified = b.entries.every((e: any) => e.verified);
-                    if (aVerified === bVerified) return 0;
-                    return aVerified ? 1 : -1; // unverified first
+                    const au = uncheckedCount(a);
+                    const bu = uncheckedCount(b);
+                    const aDone = au === 0;
+                    const bDone = bu === 0;
+                    if (aDone !== bDone) return aDone ? 1 : -1; // any unchecked → top
+                    return bu - au;
                   });
                   return sortedItems.map((groupedItem, index) => {
                     const allVerified = groupedItem.entries.every((e: any) => e.verified);
@@ -2426,6 +2455,8 @@ export default function ManagerReview() {
                   );
                 });
                 })()}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="mr-empty">
@@ -2443,10 +2474,9 @@ export default function ManagerReview() {
             );
             })()}
           </div>
-          
-
-        </DrawerContent>
-      </Drawer>
+          </div>
+        </div>
+      )}
 
       {/* Add Item Drawer */}
       <Drawer open={addItemDrawerOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
@@ -3313,7 +3343,7 @@ export default function ManagerReview() {
                           itemSubcategory: result.subgroup,
                         });
                         if (selectedWarehouse && selectedFloor) {
-                          const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getPrimaryDate());
+                          const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
                           setGroupedItemsData(data.groups || []);
                         }
                         toast({ title: "Entry reassigned", description: `Reassigned to "${result.name}"` });

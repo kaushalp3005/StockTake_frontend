@@ -405,7 +405,12 @@ export default function AllEntriesSummary() {
       const floors = new Set<string>();
 
       entries.forEach((entry) => {
-        const floorLabel = (entry.floorName || "Unknown").toUpperCase();
+        // Scope each floor column by its warehouse so same-named floors in different
+        // warehouses (e.g. "TEST" in both A185 and W202) get their own columns instead
+        // of being summed into one — the header then reads "W202 - TEST".
+        const warehouseLabel = (entry.warehouse || "Unknown").toUpperCase();
+        const floorName = (entry.floorName || "Unknown").toUpperCase();
+        const floorLabel = `${warehouseLabel} - ${floorName}`;
         floors.add(floorLabel);
         const itemKey = `${entry.itemCategory}:::${entry.itemSubcategory}:::${entry.itemName}:::${entry.itemType}`;
         if (!itemMap.has(itemKey)) itemMap.set(itemKey, new Map());

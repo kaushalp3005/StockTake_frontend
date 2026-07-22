@@ -321,12 +321,23 @@ export const stocktakeEntriesAPI = {
 
   getAvailableDates: () => apiFetch("/stocktake-entries/available-dates"),
 
-  getGroupedEntries: (warehouse: string, floorName: string, date?: string) => {
+  getGroupedEntries: (
+    warehouse: string,
+    floorName: string,
+    range?: { startDate?: string; endDate?: string } | string,
+  ) => {
     const params = new URLSearchParams({
       warehouse: warehouse,
       floorName: floorName,
     });
-    if (date) params.append("date", date);
+    // A bare string is treated as a single-day filter (back-compat); an object
+    // scopes the grouped result to the selected [startDate, endDate] range.
+    if (typeof range === "string") {
+      if (range) params.append("date", range);
+    } else if (range) {
+      if (range.startDate) params.append("startDate", range.startDate);
+      if (range.endDate) params.append("endDate", range.endDate);
+    }
     return apiFetch(`/stocktake-entries/grouped?${params.toString()}`);
   },
 
@@ -442,41 +453,6 @@ export const auditsAPI = {
 
   getWarehouseAudits: (warehouseId: string) =>
     apiFetch(`/audits/warehouse/${warehouseId}`),
-};
-
-// SKU Upload API
-export const skuAPI = {
-  uploadFile: async (file: File): Promise<{
-    success: boolean;
-    message: string;
-    processedItems: number;
-    insertedItems: number;
-    skippedItems: number;
-    errors: number;
-    errorDetails?: string[];
-  }> => {
-    const token = localStorage.getItem("token");
-    const formData = new FormData();
-    formData.append("skuFile", file);
-
-    const response = await fetch(`${API_BASE}/sku/upload`, {
-      method: "POST",
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: formData,
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new APIError(response.status, data, data?.error || "Upload failed");
-    }
-
-    return data;
-  },
-
-  getStatus: () => apiFetch("/sku/status"),
 };
 
 export const floorReviewAPI = {

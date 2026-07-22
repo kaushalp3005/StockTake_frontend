@@ -136,9 +136,17 @@ export default function AddItem() {
   // A1: success flash state for Add Article button
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Barcode scanner modal
+  // Barcode scanner (inline camera, expands under the Scan button)
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanBadge, setScanBadge] = useState(false); // shows "Scanned from IMS" badge
+  const inlineScannerRef = useRef<HTMLDivElement>(null);
+
+  // Scroll the inline scanner into view when it opens so the camera is fully visible.
+  useEffect(() => {
+    if (scannerOpen) {
+      inlineScannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [scannerOpen]);
 
   useEffect(() => {
     // Get floor session from localStorage (session metadata: warehouse, floor, authority)
@@ -888,7 +896,7 @@ export default function AddItem() {
     .filter(item => (item.stockType || "Fresh Stock") === "Fresh Stock")
     .reduce((acc, item) => {
       const category = item.category;
-      const itemKey = `${item.subcategory}|${item.description}|Fresh Stock`;
+      const itemKey = `${item.category}|${item.subcategory}|${item.description}|Fresh Stock`;
       if (!acc[category]) acc[category] = {};
       if (!acc[category][itemKey]) {
         acc[category][itemKey] = {
@@ -904,7 +912,7 @@ export default function AddItem() {
     .filter(item => (item.stockType || "Fresh Stock") === "Off Grade/Rejection")
     .reduce((acc, item) => {
       const category = item.category;
-      const itemKey = `${item.subcategory}|${item.description}|Off Grade/Rejection`;
+      const itemKey = `${item.category}|${item.subcategory}|${item.description}|Off Grade/Rejection`;
       if (!acc[category]) acc[category] = {};
       if (!acc[category][itemKey]) {
         acc[category][itemKey] = {
@@ -933,9 +941,10 @@ export default function AddItem() {
       return;
     }
 
-    // Find existing item from the same group using itemKey (includes stockType)
+    // Find existing item from the same group using itemKey (category + subcategory
+    // + description + stockType) so items sharing a name across categories don't collide.
     const existingItem = addedItems.find((item) =>
-      `${item.subcategory}|${item.description}|${item.stockType || 'Fresh Stock'}` === itemKey
+      `${item.category}|${item.subcategory}|${item.description}|${item.stockType || 'Fresh Stock'}` === itemKey
     );
 
     if (!existingItem) {
@@ -1286,6 +1295,18 @@ export default function AddItem() {
                     <p className="text-xs text-muted-foreground">
                       Search for item descriptions to auto-fill category, subcategory, and UOM
                     </p>
+
+                    {/* Inline QR scanner — expands here (below the Scan button) when opened */}
+                    {scannerOpen && (
+                      <div ref={inlineScannerRef} className="pt-1">
+                        <BarcodeScanner
+                          inline
+                          open={scannerOpen}
+                          onClose={() => setScannerOpen(false)}
+                          onScanResult={handleScanResult}
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1942,13 +1963,6 @@ export default function AddItem() {
           </div>
         </div>
       </div>
-
-      {/* Barcode Scanner Modal */}
-      <BarcodeScanner
-        open={scannerOpen}
-        onClose={() => setScannerOpen(false)}
-        onScanResult={handleScanResult}
-      />
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>

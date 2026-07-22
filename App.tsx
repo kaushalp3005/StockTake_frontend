@@ -19,7 +19,6 @@ import SubmissionSuccess from "./pages/SubmissionSuccess";
 import ManagerReview from "./pages/ManagerReview";
 import AllEntriesSummary from "./pages/AllEntriesSummary";
 import ResultsheetView from "./pages/ResultsheetView";
-import UpdateSku from "./pages/UpdateSku";
 import ManageUsers from "./pages/ManageUsers";
 import NotFound from "./pages/NotFound";
 
@@ -42,10 +41,11 @@ function AnimatedRoutes() {
         <Route path="/audit/entries" element={<ErrorBoundary pageName="Entries Summary"><PageTransition><EntriesSummary /></PageTransition></ErrorBoundary>} />
         <Route path="/audit/submitted" element={<ErrorBoundary pageName="Submission"><PageTransition><SubmissionSuccess /></PageTransition></ErrorBoundary>} />
         <Route path="/review" element={<ErrorBoundary pageName="Manager Review"><PageTransition><ManagerReview /></PageTransition></ErrorBoundary>} />
+        <Route path="/review/floors" element={<ErrorBoundary pageName="Select Floor"><PageTransition><ManagerReview /></PageTransition></ErrorBoundary>} />
+        <Route path="/review/floor" element={<ErrorBoundary pageName="Floor Entries"><PageTransition><ManagerReview /></PageTransition></ErrorBoundary>} />
         <Route path="/summary" element={<ErrorBoundary pageName="All Entries Summary"><PageTransition><AllEntriesSummary /></PageTransition></ErrorBoundary>} />
         <Route path="/resultsheet" element={<ErrorBoundary pageName="Resultsheet"><PageTransition><ResultsheetView /></PageTransition></ErrorBoundary>} />
         <Route path="/resultsheet/:date" element={<ErrorBoundary pageName="Resultsheet"><PageTransition><ResultsheetView /></PageTransition></ErrorBoundary>} />
-        <Route path="/update-sku" element={<ErrorBoundary pageName="Update SKU"><PageTransition><UpdateSku /></PageTransition></ErrorBoundary>} />
         <Route path="/manage-users" element={<ErrorBoundary pageName="Manage Users"><PageTransition><ManageUsers /></PageTransition></ErrorBoundary>} />
 
         {/* Placeholder routes */}

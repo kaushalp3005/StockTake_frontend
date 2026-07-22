@@ -63,7 +63,7 @@ export default function ManageUsers() {
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState("");
 
-  // Auth gate — only FLOOR_MANAGER and SUPERUSER (not FLOORHEAD, not ADMIN)
+  // Auth gate — FLOOR_MANAGER, INVENTORY_MANAGER and SUPERUSER (not FLOORHEAD, not ADMIN)
   useEffect(() => {
     const userStr = localStorage.getItem("user");
     if (!userStr) {
@@ -73,7 +73,7 @@ export default function ManageUsers() {
     const u = JSON.parse(userStr);
     const dbRoleUpper = (u.dbRole || "").toUpperCase();
     const isFloorHead = dbRoleUpper === "FLOORHEAD" || dbRoleUpper === "FLOOR_HEAD";
-    const allowed = ["FLOOR_MANAGER", "SUPERUSER"];
+    const allowed = ["FLOOR_MANAGER", "INVENTORY_MANAGER", "SUPERUSER"];
     if (!allowed.includes(u.role) || isFloorHead) {
       toast({
         title: "Access denied",
@@ -276,7 +276,9 @@ export default function ManageUsers() {
             No users found. Click <strong>Add User</strong> to create one.
           </Card>
         ) : (
-          <Card className="overflow-x-auto">
+          <>
+          {/* Desktop / tablet: full table */}
+          <Card className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/30 text-left">
@@ -353,6 +355,78 @@ export default function ManageUsers() {
               </tbody>
             </table>
           </Card>
+
+          {/* Mobile: card list (table would only scroll sideways on phones) */}
+          <div className="sm:hidden space-y-3">
+            {users.map((u) => (
+              <Card key={u.id} className="p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-foreground truncate">{u.username}</p>
+                    {u.name && (
+                      <p className="text-xs text-muted-foreground truncate">{u.name}</p>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-blue-100 text-blue-700">
+                      {u.role}
+                    </span>
+                    <span
+                      className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                        u.isActive ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-600"
+                      }`}
+                    >
+                      {u.isActive ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+                  {u.email && (
+                    <p className="truncate">
+                      <span className="text-foreground/70">Email:</span> {u.email}
+                    </p>
+                  )}
+                  <p>
+                    <span className="text-foreground/70">Warehouse:</span> {u.warehouse || "—"}
+                  </p>
+                  <p>
+                    <span className="text-foreground/70">ID:</span>{" "}
+                    <span className="font-mono">{u.id}</span>
+                    {u.createdAt && <> · {new Date(u.createdAt).toLocaleDateString()}</>}
+                  </p>
+                </div>
+
+                <div className="mt-3 flex items-center gap-2 border-t pt-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1 gap-1"
+                    onClick={() => openResetPassword(u)}
+                  >
+                    <KeyRound className="w-3.5 h-3.5" /> Reset
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1 gap-1"
+                    onClick={() => openEdit(u)}
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1 gap-1 text-destructive hover:text-destructive"
+                    onClick={() => confirmDelete(u)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
+          </>
         )}
       </div>
 

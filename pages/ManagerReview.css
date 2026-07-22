@@ -659,6 +659,67 @@
   margin-right: auto;
 }
 
+/* ── Floor entries page (route /review/floor) ── */
+.mr-floor-page-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.mr-floor-page-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0 0 0.625rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  min-height: 36px;
+}
+
+.mr-floor-page-back:hover {
+  background: hsl(var(--accent));
+}
+
+/* Toolbar (Save Floor / Add Item): full width on phones, capped so the two
+   buttons stay a sensible size on a laptop instead of stretching edge-to-edge. */
+.mr-floor-toolbar {
+  width: 100%;
+}
+
+@media (min-width: 640px) {
+  .mr-floor-toolbar {
+    max-width: 22rem;
+  }
+}
+
+/* Item cards: single column on phones, 2 up on tablets, 3 up on laptops.
+   Only used by the floor entries page. */
+.mr-items-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+}
+
+@media (min-width: 640px) {
+  .mr-items-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.625rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .mr-items-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 .mr-drawer-title {
   font-size: 1.25rem;
   font-weight: 700;

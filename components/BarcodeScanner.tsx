@@ -35,6 +35,8 @@ interface BarcodeScannerProps {
   open: boolean;
   onClose: () => void;
   onScanResult: (result: IMSItemResult) => void;
+  /** When true, render inline in the page flow (no dark backdrop / bottom sheet). */
+  inline?: boolean;
 }
 
 type ScanMode = "camera" | "manual";
@@ -42,7 +44,7 @@ type ScanState = "idle" | "scanning" | "loading" | "success" | "error";
 
 const SCANNER_ID = "qr-scanner-viewport";
 
-export default function BarcodeScanner({ open, onClose, onScanResult }: BarcodeScannerProps) {
+export default function BarcodeScanner({ open, onClose, onScanResult, inline = false }: BarcodeScannerProps) {
   const [mode, setMode]             = useState<ScanMode>("camera");
   const [scanState, setScanState]   = useState<ScanState>("idle");
   const [manualBoxId, setManualBoxId] = useState("");
@@ -54,6 +56,7 @@ export default function BarcodeScanner({ open, onClose, onScanResult }: BarcodeS
   const scannerRef         = useRef<any>(null);
   const scannerStartedRef  = useRef(false);
   const processingRef      = useRef(false); // prevent double-scan
+  const startGenRef        = useRef(0);     // invalidates in-flight start() calls
 
   // ── Parse QR JSON and call backend ──────────────────────────────
   const lookupFromQrData = useCallback(async (rawQrText: string): Promise<IMSItemResult> => {
@@ -119,14 +122,22 @@ export default function BarcodeScanner({ open, onClose, onScanResult }: BarcodeS
     }
   }, [lookupFromQrData, onScanResult, onClose]);
 
+  // Keep the latest decode handler in a ref so the camera lifecycle effect below
+  // does NOT depend on its identity — otherwise every parent re-render (unstable
+  // onScanResult/onClose props) would tear down and restart the live camera.
+  const handleQrDecodedRef = useRef(handleQrDecoded);
+  useEffect(() => { handleQrDecodedRef.current = handleQrDecoded; }, [handleQrDecoded]);
+
   // ── Start camera scanner ─────────────────────────────────────────
   const startScanner = useCallback(async () => {
     if (scannerStartedRef.current) return;
+    const gen = ++startGenRef.current; // this start's generation
     setScanState("scanning");
     setErrorMsg("");
     processingRef.current = false;
     try {
       const { Html5Qrcode } = await import("html5-qrcode");
+      if (gen !== startGenRef.current) return; // torn down during dynamic import
       const html5QrCode = new Html5Qrcode(SCANNER_ID);
       scannerRef.current = html5QrCode;
 
@@ -139,11 +150,21 @@ export default function BarcodeScanner({ open, onClose, onScanResult }: BarcodeS
         },
         (decodedText: string) => {
           html5QrCode.pause(true); // pause to avoid repeated triggers
-          handleQrDecoded(decodedText);
+          handleQrDecodedRef.current(decodedText);
         },
         () => { /* not-found — fires every frame, ignore */ }
       );
       scannerStartedRef.current = true;
+
+      // If the scanner was closed while start() was still in flight, the camera
+      // would otherwise stay live with no UI — stop this just-started stream now.
+      if (gen !== startGenRef.current) {
+        try { await html5QrCode.stop(); } catch {}
+        try { html5QrCode.clear(); } catch {}
+        scannerRef.current = null;
+        scannerStartedRef.current = false;
+        return;
+      }
       setCameraPermission("granted");
     } catch (err: any) {
       const msg = String(err.message || err);
@@ -156,18 +177,17 @@ export default function BarcodeScanner({ open, onClose, onScanResult }: BarcodeS
       setScanState("idle");
       setMode("manual");
     }
-  }, [handleQrDecoded]);
+  }, []);
 
   // ── Stop camera scanner ──────────────────────────────────────────
   const stopScanner = useCallback(async () => {
-    if (scannerRef.current && scannerStartedRef.current) {
-      try {
-        await scannerRef.current.stop();
-        scannerRef.current.clear();
-      } catch {}
-      scannerRef.current = null;
-      scannerStartedRef.current = false;
-    }
+    startGenRef.current++; // invalidate any start() still in flight
+    const inst = scannerRef.current;
+    scannerRef.current = null;
+    scannerStartedRef.current = false;
+    if (!inst) return;
+    try { await inst.stop(); } catch {}  // stop() rejects if not yet running — ignore
+    try { inst.clear(); } catch {}
   }, []);
 
   // ── Mount/unmount effect ─────────────────────────────────────────
@@ -224,15 +244,15 @@ export default function BarcodeScanner({ open, onClose, onScanResult }: BarcodeS
 
   const isLoading = scanState === "loading";
 
-  return (
-    <div
-      className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.78)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
+  // Inner panel — identical markup for inline and overlay; only the wrapper differs.
+  const panel = (
       <div
-        className="relative w-full sm:max-w-md bg-background rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden"
-        style={{ maxHeight: "92dvh" }}
+        className={
+          inline
+            ? "relative w-full bg-background rounded-2xl border border-border shadow-lg overflow-hidden"
+            : "relative w-full sm:max-w-md bg-background rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden"
+        }
+        style={inline ? undefined : { maxHeight: "92dvh" }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border" style={{ background: "#111827" }}>
@@ -378,6 +398,19 @@ export default function BarcodeScanner({ open, onClose, onScanResult }: BarcodeS
           </div>
         </div>
       </div>
+  );
+
+  // Inline mode: render the panel directly in the form flow (no backdrop / bottom sheet).
+  if (inline) return panel;
+
+  // Overlay mode (default): dark backdrop + bottom-sheet on mobile, centered on desktop.
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.78)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      {panel}
     </div>
   );
 }
