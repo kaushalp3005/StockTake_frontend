@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { ArrowLeft, Package, Loader, Download, BarChart3 } from "lucide-react";
 import { stocktakeEntriesAPI } from "@/utils/api";
 import { useToast } from "@/hooks/use-toast";
-import { DatePillSelector } from "@/components/DatePillSelector";
+import { DatePillSelector, todayStr } from "@/components/DatePillSelector";
 
 interface EntryRow {
   id: number;
@@ -175,7 +175,10 @@ export default function AllEntriesSummary() {
   const [isLoading, setIsLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [allEntries, setAllEntries] = useState<EntryRow[]>([]);
-  const [selectedDates, setSelectedDates] = useState<string[]>([]);
+  // Default filter is today only. Seeded here rather than after the dates fetch
+  // so no render ever shows unfiltered data, and so today stays selected even
+  // when it has no entries yet (the pill row only contains dates that do).
+  const [selectedDates, setSelectedDates] = useState<string[]>(() => [todayStr()]);
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
@@ -235,8 +238,6 @@ export default function AllEntriesSummary() {
             .map((d: { date: string }) => d.date)
             .sort(); // ascending for DatePillSelector
           setAvailableDates(sorted);
-          // Default to last 3 available dates (most recent)
-          setSelectedDates(sorted.slice(-3));
         }
       } catch (err) {
         console.error("Error fetching available dates:", err);

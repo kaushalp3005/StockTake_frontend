@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Package, Loader, Eye, Calendar, Clock, X, Download, Trash2, Layers } from "lucide-react";
-import { DatePillSelector } from "@/components/DatePillSelector";
+import { DatePillSelector, todayStr } from "@/components/DatePillSelector";
 import {
   Table,
   TableBody,
@@ -74,7 +74,8 @@ export default function ResultsheetView() {
   const [deleting, setDeleting] = useState<string | null>(null);
 
   // Multi-date merge state
-  const [mergeSelectedDates, setMergeSelectedDates] = useState<string[]>([]);
+  // Default filter is today only — see AllEntriesSummary for the rationale.
+  const [mergeSelectedDates, setMergeSelectedDates] = useState<string[]>(() => [todayStr()]);
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [isMerging, setIsMerging] = useState(false);
   const [mergedSheetData, setMergedSheetData] = useState<ResultsheetData | null>(null);
@@ -102,8 +103,6 @@ export default function ResultsheetView() {
         .filter((v: string, i: number, a: string[]) => a.indexOf(v) === i)
         .sort() as string[];
       setAvailableDates(dates);
-      // Default select last 3 dates
-      setMergeSelectedDates(dates.slice(-3));
     } catch (error: any) {
       console.error("Error fetching resultsheet entries:", error);
       console.error("Error details:", error.status, error.data);

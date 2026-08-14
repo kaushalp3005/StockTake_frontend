@@ -24,7 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { DatePillSelector } from "@/components/DatePillSelector";
+import { DatePillSelector, todayStr } from "@/components/DatePillSelector";
 import { ColorLegend } from "@/components/ColorLegend";
 
 interface FloorSession {
@@ -145,10 +145,12 @@ export default function ManagerReview() {
   const [editingQuantity, setEditingQuantity] = useState<{ entryId: string; value: string } | null>(null);
   const [downloadingWarehouse, setDownloadingWarehouse] = useState(false);
   const [savingFloorReview, setSavingFloorReview] = useState(false);
-  // Multi-date selection — source of truth is URL ?dates= param
+  // Multi-date selection — source of truth is URL ?dates= param, so shared and
+  // back-navigated links keep their dates. With no param the default is today
+  // only; the sync effect below writes it straight back into the URL.
   const [selectedDates, setSelectedDates] = useState<string[]>(() => {
     const param = searchParams.get("dates");
-    return param ? param.split(",").filter(Boolean) : [];
+    return param ? param.split(",").filter(Boolean) : [todayStr()];
   });
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
@@ -252,15 +254,6 @@ export default function ManagerReview() {
             .map((d: { date: string }) => d.date)
             .sort();
           setAvailableDates(sorted);
-          // Auto-select last 3 dates if no date is already selected via URL param
-          const currentParam = searchParams.get("dates");
-          if (!currentParam) {
-            const defaultDates = sorted.slice(-3); // last 3 most recent
-            if (defaultDates.length > 0) {
-              setSelectedDates(defaultDates);
-              setSearchParams(prev => { prev.set("dates", defaultDates.join(",")); return prev; }, { replace: true });
-            }
-          }
         }
       } catch (err) {
         console.error("Error fetching available dates:", err);
@@ -363,6 +356,11 @@ export default function ManagerReview() {
   // On the floors page (direct hit, refresh, or arriving from a warehouse tap or
   // the item page's "Back" button), load that warehouse's floor list from the
   // ?warehouse= param. The route remounts per navigation, so this runs each time.
+  //
+  // Also keyed on selectedDates: the page now has its own date selector, and the
+  // per-floor entry counts and weights come from a date-ranged query, so they
+  // must be refetched when the filter changes. fetchFloors is redefined each
+  // render, so this always calls the closure holding the new dates.
   useEffect(() => {
     if (!isFloorsPage) return;
     const wh = searchParams.get("warehouse");
@@ -374,7 +372,7 @@ export default function ManagerReview() {
       navigate("/review", { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isFloorsPage, selectedDates]);
 
   // D1: Persist view mode preference
   useEffect(() => {
@@ -2108,36 +2106,25 @@ export default function ManagerReview() {
               <p className="mr-subtitle">
                 Choose a floor to review its entries
               </p>
-            {/* C4: Active date filter badge */}
-            <div className="mr-date-badge">
-              {selectedDates.length > 0 ? (
-                <span style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  background: "#1D4ED8",
-                  color: "#EFF6FF",
-                  fontSize: 11,
-                  fontWeight: 600,
-                  borderRadius: 999,
-                  padding: "3px 10px",
-                }}>
-                  {selectedDates.length} date{selectedDates.length !== 1 ? "s" : ""} selected
-                </span>
-              ) : (
-                <span style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  background: "#374151",
-                  color: "#D1D5DB",
-                  fontSize: 11,
-                  fontWeight: 500,
-                  borderRadius: 999,
-                  padding: "3px 10px",
-                }}>
-                  All dates
-                </span>
-              )}
             </div>
+
+            {/* Date filter — the same selector as the warehouse picker, so dates
+                can be changed here instead of going Back. Replaces the old
+                read-only "N dates selected" badge. Changing it refetches this
+                warehouse's floor counts via the fetchFloors effect. */}
+            <div className="mr-date-filter" style={{ marginBottom: 12 }}>
+              <DatePillSelector
+                entryDates={availableDates}
+                selectedDates={selectedDates}
+                onChange={(dates) => {
+                  // Unlike the warehouse picker, selectedWarehouse is kept — this
+                  // page is scoped to it and clearing it would blank the header.
+                  setSelectedDates(dates);
+                  setSelectedFloor(null);
+                  setGroupedItemsData([]);
+                }}
+                loading={loadingDates}
+              />
             </div>
           <div className="mr-drawer-body">
             {loadingFloors ? (

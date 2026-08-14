@@ -1,5 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from "react";
-import { X } from "lucide-react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Mode = "multi" | "range" | "month";
@@ -26,13 +25,10 @@ function toDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function todayStr(): string {
+/** Today as YYYY-MM-DD in local time. Exported so pages can seed their date
+ *  filter with today without re-deriving the (timezone-sensitive) format. */
+export function todayStr(): string {
   return toDateStr(new Date());
-}
-
-function formatDisplayDate(dateStr: string): string {
-  const d = parseLocalDate(dateStr);
-  return `${String(d.getDate()).padStart(2, "0")} ${MONTH_ABBR[d.getMonth()]}`;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -45,6 +41,13 @@ export function DatePillSelector({
   const [mode, setMode] = useState<Mode>("multi");
   const [rangeStart, setRangeStart] = useState<string | null>(null);
   const [activeChip, setActiveChip] = useState<string | null>(null);
+  // YYYY-MM of the month chip currently narrowing the pill row, or null for all
+  // months. Purely a view filter — it never touches selectedDates. Defaults to
+  // the latest month once entryDates load (see the effect below).
+  const [activeMonth, setActiveMonth] = useState<string | null>(null);
+  // Set once the user picks a month (or a quick chip clears the narrowing), so
+  // the default below stops overriding their choice.
+  const monthTouchedRef = useRef(false);
   const pillRowRef = useRef<HTMLDivElement>(null);
   const today = todayStr();
 
@@ -63,6 +66,22 @@ export function DatePillSelector({
     return result;
   }, [entryDates]);
 
+  // Default the row to the most recent month that has entries. entryDates
+  // arrive asynchronously, so this can't be a useState initializer — months is
+  // empty on the first render. entryDates is sorted ascending, so the last
+  // month in the list is the latest.
+  useEffect(() => {
+    if (monthTouchedRef.current || months.length === 0) return;
+    setActiveMonth(months[months.length - 1].key);
+  }, [months]);
+
+  // Dates actually rendered as pills. Range/month math below still reads the
+  // full entryDates, so narrowing the view never changes what a click selects.
+  const visibleDates = useMemo(
+    () => (activeMonth ? entryDates.filter((d) => d.startsWith(activeMonth)) : entryDates),
+    [entryDates, activeMonth]
+  );
+
   // ── Quick chip actions ──────────────────────────────────────────────────────
   const applyChip = useCallback(
     (chip: string) => {
@@ -73,7 +92,9 @@ export function DatePillSelector({
       let dates: string[] = [];
 
       if (chip === "Today") {
-        dates = entryDates.filter((d) => d === t);
+        // Always select today, even with no entries yet — matches the default
+        // filter, so this chip is the way back to the today-only view.
+        dates = [t];
       } else if (chip === "This week") {
         const sun = new Date(now);
         sun.setDate(now.getDate() - now.getDay());
@@ -95,6 +116,10 @@ export function DatePillSelector({
       setActiveChip(dates.length > 0 ? chip : null);
       setMode("multi");
       setRangeStart(null);
+      // Drop any month narrowing, otherwise a chip can select dates that are
+      // hidden behind it and the pill row looks unresponsive.
+      monthTouchedRef.current = true;
+      setActiveMonth(null);
       onChange(dates);
     },
     [entryDates, today, onChange]
@@ -135,40 +160,38 @@ export function DatePillSelector({
     [mode, selectedDates, rangeStart, entryDates, onChange]
   );
 
-  // ── Month jump ──────────────────────────────────────────────────────────────
-  const scrollToMonth = useCallback((firstDate: string) => {
-    if (!pillRowRef.current) return;
-    const el = pillRowRef.current.querySelector<HTMLElement>(
-      `[data-date="${firstDate}"]`
-    );
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" });
+  // ── Month filter ────────────────────────────────────────────────────────────
+  // Narrows the pill row to one month. Tapping the active month again clears the
+  // narrowing — that re-tap is the only way back to all months. Selection is
+  // deliberately untouched; in Month mode you still select a whole month by
+  // tapping any date pill inside it.
+  const toggleMonth = useCallback(
+    (monthKey: string, firstDate: string) => {
+      const next = activeMonth === monthKey ? null : monthKey;
+      monthTouchedRef.current = true;
+      setActiveMonth(next);
 
-    // In Month mode, also select all dates for that month
-    if (mode === "month") {
-      const monthKey = firstDate.slice(0, 7);
-      const monthDates = entryDates.filter((d) => d.startsWith(monthKey));
-      setActiveChip(null);
-      onChange(monthDates);
-    }
-  }, [mode, entryDates, onChange]);
+      // Re-position after the row re-renders with the new set of pills.
+      requestAnimationFrame(() => {
+        const row = pillRowRef.current;
+        if (!row) return;
+        if (next) {
+          row.scrollTo({ left: 0, behavior: "smooth" });
+        } else {
+          row
+            .querySelector<HTMLElement>(`[data-date="${firstDate}"]`)
+            ?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" });
+        }
+      });
+    },
+    [activeMonth]
+  );
 
   const handleModeChange = (newMode: Mode) => {
     setMode(newMode);
     setRangeStart(null);
     onChange([]);
     setActiveChip(null);
-  };
-
-  // ── Active filter bar ───────────────────────────────────────────────────────
-  const removeDate = (dateStr: string) => {
-    setActiveChip(null);
-    onChange(selectedDates.filter((d) => d !== dateStr));
-  };
-
-  const clearAll = () => {
-    onChange([]);
-    setActiveChip(null);
-    setRangeStart(null);
   };
 
   // ── Pill visual state ───────────────────────────────────────────────────────
@@ -213,8 +236,6 @@ export function DatePillSelector({
     );
   }
 
-  const hasToday = entryDates.includes(today);
-
   return (
     <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 overflow-hidden">
       {/* ── Row 1: Mode toggle + Month jump chips ─────────────────────────── */}
@@ -241,11 +262,13 @@ export function DatePillSelector({
         <div className="flex-1 overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" }}>
           <div className="flex gap-1.5 w-max">
             {months.map(({ key, label, firstDate }) => {
-              const isActive = selectedDates.some((d) => d.startsWith(key));
+              const isActive = activeMonth === key;
               return (
                 <button
                   key={key}
-                  onClick={() => scrollToMonth(firstDate)}
+                  onClick={() => toggleMonth(key, firstDate)}
+                  aria-pressed={isActive}
+                  title={isActive ? `Showing ${label} only — tap to show all months` : `Show only ${label}`}
                   style={{ touchAction: "manipulation", minHeight: 26 }}
                   className={`px-2.5 py-0.5 text-[11px] font-medium rounded-full border transition-all duration-150 whitespace-nowrap ${
                     isActive
@@ -264,26 +287,20 @@ export function DatePillSelector({
       {/* ── Row 2: Quick chips ────────────────────────────────────────────── */}
       <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-800">
         <div className="flex gap-1.5 overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" }}>
-          {["Today", "This week", "This month", "Last 7 days"].map((chip) => {
-            const disabled = chip === "Today" && !hasToday;
-            return (
-              <button
-                key={chip}
-                onClick={() => !disabled && applyChip(chip)}
-                disabled={disabled}
-                style={{ touchAction: "manipulation", minHeight: 28 }}
-                className={`px-2.5 py-1 text-[11px] font-medium rounded-full whitespace-nowrap border transition-all duration-150 ${
-                  disabled
-                    ? "opacity-40 cursor-not-allowed bg-gray-100 dark:bg-gray-800 text-gray-400 border-gray-200 dark:border-gray-700"
-                    : activeChip === chip
-                    ? "bg-[#185FA5] text-white border-[#185FA5]"
-                    : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:border-[#185FA5] hover:text-[#185FA5]"
-                }`}
-              >
-                {chip}
-              </button>
-            );
-          })}
+          {["Today", "This week", "This month", "Last 7 days"].map((chip) => (
+            <button
+              key={chip}
+              onClick={() => applyChip(chip)}
+              style={{ touchAction: "manipulation", minHeight: 28 }}
+              className={`px-2.5 py-1 text-[11px] font-medium rounded-full whitespace-nowrap border transition-all duration-150 ${
+                activeChip === chip
+                  ? "bg-[#185FA5] text-white border-[#185FA5]"
+                  : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:border-[#185FA5] hover:text-[#185FA5]"
+              }`}
+            >
+              {chip}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -294,7 +311,7 @@ export function DatePillSelector({
         style={{ WebkitOverflowScrolling: "touch", scrollSnapType: "x proximity" }}
       >
         <div className="flex gap-2 w-max">
-          {entryDates.map((dateStr) => {
+          {visibleDates.map((dateStr) => {
             const d = parseLocalDate(dateStr);
             const { bg, text, border, opacity } = getPillStyle(dateStr);
             return (
@@ -339,86 +356,7 @@ export function DatePillSelector({
         </div>
       </div>
 
-      {/* ── Active filter bar ─────────────────────────────────────────────── */}
-      {selectedDates.length > 0 && (
-        <div
-          style={{
-            borderTop: "1px solid #E5E7EB",
-            background: "#F4F6FA",
-            padding: "8px 12px",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            flexWrap: "wrap",
-            animation: "filterBarIn 0.2s ease forwards",
-          }}
-        >
-          <span style={{ fontSize: 11, fontWeight: 500, color: "#6B7280", whiteSpace: "nowrap" }}>
-            Stocktake filter:
-          </span>
-          {selectedDates.length <= 4 ? (
-            selectedDates.map((d) => (
-              <span
-                key={d}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 4,
-                  padding: "2px 8px",
-                  borderRadius: 20,
-                  background: "#E6F1FB",
-                  color: "#0C447C",
-                  border: "0.5px solid #85B7EB",
-                  fontSize: 11,
-                  fontWeight: 500,
-                }}
-              >
-                {formatDisplayDate(d)}
-                <button
-                  onClick={() => removeDate(d)}
-                  style={{ touchAction: "manipulation", lineHeight: 1 }}
-                >
-                  <X size={10} />
-                </button>
-              </span>
-            ))
-          ) : (
-            <span
-              style={{
-                padding: "2px 10px",
-                borderRadius: 20,
-                background: "#E6F1FB",
-                color: "#0C447C",
-                border: "0.5px solid #85B7EB",
-                fontSize: 11,
-                fontWeight: 500,
-              }}
-            >
-              {selectedDates.length} days selected
-            </span>
-          )}
-          <button
-            onClick={clearAll}
-            style={{
-              fontSize: 11,
-              color: "#185FA5",
-              fontWeight: 500,
-              textDecoration: "underline",
-              touchAction: "manipulation",
-              marginLeft: "auto",
-              whiteSpace: "nowrap",
-            }}
-          >
-            Clear all
-          </button>
-        </div>
-      )}
-
       <style>{`
-        @keyframes filterBarIn {
-          from { opacity: 0; max-height: 0; }
-          to   { opacity: 1; max-height: 200px; }
-        }
         /* hide scrollbar but keep scrollable */
         .overflow-x-auto::-webkit-scrollbar { display: none; }
         .overflow-x-auto { -ms-overflow-style: none; scrollbar-width: none; }

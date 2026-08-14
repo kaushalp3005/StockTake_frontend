@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { stocktakeEntriesAPI } from "@/utils/api";
 import { useToast } from "@/hooks/use-toast";
 import { downloadEntriesAsExcel } from "@/services/excelService";
-import { DatePillSelector } from "@/components/DatePillSelector";
+import { DatePillSelector, todayStr } from "@/components/DatePillSelector";
 
 interface User {
   id: string;
@@ -66,7 +66,8 @@ export default function Dashboard() {
   const [downloadingSession, setDownloadingSession] = useState<string | null>(null);
   const [recentEntries, setRecentEntries] = useState<RecentEntry[]>([]);
   const [loadingRecentEntries, setLoadingRecentEntries] = useState(false);
-  const [entriesSelectedDates, setEntriesSelectedDates] = useState<string[]>([]);
+  // Default filter is today only — see AllEntriesSummary for the rationale.
+  const [entriesSelectedDates, setEntriesSelectedDates] = useState<string[]>(() => [todayStr()]);
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   const [selectedSession, setSelectedSession] = useState<FloorSession | null>(null);
   const [activityExpanded, setActivityExpanded] = useState(false);
@@ -302,13 +303,6 @@ export default function Dashboard() {
 
     setIsLoading(false);
   }, [navigate]);
-
-  // Auto-select last 3 dates when user's sessions first load
-  useEffect(() => {
-    if (entriesAvailableDates.length > 0 && entriesSelectedDates.length === 0) {
-      setEntriesSelectedDates(entriesAvailableDates.slice(-3));
-    }
-  }, [entriesAvailableDates]);
 
   // Refresh sessions when component comes into focus (e.g., returning from edit page)
   useEffect(() => {
