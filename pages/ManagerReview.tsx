@@ -102,6 +102,44 @@ interface WarehouseData {
 
 const WAREHOUSES = ["W202", "A185", "F53", "A68", "Savla", "Rishi"];
 
+/**
+ * Scopes grouped entries to the selected dates.
+ *
+ * GET /api/stocktake-entries/grouped accepts startDate/endDate but ignores
+ * them — its SQL filters on warehouse, floor_name and status only, so it
+ * returns every non-draft entry for the floor regardless of date. Until the
+ * backend honours those params this has to happen client-side, otherwise
+ * /review/floor lists entries from every stocktake ever run on that floor.
+ *
+ * Comparison is by UTC calendar day: createdAt is an ISO UTC string, and the
+ * date pills are built from the same instant server-side, so the two can never
+ * disagree about which day an entry belongs to.
+ */
+function filterGroupsByDates(groups: GroupedItem[], dates: string[]): GroupedItem[] {
+  // No selection means no filter, matching how selectedDates is read elsewhere.
+  if (dates.length === 0) return groups;
+  const wanted = new Set(dates);
+
+  return groups.reduce<GroupedItem[]>((kept, group) => {
+    const entries = (group.entries || []).filter((e) =>
+      wanted.has((e.createdAt || "").split("T")[0]),
+    );
+    if (entries.length === 0) return kept;
+
+    // Totals are recomputed rather than carried over: the server summed them
+    // across every date, so reusing them would print "633 pcs" above a list of
+    // two entries — a subtler wrong number than the one being fixed.
+    kept.push({
+      ...group,
+      entries,
+      totalEntries: entries.length,
+      totalQuantity: entries.reduce((sum, e) => sum + (e.units || 0), 0),
+      totalWeight: entries.reduce((sum, e) => sum + (e.totalWeight || 0), 0),
+    });
+    return kept;
+  }, []);
+}
+
 export default function ManagerReview() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -765,7 +803,7 @@ export default function ManagerReview() {
       // Refresh grouped items data
       if (selectedWarehouse && selectedFloor) {
         const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-        setGroupedItemsData(data.groups || []);
+        setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
       }
 
       setEditingQuantity(null);
@@ -817,7 +855,7 @@ export default function ManagerReview() {
 
       if (selectedWarehouse && selectedFloor) {
         const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-        setGroupedItemsData(data.groups || []);
+        setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
       }
       setDeleteModalOpen(false);
       setDeleteTarget(null);
@@ -1084,7 +1122,7 @@ export default function ManagerReview() {
 
       // Refresh grouped items data
       const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-      setGroupedItemsData(data.groups || []);
+      setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
 
       // Reset form and close drawer
       setNewItemForm({
@@ -1160,7 +1198,7 @@ export default function ManagerReview() {
       await stocktakeEntriesAPI.submitEntries([entry]);
 
       const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-      setGroupedItemsData(data.groups || []);
+      setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
 
       setQuickAddUnits("");
       setQuickAddStockType("Fresh Stock");
@@ -1219,7 +1257,7 @@ export default function ManagerReview() {
           selectedFloor!,
           getDateRange()
         );
-        setGroupedItemsData(data.groups || []);
+        setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
         setConfirmed(false);
         setSelectedItemName(null);
       } catch (err: any) {
@@ -3343,7 +3381,7 @@ export default function ManagerReview() {
                         });
                         if (selectedWarehouse && selectedFloor) {
                           const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-                          setGroupedItemsData(data.groups || []);
+                          setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
                         }
                         toast({ title: "Entry reassigned", description: `Reassigned to "${result.name}"` });
                         setReassignDrawerOpen(false);
