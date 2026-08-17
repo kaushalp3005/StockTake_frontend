@@ -77,10 +77,24 @@ export function DatePillSelector({
 
   // Dates actually rendered as pills. Range/month math below still reads the
   // full entryDates, so narrowing the view never changes what a click selects.
-  const visibleDates = useMemo(
-    () => (activeMonth ? entryDates.filter((d) => d.startsWith(activeMonth)) : entryDates),
-    [entryDates, activeMonth]
-  );
+  //
+  // Any SELECTED date is always rendered, even when it has no entries and so is
+  // absent from entryDates. Otherwise a selected-but-unlisted day (the default
+  // "today" seed on a day nothing has been counted yet, or the Today quick
+  // chip) has no pill to click, cannot be deselected, and silently scopes every
+  // query on the page. Rendering it makes the selection always reversible.
+  const visibleDates = useMemo(() => {
+    const inMonth = (d: string) => !activeMonth || d.startsWith(activeMonth);
+    const base = entryDates.filter(inMonth);
+    const orphans = selectedDates.filter((d) => !entryDates.includes(d) && inMonth(d));
+    return orphans.length === 0
+      ? base
+      : Array.from(new Set([...base, ...orphans])).sort();
+  }, [entryDates, activeMonth, selectedDates]);
+
+  // Days with no entries are drawn with a hollow marker so an empty selection
+  // reads as "nothing counted here", not as missing data.
+  const hasEntries = useMemo(() => new Set(entryDates), [entryDates]);
 
   // ── Quick chip actions ──────────────────────────────────────────────────────
   const applyChip = useCallback(
@@ -341,12 +355,15 @@ export function DatePillSelector({
                   {d.getDate()}
                 </span>
                 <span
+                  title={hasEntries.has(dateStr) ? undefined : "No entries recorded on this date"}
                   style={{
                     marginTop: 3,
                     width: 6,
                     height: 6,
                     borderRadius: "50%",
-                    background: "#22C55E",
+                    background: hasEntries.has(dateStr) ? "#22C55E" : "transparent",
+                    border: hasEntries.has(dateStr) ? "none" : "1px solid #9CA3AF",
+                    boxSizing: "border-box",
                     display: "block",
                   }}
                 />

@@ -37,24 +37,20 @@
     box-shadow: 0 -10px 25px -5px rgba(0, 0, 0, 0.1), 0 -4px 6px -2px rgba(0, 0, 0, 0.04) !important;
   }
   
-  /* Handle mobile drawer when expanded to top */
-  .warehouse-entries-drawer [data-vaul-drawer-content][data-vaul-snap="1"],
-  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 100%"],
-  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 95vh"],
-  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 90vh"] {
-    height: 95vh !important;
-    max-height: 95vh !important;
-    top: 5vh !important;
-    bottom: auto !important;
-    border-radius: 0.5rem 0.5rem 0 0 !important;
-  }
-  
-  /* Prevent drawer from going full screen incorrectly */
-  .warehouse-entries-drawer [data-vaul-drawer-content][style*="height: 100vh"] {
-    height: 95vh !important;
-    top: 5vh !important;
-    bottom: auto !important;
-  }
+  /* REMOVED: the snap-point workarounds that used to live here.
+   *
+   * They matched on [data-vaul-snap="1"] and on vaul's inline height
+   * ([style*="height: 90vh"] and friends) and re-anchored the panel from
+   * bottom:0/height:90vh to top:5vh/height:95vh. Because they keyed off an
+   * inline style vaul rewrites continuously while snapping, the panel
+   * re-anchored mid-gesture — the reported "sliding window jumps to the top",
+   * which also stranded the scroll position so there was no way to get back.
+   *
+   * The drawers no longer declare snapPoints, so data-vaul-snap is never set
+   * and there is nothing left for these selectors to do except misfire. The
+   * single fixed-height rule above now governs the panel, and the body scrolls
+   * internally (.mr-drawer-body-compact).
+   */
 }
 
 /* Ensure vaul overlay works correctly */

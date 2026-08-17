@@ -1,10 +1,10 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Loader, LogOut, Package, FileText, Calendar, Warehouse, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight, Trash2, Download, Users, X, Edit2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { stocktakeEntriesAPI } from "@/utils/api";
+import { stocktakeEntriesAPI, type EntryQueryParams, type ShiftName, type ShiftOption } from "@/utils/api";
 import { useToast } from "@/hooks/use-toast";
 import { downloadEntriesAsExcel } from "@/services/excelService";
 import { DatePillSelector, todayStr } from "@/components/DatePillSelector";
@@ -20,6 +20,15 @@ interface User {
 
 interface FloorSession {
   id: string;
+  /**
+   * The submission batch this card represents. Null for older rows that
+   * predate entry_id, which are instead grouped by warehouse + floor + day
+   * (see entryDate below) — the export has to scope itself the same way the
+   * card was grouped, or it exports more than the card shows.
+   */
+  entryId?: string | null;
+  /** Calendar day used for grouping when entryId is absent (YYYY-MM-DD). */
+  entryDate?: string | null;
   warehouse: string;
   floor?: string;
   floorName?: string;
@@ -68,6 +77,15 @@ export default function Dashboard() {
   const [loadingRecentEntries, setLoadingRecentEntries] = useState(false);
   // Default filter is today only — see AllEntriesSummary for the rationale.
   const [entriesSelectedDates, setEntriesSelectedDates] = useState<string[]>(() => [todayStr()]);
+  /**
+   * Shift filter for "My Entries".
+   * Empty = the full day. Applied by the API so this page, Manager Review and
+   * the exports all agree on where the shift boundary falls.
+   */
+  const [entriesShift, setEntriesShift] = useState<ShiftName[]>([]);
+  const [shiftCutoff, setShiftCutoff] = useState("14:00");
+  /** Per-shift entry counts for this user, so the control shows live numbers. */
+  const [shiftCounts, setShiftCounts] = useState<ShiftOption[]>([]);
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   const [selectedSession, setSelectedSession] = useState<FloorSession | null>(null);
   const [activityExpanded, setActivityExpanded] = useState(false);
@@ -189,8 +207,14 @@ export default function Dashboard() {
         const enteredByValue = parsedUser.username || parsedUser.email;
         console.log("Fetching submitted entries for entered_by:", enteredByValue);
 
+        // The shift narrowing is applied by the API, not by re-filtering the
+        // result here, so the dashboard agrees with every other screen about
+        // what "morning" means. Dates deliberately stay client-side: the pill
+        // row is built from this same response, so scoping the fetch by date
+        // would leave the row able to offer only the date already chosen.
         const response = await stocktakeEntriesAPI.getEntries({
           enteredBy: enteredByValue,
+          ...(entriesShift.length > 0 && entriesShift.length < 2 ? { shift: entriesShift } : {}),
         });
 
         const entries = response?.entries || [];
@@ -214,6 +238,10 @@ export default function Dashboard() {
           if (!sessionsMap.has(sessionKey)) {
             sessionsMap.set(sessionKey, {
               id: entry.entryId ? `session-${entry.entryId}` : `session-${Date.parse(entry.createdAt || new Date().toISOString())}`,
+              // Carried so the per-session export can reproduce this exact
+              // grouping instead of re-querying by user+warehouse+floor.
+              entryId: entry.entryId || null,
+              entryDate: entry.entryDate || entry.createdAt?.split("T")[0] || null,
               warehouse: entry.warehouse,
               floorName: entry.floorName,
               floor: entry.floorName,
@@ -304,6 +332,48 @@ export default function Dashboard() {
     setIsLoading(false);
   }, [navigate]);
 
+  // The cutoff is owned by the server (env-configurable), so the labels are
+  // read from it rather than hardcoded here — otherwise changing the business
+  // cutoff would silently leave this page advertising the old boundary while
+  // filtering by the new one.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const userStr = localStorage.getItem("user");
+        const parsed = userStr ? JSON.parse(userStr) : null;
+        const enteredByValue = parsed?.username || parsed?.email;
+        // Scoped to this user so the counts describe THEIR entries, matching
+        // what the list below shows.
+        const res = await stocktakeEntriesAPI.getFilterOptions(
+          enteredByValue ? { enteredByExact: enteredByValue } : {},
+        );
+        if (cancelled) return;
+        if (res?.shift?.cutoff) setShiftCutoff(res.shift.cutoff);
+        setShiftCounts(res?.options?.shifts ?? []);
+      } catch {
+        // Non-fatal: labels fall back to defaults and filtering still works.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Refetch whenever the shift selection changes. The narrowing happens
+  // server-side, so this is what makes the shift filter reactive here rather
+  // than a second, local notion of "morning".
+  //
+  // Skipped on the very first run: the mount effect above already loads the
+  // sessions, and firing both would double-fetch on every page open.
+  const shiftInitialisedRef = useRef(false);
+  useEffect(() => {
+    if (!shiftInitialisedRef.current) {
+      shiftInitialisedRef.current = true;
+      return;
+    }
+    loadUserSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entriesShift]);
+
   // Refresh sessions when component comes into focus (e.g., returning from edit page)
   useEffect(() => {
     const handleFocus = () => {
@@ -313,7 +383,8 @@ export default function Dashboard() {
 
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entriesShift]);
 
   // Listen for localStorage changes (for real-time pending session updates)
   useEffect(() => {
@@ -428,19 +499,43 @@ export default function Dashboard() {
 
     setDownloadingSession(session.id);
     try {
-      // Fetch entries fresh from API so we get verified / verifiedBy / verifiedAt / remark fields.
-      // Match on entered_by (the stored username), same as the list query above.
+      // Fetch fresh from the API so verified / verifiedBy / verifiedAt / remark
+      // are current.
+      //
+      // Scoped to THIS submission batch. Querying by user + warehouse + floor
+      // alone — which is what this did — also matches every other batch the
+      // same person recorded on that floor, so a 97-item card downloaded 353
+      // rows spanning four batches and five days, under a filename naming a
+      // single date. entryId is the batch identity; where a row predates it,
+      // the card was grouped by day, so the export scopes by day to match.
       const enteredByValue = session.userName || session.userEmail;
-      const response = await stocktakeEntriesAPI.getEntries({
-        enteredBy: enteredByValue,
+      const scope: EntryQueryParams = {
         warehouse: session.warehouse,
         floorName: session.floorName,
-      });
+        // Exact, not substring: "RAJU" must not pull in "RAJUPAIKRAO".
+        ...(enteredByValue ? { enteredByExact: enteredByValue } : {}),
+        ...(session.entryId
+          ? { entryId: session.entryId }
+          : session.entryDate
+            ? { dates: [session.entryDate] }
+            : {}),
+        // A download is never a page.
+        all: true,
+      };
+      const response = await stocktakeEntriesAPI.getEntries(scope);
 
       const entries: any[] = response?.entries ?? [];
 
       if (entries.length === 0) {
         throw new Error("No entries found for this session");
+      }
+
+      // The card and the file must agree. If they don't, the grouping and the
+      // query have diverged and the sheet would misrepresent itself.
+      if (session.items?.length && entries.length !== session.items.length) {
+        console.warn(
+          `[F4] Session ${session.id}: card shows ${session.items.length} items but the export query returned ${entries.length}.`,
+        );
       }
 
       const verifiedCount = entries.filter((e: any) => e.verified).length;
@@ -807,12 +902,53 @@ export default function Dashboard() {
               </div>
 
               {/* DatePillSelector for My Entries — same as Summary page */}
-              <div className="mb-4 relative z-10">
+              <div className="mb-3 relative z-10">
                 <DatePillSelector
                   entryDates={entriesAvailableDates}
                   selectedDates={entriesSelectedDates}
                   onChange={(dates) => setEntriesSelectedDates(dates)}
                 />
+              </div>
+
+              {/* Shift filter — applied by the API, so "morning" means the same
+                  here as it does in Manager Review and in the exports. */}
+              <div className="mb-4 flex items-center gap-1.5 flex-wrap" role="group" aria-label="Work shift">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mr-0.5">
+                  Shift
+                </span>
+                {([
+                  { key: [] as ShiftName[], label: "Full day", sub: "" },
+                  { key: ["morning"] as ShiftName[], label: "Morning", sub: `< ${shiftCutoff}` },
+                  { key: ["evening"] as ShiftName[], label: "Evening", sub: `≥ ${shiftCutoff}` },
+                ]).map((opt) => {
+                  const selected =
+                    opt.key.length === entriesShift.length &&
+                    opt.key.every((k) => entriesShift.includes(k));
+                  return (
+                    <button
+                      key={opt.label}
+                      type="button"
+                      onClick={() => setEntriesShift(opt.key)}
+                      style={{ touchAction: "manipulation", minHeight: 32 }}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[13px] font-semibold transition-colors ${
+                        selected
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-background text-foreground border-border hover:border-primary hover:text-primary"
+                      }`}
+                    >
+                      {opt.label}
+                      {opt.sub && <span className="text-[11px] font-medium opacity-70">{opt.sub}</span>}
+                      {opt.key.length === 1 && (() => {
+                        const c = shiftCounts.find((s) => s.value === opt.key[0])?.count;
+                        return c === undefined ? null : (
+                          <span className={`text-[11px] font-bold rounded-full px-1.5 ${selected ? "bg-white/20" : "bg-muted"}`}>
+                            {c}
+                          </span>
+                        );
+                      })()}
+                    </button>
+                  );
+                })}
               </div>
 
               {/* Filter sessions to show only submitted/approved entries */}

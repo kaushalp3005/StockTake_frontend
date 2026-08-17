@@ -3,9 +3,17 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Package, Loader, Download, BarChart3 } from "lucide-react";
-import { stocktakeEntriesAPI } from "@/utils/api";
+import {
+  stocktakeEntriesAPI,
+  isAbortError,
+  type EntryQueryParams,
+  type ShiftName,
+  type ShiftOption,
+  type HourOption,
+} from "@/utils/api";
 import { useToast } from "@/hooks/use-toast";
 import { DatePillSelector, todayStr } from "@/components/DatePillSelector";
+import { downloadStockCountWorkbook } from "@/services/stockCountExport";
 
 interface EntryRow {
   id: number;
@@ -175,9 +183,14 @@ export default function AllEntriesSummary() {
   const [isLoading, setIsLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [allEntries, setAllEntries] = useState<EntryRow[]>([]);
-  // Default filter is today only. Seeded here rather than after the dates fetch
-  // so no render ever shows unfiltered data, and so today stays selected even
-  // when it has no entries yet (the pill row only contains dates that do).
+  // Default filter is today only, seeded before the first render so no frame
+  // ever shows unfiltered data.
+  //
+  // The seed is reconciled against availableDates once those arrive (see the
+  // effect below). DatePillSelector renders pills only for days that HAVE
+  // entries, so on a day with none this seeded value would otherwise have no
+  // pill, could never be deselected, and would silently scope the whole page —
+  // KPIs, breakdown and export alike — to a day with no data.
   const [selectedDates, setSelectedDates] = useState<string[]>(() => [todayStr()]);
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
@@ -188,6 +201,14 @@ export default function AllEntriesSummary() {
   const [i4SortMode, setI4SortMode] = useState<'weight' | 'count'>('weight');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [excludedFloors, setExcludedFloors] = useState<Set<string>>(new Set());
+  // ── Shift (time-of-day) filter ────────────────────────────────────────────
+  // Applied by the API, exactly as on Manager Review and the Dashboard, so
+  // "morning" means one thing across the whole app — including in the export.
+  const [shiftFilter, setShiftFilter] = useState<ShiftName[]>([]);
+  const [hoursFilter, setHoursFilter] = useState<string[]>([]);
+  const [shiftCutoff, setShiftCutoff] = useState("14:00");
+  const [shiftOptions, setShiftOptions] = useState<ShiftOption[]>([]);
+  const [hourOptions, setHourOptions] = useState<HourOption[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [warehouseSearch, setWarehouseSearch] = useState("");
   const [warehouseSort, setWarehouseSort] = useState<"weight" | "items" | "name">("weight");
@@ -246,17 +267,70 @@ export default function AllEntriesSummary() {
       }
     };
 
+    fetchDates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Drop selected dates that have no pill to deselect them with.
+   * Same defect and same remedy as ManagerReview — without this, the default
+   * seed of "today" sticks permanently whenever today has no entries.
+   */
+  const datesReconciledRef = useRef(false);
+  useEffect(() => {
+    if (datesReconciledRef.current || availableDates.length === 0) return;
+    datesReconciledRef.current = true;
+    setSelectedDates((current) => {
+      const selectable = new Set(availableDates);
+      const reachable = current.filter((d) => selectable.has(d));
+      if (reachable.length === current.length) return current;
+      // Fall back to the most recent day that actually has entries rather than
+      // leaving the page scoped to an empty day the user cannot clear.
+      return reachable.length > 0 ? reachable : [availableDates[availableDates.length - 1]];
+    });
+  }, [availableDates]);
+
+  /**
+   * Entries for the current date selection, fetched from the server.
+   *
+   * Previously this pulled the entire table once and filtered it in the
+   * browser. Two things were wrong with that: the request relied on "no limit
+   * param = every row" (which a default page size would silently truncate),
+   * and the client re-derived each entry's day from its ISO timestamp, which
+   * can disagree with the day the database assigned it. Both are avoided by
+   * letting the API do the filtering.
+   *
+   * `dates` is a discrete SET — never collapsed to a min/max range.
+   */
+  const entriesRequestRef = useRef<AbortController | null>(null);
+  useEffect(() => {
     const fetchEntries = async () => {
       setIsLoading(true);
+      entriesRequestRef.current?.abort();
+      const controller = new AbortController();
+      entriesRequestRef.current = controller;
+
       try {
-        // Fetch all submitted (non-draft) entries — no limit param = backend returns all
-        const response = await stocktakeEntriesAPI.getEntries({});
+        const response = await stocktakeEntriesAPI.getEntries(
+          // No page/pageSize: this view needs the complete filtered set to
+          // compute totals, so it must never come back paginated.
+          {
+            ...(selectedDates.length > 0 ? { dates: [...selectedDates].sort() } : {}),
+            // Both shifts selected is the same as neither, so it is not sent.
+            ...(shiftFilter.length === 1 ? { shift: shiftFilter } : {}),
+            ...(hoursFilter.length > 0 ? { hours: hoursFilter } : {}),
+          },
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+
         const entries: EntryRow[] = (response?.entries || []).filter(
           (e: EntryRow) => e.status !== "draft"
         );
         setAllEntries(entries);
-        organizeEntries(entries, selectedDates);
+        organizeEntries(entries);
       } catch (err: any) {
+        if (isAbortError(err)) return; // superseded by a newer selection
         console.error("Failed to load entries:", err);
         toast({
           title: "Load failed",
@@ -264,33 +338,53 @@ export default function AllEntriesSummary() {
           variant: "destructive",
         });
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     };
-    fetchDates();
     fetchEntries();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [selectedDates, shiftFilter, hoursFilter]);
 
-  // Re-organize when date filter changes (uses already-fetched entries)
+  /**
+   * Shift / hour options for the control, scoped to the selected dates.
+   * The server computes the shift and hour counts WITHOUT the shift condition
+   * applied, so picking "Morning" never makes "Evening" vanish from the very
+   * control used to switch between them.
+   */
   useEffect(() => {
-    organizeEntries(allEntries, selectedDates);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDates, allEntries]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const scope: EntryQueryParams = {
+          ...(selectedDates.length > 0 ? { dates: [...selectedDates].sort() } : {}),
+          ...(shiftFilter.length === 1 ? { shift: shiftFilter } : {}),
+        };
+        const res = await stocktakeEntriesAPI.getFilterOptions(scope);
+        if (cancelled) return;
+        setShiftOptions(res?.options?.shifts ?? []);
+        setHourOptions(res?.options?.hours ?? []);
+        if (res?.shift?.cutoff) setShiftCutoff(res.shift.cutoff);
+      } catch (err) {
+        if (!isAbortError(err)) console.error("Failed to load shift options:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedDates, shiftFilter]);
 
-  const organizeEntries = (entries: EntryRow[], dateFilter: string | string[]) => {
-    const dates = Array.isArray(dateFilter) ? dateFilter : (dateFilter ? [dateFilter] : []);
-    const filtered = entries.filter((e) => {
-      if (dates.length === 0) return true;
-      const d = (e.createdAt || "").split("T")[0];
-      return dates.includes(d);
-    });
-
+  /**
+   * Roll the (already date-filtered) entries up by warehouse and floor.
+   * No date filtering happens here any more — the server returns exactly the
+   * selected days, so re-filtering would only risk the two disagreeing.
+   */
+  const organizeEntries = (entries: EntryRow[]) => {
     const organized: WarehouseData = {};
 
-    filtered.forEach((entry) => {
-      const warehouseId = entry.warehouse || "Unknown";
-      const floorId = (entry.floorName || "Unknown").toUpperCase();
+    entries.forEach((entry) => {
+      // Trimmed and upper-cased to match how the backend groups warehouses.
+      // Without it "W202", "w202" and "W202 " render as three separate cards
+      // and inflate the warehouse count.
+      const warehouseId = (entry.warehouse || "Unknown").toUpperCase().trim();
+      const floorId = (entry.floorName || "Unknown").toUpperCase().trim();
 
       if (!organized[warehouseId]) {
         organized[warehouseId] = {
@@ -391,78 +485,90 @@ export default function AllEntriesSummary() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, aiHasLoaded, aiAnalysis, aiLoading]);
 
+  /**
+   * Export the stock-count workbook.
+   *
+   * Produces three sheets — Fresh Stock, Off Grade, and a Compiled sheet with
+   * both — via the shared builder, so this page and Manager Review always emit
+   * the same shape. The previous version wrote a single "Stock Count" sheet
+   * that summed fresh and off-grade into the same cell, losing the off-grade
+   * split entirely, and wrote every figure with .toFixed() so Excel stored it
+   * as text that would not sum.
+   *
+   * The download always reflects what is on screen: it re-fetches the complete
+   * filtered set with `all: true` (never a page), and applies the same floor
+   * exclusions the Warehouse Breakdown tab is showing.
+   */
   const handleExportToExcel = async () => {
     setExporting(true);
     try {
-      const ExcelJS = (await import("exceljs")).default;
-      const workbook = new ExcelJS.Workbook();
+      // Re-fetch rather than exporting the in-memory list: the view may hold a
+      // page, and an export must always be the whole filtered result.
+      const response = await stocktakeEntriesAPI.getEntries({
+        ...(selectedDates.length > 0 ? { dates: [...selectedDates].sort() } : {}),
+        // The workbook must describe the same slice of the day as the screen.
+        ...(shiftFilter.length === 1 ? { shift: shiftFilter } : {}),
+        ...(hoursFilter.length > 0 ? { hours: hoursFilter } : {}),
+        all: true,
+      });
+      const fetched: EntryRow[] = (response?.entries || []).filter(
+        (e: EntryRow) => e.status !== "draft",
+      );
 
-      const entries = allEntries.filter((e) => {
-        if (selectedDates.length === 0) return true;
-        return selectedDates.includes((e.createdAt || "").split("T")[0]);
+      // Honour the floor exclusions from the Warehouse Breakdown tab, so the
+      // workbook cannot disagree with the totals the user is looking at.
+      const entries = fetched.filter((e) => {
+        const wh = (e.warehouse || "Unknown").toUpperCase().trim();
+        const fl = (e.floorName || "Unknown").toUpperCase().trim();
+        return !excludedFloors.has(`${wh}::${fl}`);
       });
 
-      const itemMap = new Map<string, Map<string, number>>();
-      const floors = new Set<string>();
-
-      entries.forEach((entry) => {
-        // Scope each floor column by its warehouse so same-named floors in different
-        // warehouses (e.g. "TEST" in both A185 and W202) get their own columns instead
-        // of being summed into one — the header then reads "W202 - TEST".
-        const warehouseLabel = (entry.warehouse || "Unknown").toUpperCase();
-        const floorName = (entry.floorName || "Unknown").toUpperCase();
-        const floorLabel = `${warehouseLabel} - ${floorName}`;
-        floors.add(floorLabel);
-        const itemKey = `${entry.itemCategory}:::${entry.itemSubcategory}:::${entry.itemName}:::${entry.itemType}`;
-        if (!itemMap.has(itemKey)) itemMap.set(itemKey, new Map());
-        const current = itemMap.get(itemKey)!.get(floorLabel) || 0;
-        itemMap.get(itemKey)!.set(floorLabel, current + (Number(entry.totalWeight) || 0));
-      });
-
-      const worksheet = workbook.addWorksheet("Stock Count");
-      const headers = ["Category", "Sub-Category", "Description", "Item Type", ...Array.from(floors).sort()];
-
-      const companyRow = worksheet.addRow(["Company: Candor Foods Pvt. Ltd"]);
-      companyRow.font = { bold: true, size: 14 };
-      worksheet.mergeCells(1, 1, 1, headers.length);
-      worksheet.addRow([]);
-      const headerRow = worksheet.addRow(headers);
-      headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
-      headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
-
-      Array.from(itemMap.entries()).forEach(([itemKey, floorData]) => {
-        const [category, subcategory, description, itemType] = itemKey.split(":::");
-        const row = [category, subcategory, description, itemType || "—"];
-        Array.from(floors).sort().forEach((floor) => {
-          const weight = floorData.get(floor) || 0;
-          row.push(weight > 0 ? weight.toFixed(2) : "-");
+      if (entries.length === 0) {
+        toast({
+          title: "Nothing to export",
+          description: "No entries match the current date and floor filters.",
+          variant: "destructive",
         });
-        worksheet.addRow(row);
+        return;
+      }
+
+      const excludedCount = fetched.length - entries.length;
+      const result = await downloadStockCountWorkbook({
+        entries,
+        title: "Stock Count",
+        selectedDates,
+        // Recorded in the sheet header so a shift-scoped export is never
+        // mistaken for a full day's stock position months later.
+        filterSummary: [
+          shiftFilter.length === 1
+            ? `${shiftFilter[0] === "morning" ? "Morning" : "Evening"} shift (cutoff ${shiftCutoff})`
+            : "",
+          hoursFilter.length > 0 ? `hours ${[...hoursFilter].sort((a, b) => Number(a) - Number(b)).map((h) => `${h.padStart(2, "0")}:00`).join(", ")}` : "",
+          excludedCount > 0 ? `${excludedFloors.size} floor(s) excluded` : "",
+        ].filter(Boolean).join(" · "),
+        exportedBy: (() => {
+          try {
+            return JSON.parse(localStorage.getItem("user") || "{}").name || "";
+          } catch {
+            return "";
+          }
+        })(),
       });
 
-      const totalRow = ["TOTAL", "", "", ""];
-      Array.from(floors).sort().forEach((floor) => {
-        let total = 0;
-        itemMap.forEach((fd) => { total += fd.get(floor) || 0; });
-        totalRow.push(total.toFixed(2));
+      toast({
+        title: "Export complete",
+        description:
+          `${result.total} entries across ${result.sheets.length} sheet(s): ` +
+          `${result.fresh} fresh, ${result.offGrade} off-grade.` +
+          (excludedCount > 0 ? ` ${excludedCount} excluded by floor filter.` : ""),
       });
-      const totalRowObj = worksheet.addRow(totalRow);
-      totalRowObj.font = { bold: true };
-      totalRowObj.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
-
-      worksheet.columns.forEach((col) => { col.width = 15; });
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `Stock_Count_${selectedDates.length > 0 ? selectedDates.join("_") : new Date().toISOString().split("T")[0]}.xlsx`;
-      link.click();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to export:", err);
-      alert("Failed to export to Excel");
+      toast({
+        title: "Export failed",
+        description: err?.message || "Unable to build the Excel file",
+        variant: "destructive",
+      });
     } finally {
       setExporting(false);
     }
@@ -503,7 +609,22 @@ export default function AllEntriesSummary() {
   const totalFloorsCovered = Object.values(warehouseData).reduce((s, w) => s + Object.keys(w.floors).length, 0);
 
   // I5 – fresh vs off-grade
-  const filteredEntries = allEntries.filter((e) => selectedDates.length === 0 || selectedDates.includes((e.createdAt || "").split("T")[0]));
+  // allEntries already holds exactly the selected days — the API filtered them.
+  // The old local re-filter derived each entry's day from its ISO timestamp,
+  // which is a second, independent notion of "day" that could disagree with the
+  // database's own bucketing.
+  //
+  // Floor exclusions ARE applied here so every headline number, the Fresh /
+  // Off-Grade cards and the Excel export all describe the same set of rows.
+  // The Warehouse Breakdown still lists excluded floors (greyed, with their
+  // checkbox) — it reads warehouseData, which is deliberately left unfiltered.
+  const filteredEntries = excludedFloors.size === 0
+    ? allEntries
+    : allEntries.filter((e) => {
+        const wh = (e.warehouse || "Unknown").toUpperCase().trim();
+        const fl = (e.floorName || "Unknown").toUpperCase().trim();
+        return !excludedFloors.has(`${wh}::${fl}`);
+      });
   const totalFreshWeight = filteredEntries.filter((e) => isFreshStock(e.stockType)).reduce((s, e) => s + (Number(e.totalWeight) || 0), 0);
   const totalOffGradeWeight = filteredEntries.filter((e) => isOffGrade(e.stockType)).reduce((s, e) => s + (Number(e.totalWeight) || 0), 0);
   const verifiedCount = filteredEntries.filter((e) => e.verified).length;
@@ -677,6 +798,88 @@ export default function AllEntriesSummary() {
                   onChange={(dates) => setSelectedDates(dates)}
                   loading={loadingDates}
                 />
+
+                {/* Shift — applied by the API, so every KPI, the breakdown and
+                    the Excel export all describe the same part of the day. */}
+                <div className="mt-3 flex items-center gap-1.5 flex-wrap" role="group" aria-label="Work shift">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mr-0.5">
+                    Shift
+                  </span>
+                  {([
+                    { key: [] as ShiftName[], label: "Full day", sub: "" },
+                    { key: ["morning"] as ShiftName[], label: "Morning", sub: `< ${shiftCutoff}` },
+                    { key: ["evening"] as ShiftName[], label: "Evening", sub: `≥ ${shiftCutoff}` },
+                  ]).map((opt) => {
+                    const selected =
+                      opt.key.length === shiftFilter.length &&
+                      opt.key.every((k) => shiftFilter.includes(k));
+                    const count = opt.key.length === 1
+                      ? shiftOptions.find((s) => s.value === opt.key[0])?.count
+                      : undefined;
+                    return (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() => { setShiftFilter(opt.key); setHoursFilter([]); }}
+                        style={{ touchAction: "manipulation", minHeight: 32 }}
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[13px] font-semibold transition-colors ${
+                          selected
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background text-foreground border-border hover:border-primary hover:text-primary"
+                        }`}
+                      >
+                        {opt.label}
+                        {opt.sub && <span className="text-[11px] font-medium opacity-70">{opt.sub}</span>}
+                        {count !== undefined && (
+                          <span className={`text-[11px] font-bold rounded-full px-1.5 ${selected ? "bg-white/20" : "bg-muted"}`}>
+                            {count}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Filter-within-filter: the clock hours actually recorded
+                    inside the chosen shift. */}
+                {shiftFilter.length === 1 && hourOptions.length > 0 && (
+                  <div className="mt-2 ml-3 pl-2.5 border-l-[3px] border-border flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                      Recorded at
+                    </span>
+                    {hourOptions
+                      .filter((h) => h.shift === "both" || shiftFilter.includes(h.shift as ShiftName))
+                      .map((h) => (
+                        <button
+                          key={h.value}
+                          type="button"
+                          onClick={() =>
+                            setHoursFilter((prev) =>
+                              prev.includes(h.value) ? prev.filter((v) => v !== h.value) : [...prev, h.value],
+                            )
+                          }
+                          style={{ touchAction: "manipulation", minHeight: 26 }}
+                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-semibold tabular-nums transition-colors ${
+                            hoursFilter.includes(h.value)
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background text-foreground border-border hover:border-primary hover:text-primary"
+                          }`}
+                        >
+                          {h.label}
+                          <span className="opacity-60 font-normal">{h.count}</span>
+                        </button>
+                      ))}
+                    {hoursFilter.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setHoursFilter([])}
+                        className="text-[11px] underline text-muted-foreground hover:text-destructive"
+                      >
+                        Clear hours
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
             <Button
@@ -897,8 +1100,16 @@ export default function AllEntriesSummary() {
                           .map(([floorId, floorInfo]) => {
                             const floorKey = `${warehouseId}::${floorId}`;
                             const isExcluded = excludedFloors.has(floorKey);
+                            // Must normalise both sides exactly as organizeEntries
+                            // does. Floor names are stored with trailing spaces
+                            // ("UPPER BASEMENT "), and warehouse casing varies, so
+                            // an untrimmed comparison matched nothing and the
+                            // Fresh / Off Grade columns showed 0.00 kg beside a
+                            // non-zero row total.
                             const floorEntries = filteredEntries.filter(
-                              (e) => e.warehouse === warehouseId && (e.floorName || "Unknown").toUpperCase() === floorId
+                              (e) =>
+                                (e.warehouse || "Unknown").toUpperCase().trim() === warehouseId &&
+                                (e.floorName || "Unknown").toUpperCase().trim() === floorId
                             );
                             const freshW = floorEntries.filter((e) => isFreshStock(e.stockType)).reduce((s, e) => s + (Number(e.totalWeight) || 0), 0);
                             const offW = floorEntries.filter((e) => isOffGrade(e.stockType)).reduce((s, e) => s + (Number(e.totalWeight) || 0), 0);

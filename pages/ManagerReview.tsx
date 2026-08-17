@@ -1,6 +1,6 @@
 /* MODIFIED: [E1/E2/E3/E6/E7/G4/G5] — compact item cards, auto-sort, auto-verify, verify/remark, delete modal, amber indicator, changelog */
 import "./ManagerReview.css";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,7 +15,17 @@ import {
 } from "@/components/ui/drawer";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { motion } from "framer-motion";
-import { stocktakeEntriesAPI, categorialInvAPI, floorReviewAPI } from "@/utils/api";
+import {
+  stocktakeEntriesAPI,
+  categorialInvAPI,
+  floorReviewAPI,
+  isAbortError,
+  type EntryQueryParams,
+  type PaginationMeta,
+  type ShiftName,
+  type ShiftOption,
+  type HourOption,
+} from "@/utils/api";
 import {
   Select,
   SelectContent,
@@ -102,43 +112,20 @@ interface WarehouseData {
 
 const WAREHOUSES = ["W202", "A185", "F53", "A68", "Savla", "Rishi"];
 
-/**
- * Scopes grouped entries to the selected dates.
+/*
+ * Date filtering is no longer done in the browser.
  *
- * GET /api/stocktake-entries/grouped accepts startDate/endDate but ignores
- * them — its SQL filters on warehouse, floor_name and status only, so it
- * returns every non-draft entry for the floor regardless of date. Until the
- * backend honours those params this has to happen client-side, otherwise
- * /review/floor lists entries from every stocktake ever run on that floor.
+ * GET /api/stocktake-entries/grouped used to ignore every date param and
+ * return each non-draft entry the floor had ever recorded, so the client had
+ * to re-filter and re-total the response itself. It now applies the same
+ * filter engine as every other entry endpoint and returns exactly the selected
+ * days, already totalled — so the response is rendered as-is.
  *
- * Comparison is by UTC calendar day: createdAt is an ISO UTC string, and the
- * date pills are built from the same instant server-side, so the two can never
- * disagree about which day an entry belongs to.
+ * Selected days travel as `dates`, a discrete SET. They must never be
+ * collapsed into a startDate/endDate range: doing that made {14th, 17th} query
+ * the 14th THROUGH the 17th, which is why an Aug-16 floor kept appearing in
+ * the Aug-14 view.
  */
-function filterGroupsByDates(groups: GroupedItem[], dates: string[]): GroupedItem[] {
-  // No selection means no filter, matching how selectedDates is read elsewhere.
-  if (dates.length === 0) return groups;
-  const wanted = new Set(dates);
-
-  return groups.reduce<GroupedItem[]>((kept, group) => {
-    const entries = (group.entries || []).filter((e) =>
-      wanted.has((e.createdAt || "").split("T")[0]),
-    );
-    if (entries.length === 0) return kept;
-
-    // Totals are recomputed rather than carried over: the server summed them
-    // across every date, so reusing them would print "633 pcs" above a list of
-    // two entries — a subtler wrong number than the one being fixed.
-    kept.push({
-      ...group,
-      entries,
-      totalEntries: entries.length,
-      totalQuantity: entries.reduce((sum, e) => sum + (e.units || 0), 0),
-      totalWeight: entries.reduce((sum, e) => sum + (e.totalWeight || 0), 0),
-    });
-    return kept;
-  }, []);
-}
 
 export default function ManagerReview() {
   const navigate = useNavigate();
@@ -184,8 +171,14 @@ export default function ManagerReview() {
   const [downloadingWarehouse, setDownloadingWarehouse] = useState(false);
   const [savingFloorReview, setSavingFloorReview] = useState(false);
   // Multi-date selection — source of truth is URL ?dates= param, so shared and
-  // back-navigated links keep their dates. With no param the default is today
-  // only; the sync effect below writes it straight back into the URL.
+  // back-navigated links keep their dates.
+  //
+  // The default is today, but only once availableDates confirms today actually
+  // has entries (see the reconciliation effect below). Seeding today
+  // unconditionally was half of the carry-forward bug: DatePillSelector only
+  // renders pills for days that have entries, so on a day with none the seeded
+  // date had no pill, could never be deselected, and silently widened every
+  // query to "selected day .. today".
   const [selectedDates, setSelectedDates] = useState<string[]>(() => {
     const param = searchParams.get("dates");
     return param ? param.split(",").filter(Boolean) : [todayStr()];
@@ -193,6 +186,64 @@ export default function ManagerReview() {
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [itemSearchQuery, setItemSearchQuery] = useState("");
+  // The search term actually sent to the API. Typing updates itemSearchQuery
+  // immediately (so the input stays responsive) but only settles into
+  // debouncedSearch once the user pauses, which keeps a 12-character query to
+  // one request instead of twelve.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  // ── Server-side filter state (Section: dynamic filtering) ─────────────────
+  // Each of these is sent to the API; none of them filter in the browser.
+  const [verifiedFilter, setVerifiedFilter] = useState<"all" | "verified" | "unverified">("all");
+  const [itemTypeFilter, setItemTypeFilter] = useState<string[]>([]);
+  const [stockTypeFilter, setStockTypeFilter] = useState<string[]>([]);
+  const [enteredByFilter, setEnteredByFilter] = useState<string[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
+  const [sortBy, setSortBy] = useState<string>("createdAt");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  // ── Shift (time-of-day) filter ────────────────────────────────────────────
+  // Seeded from the URL so a shift-scoped view can be shared or survive a
+  // refresh, exactly like the date selection.
+  const [shiftFilter, setShiftFilter] = useState<ShiftName[]>(() => {
+    const param = searchParams.get("shift");
+    const parsed = (param ? param.split(",") : []).filter(
+      (s): s is ShiftName => s === "morning" || s === "evening",
+    );
+    return parsed;
+  });
+  // The nested sub-filter: specific recorded clock hours within the shift.
+  const [hoursFilter, setHoursFilter] = useState<string[]>(() => {
+    const param = searchParams.get("hours");
+    return param ? param.split(",").filter(Boolean) : [];
+  });
+  const [shiftCutoff, setShiftCutoff] = useState<string>("14:00");
+  /**
+   * Local-time offset the SERVER uses for shift boundaries (minutes).
+   *
+   * Timestamps are rendered with this rather than the browser's own zone: the
+   * shift buckets are computed server-side, so formatting with a different
+   * offset would let an entry filed under "Morning" display a time after the
+   * cutoff — the two would visibly contradict each other for anyone whose
+   * device is not in the warehouse's timezone.
+   */
+  const [shiftTzOffset, setShiftTzOffset] = useState<number>(330);
+  // Options come from the backend and narrow as filters are applied.
+  const [filterOptions, setFilterOptions] = useState<{
+    itemTypes: { value: string; count: number }[];
+    categories: { value: string; count: number }[];
+    users: { value: string; count: number }[];
+    stockTypes: { value: string; count: number }[];
+    floors: { value: string; count: number }[];
+    shifts: ShiftOption[];
+    hours: HourOption[];
+  }>({ itemTypes: [], categories: [], users: [], stockTypes: [], floors: [], shifts: [], hours: [] });
+
+  // Item-list paging (groups per page on the floor detail view).
+  const [itemPage, setItemPage] = useState(1);
+  const [itemPageSize, setItemPageSize] = useState(50);
+  const [itemPagination, setItemPagination] = useState<PaginationMeta | null>(null);
+  const [floorTotals, setFloorTotals] = useState<{ entries: number; totalWeight: number } | null>(null);
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const longPressDetectedRef = useRef<boolean>(false);
 
@@ -260,7 +311,11 @@ export default function ManagerReview() {
   const [showVerifyRemark, setShowVerifyRemark] = useState(false);
 
   // D1: Warehouse last-entry stats { [warehouse]: { lastDate: string|null, hasEntries: boolean } }
-  const [warehouseStats, setWarehouseStats] = useState<Record<string, { lastDate: string | null; hasEntries: boolean }>>({});
+  // Per-warehouse rollup for the picker cards, always scoped to the active
+  // filters (see the effect below) so a card can never advertise data that the
+  // current date selection excludes.
+  const [warehouseStats, setWarehouseStats] = useState<Record<string, { lastDate: string | null; hasEntries: boolean; entryCount: number; totalWeight: number }>>({});
+  const [loadingWarehouseStats, setLoadingWarehouseStats] = useState(true);
   // D1: Grid/List view toggle — default list on mobile, grid on desktop
   const [warehouseViewMode, setWarehouseViewMode] = useState<'grid' | 'list'>(() => {
     const saved = localStorage.getItem('warehouseViewMode');
@@ -272,6 +327,83 @@ export default function ManagerReview() {
   const isScrollingRef = useRef<boolean>(false);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
+  /**
+   * Measured heights of the page chrome (topbar + breadcrumb), published as CSS
+   * custom properties on .mr-page.
+   *
+   * The breadcrumb is deliberately out of document flow (see .mr-breadcrumb) so
+   * that mounting it on warehouse selection doesn't reflow and jump the page.
+   * The consequence was that it covered whatever sat at the top of .mr-main —
+   * on the floor picker that is the Back button, which ended up half-hidden
+   * behind the bar. Its offset was also a hardcoded 52px while the topbar is
+   * taller on desktop and grows further if the user chip wraps.
+   *
+   * Measuring both means the breadcrumb always sits exactly under the topbar
+   * and .mr-main always reserves exactly the space the breadcrumb occupies —
+   * at any width, font size or zoom level, and 0px when there is no breadcrumb.
+   */
+  // Callback refs, NOT useRef + useLayoutEffect.
+  //
+  // This component returns early while isLoading, so on the first renders
+  // neither bar exists. An effect keyed on route/selection state would run once
+  // against null elements and then never re-run when loading finished (none of
+  // its dependencies change at that moment), leaving the variables unset and
+  // the 0px fallback in place — which is precisely the overlap this is meant to
+  // remove. A callback ref fires whenever the node actually attaches or
+  // detaches, so measurement can't be missed regardless of render order.
+  const chromeRef = useRef<{ topbar: HTMLElement | null; crumb: HTMLElement | null }>({
+    topbar: null,
+    crumb: null,
+  });
+  const chromeObserverRef = useRef<ResizeObserver | null>(null);
+
+  const applyChromeVars = useCallback(() => {
+    // Published on :root rather than on the page element: .mr-page is a
+    // framer-motion node whose inline style React and the animation loop both
+    // write to, and custom properties set there can be dropped on a re-render.
+    const root = document.documentElement;
+    root.style.setProperty("--mr-topbar-h", `${chromeRef.current.topbar?.offsetHeight ?? 0}px`);
+    // 0 when the breadcrumb isn't rendered, so nothing is reserved for it.
+    root.style.setProperty("--mr-breadcrumb-h", `${chromeRef.current.crumb?.offsetHeight ?? 0}px`);
+  }, []);
+
+  const attachChromeEl = useCallback(
+    (key: "topbar" | "crumb") => (node: HTMLElement | null) => {
+      const observer = chromeObserverRef.current;
+      const previous = chromeRef.current[key];
+      if (previous && observer) observer.unobserve(previous);
+      chromeRef.current[key] = node;
+      if (node && observer) observer.observe(node);
+      applyChromeVars();
+    },
+    [applyChromeVars],
+  );
+
+  const topbarRef = useMemo(() => attachChromeEl("topbar"), [attachChromeEl]);
+  const breadcrumbRef = useMemo(() => attachChromeEl("crumb"), [attachChromeEl]);
+
+  useLayoutEffect(() => {
+    // Catches wrapping, font-size and zoom changes — not just window resizes.
+    const observer = new ResizeObserver(applyChromeVars);
+    chromeObserverRef.current = observer;
+    if (chromeRef.current.topbar) observer.observe(chromeRef.current.topbar);
+    if (chromeRef.current.crumb) observer.observe(chromeRef.current.crumb);
+    applyChromeVars();
+
+    window.addEventListener("resize", applyChromeVars);
+    window.addEventListener("orientationchange", applyChromeVars);
+
+    return () => {
+      observer.disconnect();
+      chromeObserverRef.current = null;
+      window.removeEventListener("resize", applyChromeVars);
+      window.removeEventListener("orientationchange", applyChromeVars);
+      // Leave no stale offsets behind for other routes.
+      document.documentElement.style.removeProperty("--mr-topbar-h");
+      document.documentElement.style.removeProperty("--mr-breadcrumb-h");
+    };
+  }, [applyChromeVars]);
+
   useEffect(() => {
     // Get user data
     const userStr = localStorage.getItem("user");
@@ -282,7 +414,7 @@ export default function ManagerReview() {
     // Initialize with hardcoded warehouses
     setWarehouses(WAREHOUSES.map(name => ({ id: name, name })));
 
-    // Fetch all dates that have at least one entry — fetched once, never re-fetched on filter change
+    // Days that have at least one entry — drives the pill row.
     const fetchAvailableDates = async () => {
       setLoadingDates(true);
       try {
@@ -300,29 +432,6 @@ export default function ManagerReview() {
       }
     };
     fetchAvailableDates();
-
-    // D1: Fetch latest entry date per warehouse for warehouse card badges
-    const fetchWarehouseStats = async () => {
-      try {
-        const response = await stocktakeEntriesAPI.getEntries({ limit: 2000 });
-        const entries: any[] = response?.entries ?? [];
-        const stats: Record<string, { lastDate: string | null; hasEntries: boolean }> = {};
-        WAREHOUSES.forEach((wh) => {
-          const whEntries = entries.filter((e: any) => (e.warehouse || "").toLowerCase() === wh.toLowerCase());
-          if (whEntries.length === 0) {
-            stats[wh] = { lastDate: null, hasEntries: false };
-          } else {
-            const latest = whEntries.reduce((max: any, e: any) =>
-              new Date(e.createdAt || 0) > new Date(max.createdAt || 0) ? e : max, whEntries[0]);
-            stats[wh] = { lastDate: latest.createdAt || null, hasEntries: true };
-          }
-        });
-        setWarehouseStats(stats);
-      } catch (err) {
-        console.error("[D1] Failed to fetch warehouse stats:", err);
-      }
-    };
-    fetchWarehouseStats();
 
     // Initialize checked items from localStorage if exists (UI state only)
     const savedChecks = localStorage.getItem("checkedItems");
@@ -409,13 +518,274 @@ export default function ManagerReview() {
       // back to the picker rather than showing an empty "No floors" dead-end.
       navigate("/review", { replace: true });
     }
+    // Keyed on every server-side filter, so the floor counts refetch the moment
+    // any of them changes — that is what makes the filtering "live" rather than
+    // something that only applies on navigation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFloorsPage, selectedDates]);
+  }, [isFloorsPage, selectedDates, debouncedSearch, verifiedFilter, itemTypeFilter, stockTypeFilter, enteredByFilter, categoryFilter, shiftFilter, hoursFilter]);
+
+  /**
+   * The date filter sent to the API: the exact set of selected days.
+   *
+   * Replaces a helper that reduced the selection to
+   * `{ startDate: min, endDate: max }`. That turned a discrete multi-select
+   * into a contiguous span, so any day sitting between two selected days was
+   * silently included. Combined with `todayStr()` seeding a day that has no
+   * pill to deselect, selecting "14" really queried the 14th through today and
+   * pulled the 16th's floors into the 14th's list.
+   */
+  const getDateFilters = useCallback(
+    (): Pick<EntryQueryParams, "dates"> =>
+      selectedDates.length > 0 ? { dates: [...selectedDates].sort() } : {},
+    [selectedDates],
+  );
+
+  // Filters shared by every request this page makes, so the floor list, the
+  // item list and the export can never disagree about what is being shown.
+  const activeFilters = useCallback(
+    (extra: EntryQueryParams = {}): EntryQueryParams => ({
+      ...getDateFilters(),
+      ...(debouncedSearch ? { search: debouncedSearch } : {}),
+      ...(verifiedFilter !== "all" ? { verified: verifiedFilter === "verified" } : {}),
+      ...(itemTypeFilter.length > 0 ? { itemType: itemTypeFilter } : {}),
+      ...(stockTypeFilter.length > 0 ? { stockType: stockTypeFilter } : {}),
+      ...(enteredByFilter.length > 0 ? { enteredBy: enteredByFilter } : {}),
+      ...(categoryFilter.length > 0 ? { category: categoryFilter } : {}),
+      // Shift and its nested hour selection travel with every request, so the
+      // warehouse cards, the floor list, the item list and the export all
+      // describe the same slice of the day.
+      ...(shiftFilter.length > 0 ? { shift: shiftFilter } : {}),
+      ...(hoursFilter.length > 0 ? { hours: hoursFilter } : {}),
+      ...extra,
+    }),
+    [getDateFilters, debouncedSearch, verifiedFilter, itemTypeFilter, stockTypeFilter, enteredByFilter, categoryFilter, shiftFilter, hoursFilter],
+  );
 
   // D1: Persist view mode preference
   useEffect(() => {
     localStorage.setItem('warehouseViewMode', warehouseViewMode);
   }, [warehouseViewMode]);
+
+  // Debounce the search box before it reaches the API.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(itemSearchQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [itemSearchQuery]);
+
+  /**
+   * Warehouse card badges, scoped to the current filters.
+   *
+   * This used to run once on mount with no filters at all, so every card kept
+   * showing its all-time last entry no matter what the date pills said — with
+   * "16 Aug" selected, A185 still advertised "Last entry: 14 Aug 2026" and
+   * stayed tappable even though it has nothing on the 16th. The card row is
+   * now re-queried whenever a filter changes, so it always describes the same
+   * slice of data as everything else on the page.
+   *
+   * Aggregated by the database rather than by pulling entry rows and reducing
+   * them here.
+   */
+  const warehouseStatsRequestRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const load = async () => {
+      warehouseStatsRequestRef.current?.abort();
+      const controller = new AbortController();
+      warehouseStatsRequestRef.current = controller;
+      setLoadingWarehouseStats(true);
+      try {
+        const response = await stocktakeEntriesAPI.getWarehouseSummary(activeFilters(), controller.signal);
+        if (controller.signal.aborted) return;
+        const rows: any[] = response?.warehouses ?? [];
+        const byName = new Map(rows.map((r) => [String(r.warehouse).toUpperCase().trim(), r]));
+        const stats: Record<string, { lastDate: string | null; hasEntries: boolean; entryCount: number; totalWeight: number }> = {};
+        WAREHOUSES.forEach((wh) => {
+          const row = byName.get(wh.toUpperCase().trim());
+          stats[wh] = {
+            lastDate: row?.lastEntryAt ?? null,
+            hasEntries: Boolean(row?.hasEntries),
+            entryCount: Number(row?.entryCount ?? 0),
+            totalWeight: Number(row?.totalWeight ?? 0),
+          };
+        });
+        setWarehouseStats(stats);
+      } catch (err) {
+        if (isAbortError(err)) return;
+        console.error("[D1] Failed to fetch warehouse stats:", err);
+      } finally {
+        if (!controller.signal.aborted) setLoadingWarehouseStats(false);
+      }
+    };
+    load();
+    return () => warehouseStatsRequestRef.current?.abort();
+  }, [activeFilters]);
+
+  /**
+   * Keep the filter dropdowns populated from live data.
+   *
+   * Options are requested with the current date + location scope but WITHOUT
+   * the item-level selections, so choosing "PM" doesn't cause every other item
+   * type to vanish from its own dropdown. They still narrow with date and
+   * warehouse, so the lists only ever offer values that can actually match.
+   */
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        // Shift/hours are included so the OTHER dimensions (categories, users,
+        // item types) narrow to the selected part of the day. The server
+        // deliberately ignores them when counting the shift and hour options
+        // themselves, so choosing "Morning" never makes "Evening" disappear
+        // from the control used to switch between them.
+        const scope: EntryQueryParams = {
+          ...getDateFilters(),
+          ...(selectedWarehouse ? { warehouse: selectedWarehouse } : {}),
+          ...(selectedFloor ? { floorName: selectedFloor } : {}),
+          ...(shiftFilter.length > 0 ? { shift: shiftFilter } : {}),
+          ...(hoursFilter.length > 0 ? { hours: hoursFilter } : {}),
+        };
+        const res = await stocktakeEntriesAPI.getFilterOptions(scope, controller.signal);
+        if (controller.signal.aborted) return;
+        setFilterOptions({
+          itemTypes: res?.options?.itemTypes ?? [],
+          categories: res?.options?.categories ?? [],
+          users: res?.options?.users ?? [],
+          stockTypes: res?.options?.stockTypes ?? [],
+          floors: res?.options?.floors ?? [],
+          shifts: res?.options?.shifts ?? [],
+          hours: res?.options?.hours ?? [],
+        });
+        // The server owns the cutoff and the zone (both env-configurable); the
+        // UI just labels and formats with them.
+        if (res?.shift?.cutoff) setShiftCutoff(res.shift.cutoff);
+        if (typeof res?.shift?.tzOffsetMinutes === "number") setShiftTzOffset(res.shift.tzOffsetMinutes);
+      } catch (err) {
+        if (!isAbortError(err)) console.error("Failed to load filter options:", err);
+      }
+    })();
+    return () => controller.abort();
+  }, [getDateFilters, selectedWarehouse, selectedFloor, shiftFilter, hoursFilter]);
+
+  /**
+   * URL of the warehouse picker, carrying the current date selection.
+   *
+   * Navigating to a bare "/review" dropped ?dates=, so the picker remounted and
+   * re-seeded from its default — silently rescoping the warehouse cards the
+   * user had just filtered.
+   */
+  const reviewUrl = useCallback(() => {
+    if (selectedDates.length === 0) return "/review";
+    return `/review?dates=${encodeURIComponent(selectedDates.join(","))}`;
+  }, [selectedDates]);
+
+  /**
+   * Render an entry's stored UTC timestamp in the warehouse's local zone.
+   *
+   * Uses the server's configured offset rather than the browser's, so the time
+   * shown always agrees with the shift the row was filtered into.
+   */
+  const localParts = useCallback(
+    (iso: string) => {
+      const shifted = new Date(new Date(iso).getTime() + shiftTzOffset * 60_000);
+      return {
+        hh: String(shifted.getUTCHours()).padStart(2, "0"),
+        mm: String(shifted.getUTCMinutes()).padStart(2, "0"),
+        day: shifted.getUTCDate(),
+        month: shifted.getUTCMonth(),
+        year: shifted.getUTCFullYear(),
+        hour: shifted.getUTCHours(),
+        minute: shifted.getUTCMinutes(),
+      };
+    },
+    [shiftTzOffset],
+  );
+
+  const formatLocalTime = useCallback(
+    (iso: string) => {
+      const { hh, mm } = localParts(iso);
+      return `${hh}:${mm}`;
+    },
+    [localParts],
+  );
+
+  const formatLocalDateTime = useCallback(
+    (iso: string) => {
+      const p = localParts(iso);
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return `${String(p.day).padStart(2, "0")} ${months[p.month]} ${p.year} at ${p.hh}:${p.mm} (local)`;
+    },
+    [localParts],
+  );
+
+  /** Which shift a timestamp falls in, for colour-coding the time badge. */
+  const shiftOfTime = useCallback(
+    (iso: string): ShiftName => {
+      const p = localParts(iso);
+      const [ch, cm] = shiftCutoff.split(":").map(Number);
+      return p.hour * 60 + p.minute < ch * 60 + cm ? "morning" : "evening";
+    },
+    [localParts, shiftCutoff],
+  );
+
+  /** Clear every server-side filter except the date selection. */
+  const clearFilters = useCallback(() => {
+    setItemSearchQuery("");
+    setVerifiedFilter("all");
+    setItemTypeFilter([]);
+    setStockTypeFilter([]);
+    setEnteredByFilter([]);
+    setCategoryFilter([]);
+    setShiftFilter([]);
+    setHoursFilter([]);
+    setSortBy("createdAt");
+    setSortOrder("desc");
+  }, []);
+
+  // Drives the "N active" badge and the enabled state of the reset button.
+  const activeFilterCount =
+    (debouncedSearch ? 1 : 0) +
+    (verifiedFilter !== "all" ? 1 : 0) +
+    itemTypeFilter.length +
+    stockTypeFilter.length +
+    enteredByFilter.length +
+    categoryFilter.length +
+    // Selecting both shifts is equivalent to selecting neither, so it isn't a
+    // narrowing filter and doesn't count towards the badge.
+    (shiftFilter.length === 1 ? 1 : 0) +
+    hoursFilter.length;
+
+  /** Add/remove one value from a multi-select filter. */
+  const toggleInList = (
+    setter: React.Dispatch<React.SetStateAction<string[]>>,
+    value: string,
+  ) => setter((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
+
+  /**
+   * Drop any selected date that has no pill to deselect it with.
+   *
+   * DatePillSelector only renders days present in `availableDates`, so a
+   * selected day outside that list is invisible and permanently stuck. The
+   * default seed of `todayStr()` hits this every time the current day has no
+   * entries yet — and because the old code turned the selection into a
+   * min..max range, that stuck date silently stretched every query forward to
+   * today, dragging in floors from days the user had not selected.
+   *
+   * Runs once availableDates arrives, and only ever removes unreachable dates.
+   */
+  const datesReconciledRef = useRef(false);
+  useEffect(() => {
+    if (datesReconciledRef.current || availableDates.length === 0) return;
+    datesReconciledRef.current = true;
+
+    setSelectedDates((current) => {
+      const selectable = new Set(availableDates);
+      const reachable = current.filter((d) => selectable.has(d));
+      if (reachable.length === current.length) return current;
+      // Everything the user asked for is unreachable (typically "today, which
+      // has no entries yet"). Fall back to the most recent day that does,
+      // so the page opens on real data instead of a blank list.
+      return reachable.length > 0 ? reachable : [availableDates[availableDates.length - 1]];
+    });
+  }, [availableDates]);
 
   // Sync selectedDates to URL params. Use the updater form so we only touch the
   // `dates` key — replacing the whole query (the old behavior) wiped out
@@ -428,74 +798,79 @@ export default function ManagerReview() {
       } else {
         prev.delete("dates");
       }
+      // Shift travels in the URL too, so a "morning shift" view survives a
+      // refresh and can be shared or bookmarked.
+      if (shiftFilter.length > 0) prev.set("shift", shiftFilter.join(","));
+      else prev.delete("shift");
+      if (hoursFilter.length > 0) prev.set("hours", hoursFilter.join(","));
+      else prev.delete("hours");
       return prev;
     }, { replace: true });
-  }, [selectedDates, setSearchParams]);
+  }, [selectedDates, shiftFilter, hoursFilter, setSearchParams]);
 
-  // Helper: derive start/end date strings for API range queries
-  const getDateRange = useCallback(() => {
-    if (selectedDates.length === 0) return {};
-    const sorted = [...selectedDates].sort();
-    return {
-      startDate: `${sorted[0]}T00:00:00.000Z`,
-      endDate: `${sorted[sorted.length - 1]}T23:59:59.999Z`,
-    };
-  }, [selectedDates]);
+  // Any filter change resets to the first page — otherwise a narrowed result
+  // set can leave the view stranded on a page that no longer exists.
+  useEffect(() => {
+    setItemPage(1);
+  }, [selectedDates, itemSearchQuery, verifiedFilter, itemTypeFilter, stockTypeFilter, enteredByFilter, categoryFilter, shiftFilter, hoursFilter, itemPageSize, selectedFloor]);
 
-  // Helper: single date for grouped-entries API
-  const getPrimaryDate = useCallback(() => {
-    if (selectedDates.length === 0) return undefined;
-    return [...selectedDates].sort()[0];
-  }, [selectedDates]);
+  // Backstop for the same problem: if a response comes back reporting fewer
+  // pages than the page currently being viewed, step back into range rather
+  // than showing an empty list with live pagination controls beneath it.
+  useEffect(() => {
+    if (!itemPagination) return;
+    const { totalPages, page } = itemPagination;
+    if (totalPages > 0 && page > totalPages) setItemPage(totalPages);
+  }, [itemPagination]);
 
   const scrollTimeoutRef = useRef<NodeJS.Timeout>();
 
-  // Fetch the unique floors for a warehouse from the database. Data only — the
-  // floors now live on their own page (/review/floors), which calls this on
-  // mount. No drawer / navigation side effects here.
+  // Cancels the previous in-flight floor request when a newer one starts.
+  // Without this, two responses racing back out of order could leave the list
+  // showing the results of a filter the user had already moved off — a second,
+  // independent way for stale data to appear "carried forward".
+  const floorsRequestRef = useRef<AbortController | null>(null);
+
+  /**
+   * Load the floor list for a warehouse.
+   *
+   * The per-floor counts and weights are aggregated by Postgres and arrive
+   * ready to render. This previously fetched every entry row for the warehouse
+   * and reduced them in the browser, which meant downloading thousands of rows
+   * to display a handful of numbers — and quietly under-reporting once the
+   * server's row cap truncated the response.
+   */
   const fetchFloors = async (warehouse: string) => {
     setSelectedWarehouse(warehouse);
     setLoadingWarehouseName(warehouse);
     setLoadingFloors(true);
+    // Drop the previous warehouse's (or previous filter's) floors immediately.
+    // Leaving them on screen while the new request is in flight is what made
+    // one warehouse's floors appear under another's heading, and made a floor
+    // that the new filter excludes linger until the response landed.
+    setWarehouseFloors([]);
+
+    floorsRequestRef.current?.abort();
+    const controller = new AbortController();
+    floorsRequestRef.current = controller;
 
     try {
-      const fetchParams: any = { warehouse, ...getDateRange() };
-      const entriesResponse = await stocktakeEntriesAPI.getEntries(fetchParams);
-
-      if (entriesResponse && entriesResponse.entries && entriesResponse.entries.length > 0) {
-        // Group entries by floor name
-        const floorMap: Record<string, { itemCount: number; totalWeight: number; uncheckedCount: number }> = {};
-
-        entriesResponse.entries.forEach((entry: any) => {
-          const floorName = (entry.floorName || "Unknown").toUpperCase();
-          if (!floorMap[floorName]) {
-            floorMap[floorName] = { itemCount: 0, totalWeight: 0, uncheckedCount: 0 };
-          }
-          floorMap[floorName].itemCount += 1;
-          floorMap[floorName].totalWeight += entry.totalWeight || 0;
-          // "check = verify": an entry is complete once verified. A floor is
-          // incomplete (red dot) if any of its entries is still unverified.
-          if (entry.verified !== true) floorMap[floorName].uncheckedCount += 1;
-        });
-
-        // Convert to array
-        const floors = Object.entries(floorMap).map(([floorName, data]) => ({
-          floorName,
-          itemCount: data.itemCount,
-          totalWeight: data.totalWeight,
-          hasUnchecked: data.uncheckedCount > 0,
-        }));
-
-        setWarehouseFloors(floors);
-      } else {
-        setWarehouseFloors([]);
-      }
+      const response = await stocktakeEntriesAPI.getFloorSummary(
+        activeFilters({ warehouse }),
+        controller.signal,
+      );
+      // A late response from a superseded request must not overwrite newer data.
+      if (controller.signal.aborted) return;
+      setWarehouseFloors(response?.floors ?? []);
     } catch (err) {
+      if (isAbortError(err)) return; // superseded, not a failure
       console.error("Error loading floors:", err);
       setWarehouseFloors([]);
     } finally {
-      setLoadingFloors(false);
-      setLoadingWarehouseName(null);
+      if (!controller.signal.aborted) {
+        setLoadingFloors(false);
+        setLoadingWarehouseName(null);
+      }
     }
   };
 
@@ -714,8 +1089,11 @@ export default function ManagerReview() {
     setSavingData(true);
     try {
       // Send just the date - backend will fetch entries from DB directly
-      // This avoids the 413 payload-too-large error on API Gateway
-      const response = await stocktakeEntriesAPI.saveResultsheet([], getPrimaryDate());
+      // This avoids the 413 payload-too-large error on API Gateway.
+      // saveResultsheet takes a single day, so the earliest selected one is
+      // used; with nothing selected the backend falls back to its own default.
+      const primaryDate = selectedDates.length > 0 ? [...selectedDates].sort()[0] : undefined;
+      const response = await stocktakeEntriesAPI.saveResultsheet([], primaryDate);
       console.log("API Response received:", response);
 
       toast({
@@ -802,8 +1180,7 @@ export default function ManagerReview() {
 
       // Refresh grouped items data
       if (selectedWarehouse && selectedFloor) {
-        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-        setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
+        await refreshGroupedItems();
       }
 
       setEditingQuantity(null);
@@ -854,8 +1231,7 @@ export default function ManagerReview() {
       await stocktakeEntriesAPI.deleteEntry(deleteTarget.id);
 
       if (selectedWarehouse && selectedFloor) {
-        const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-        setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
+        await refreshGroupedItems();
       }
       setDeleteModalOpen(false);
       setDeleteTarget(null);
@@ -1121,8 +1497,7 @@ export default function ManagerReview() {
       await stocktakeEntriesAPI.submitEntries([entry]);
 
       // Refresh grouped items data
-      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-      setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
+      await refreshGroupedItems();
 
       // Reset form and close drawer
       setNewItemForm({
@@ -1197,8 +1572,7 @@ export default function ManagerReview() {
 
       await stocktakeEntriesAPI.submitEntries([entry]);
 
-      const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-      setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
+      await refreshGroupedItems();
 
       setQuickAddUnits("");
       setQuickAddStockType("Fresh Stock");
@@ -1243,34 +1617,85 @@ export default function ManagerReview() {
   const [groupedItemsData, setGroupedItemsData] = useState<GroupedItem[]>([]);
   const [loadingGroupedItems, setLoadingGroupedItems] = useState(false);
 
-  useEffect(() => {
-    const fetchGroupedItems = async () => {
+  // Cancels a superseded grouped-items request, same reasoning as the floor list.
+  const groupedRequestRef = useRef<AbortController | null>(null);
+
+  /**
+   * Load the item list for the open floor.
+   *
+   * The response is rendered as-is: filtering, totalling and paging all happen
+   * in the database now, so there is no client-side pass to keep in sync with
+   * what was requested.
+   *
+   * `resetSelection` is false when refreshing after an edit — re-selecting
+   * nothing would close the drawer the user is working in.
+   */
+  const refreshGroupedItems = useCallback(
+    async (resetSelection = false) => {
       if (!selectedWarehouse || !selectedFloor) {
         setGroupedItemsData([]);
+        setItemPagination(null);
         return;
       }
 
-      setLoadingGroupedItems(true);
+      groupedRequestRef.current?.abort();
+      const controller = new AbortController();
+      groupedRequestRef.current = controller;
+
+      // Clear ONLY when the scope changed (new floor / new filter), so the
+      // previous floor's items can't sit under the new floor's heading while
+      // the request is in flight.
+      //
+      // Deliberately NOT cleared on a post-edit refresh: those run while the
+      // item-details drawer is open, and blanking the list empties the drawer
+      // the manager is working in until the response lands. Such a refresh
+      // returns the same floor, so there is no stale-scope risk to guard.
+      if (resetSelection) {
+        setGroupedItemsData([]);
+        setItemPagination(null);
+        // The full-page spinner belongs to a scope change too. A post-edit
+        // refresh already has its own affordance (the row's saving/deleting
+        // state), and swapping the list out from under an open drawer is
+        // disorienting.
+        setLoadingGroupedItems(true);
+      }
       try {
         const data = await stocktakeEntriesAPI.getGroupedEntries(
-          selectedWarehouse!,
-          selectedFloor!,
-          getDateRange()
+          selectedWarehouse,
+          selectedFloor,
+          activeFilters({ page: itemPage, pageSize: itemPageSize, sortBy, sortOrder }),
+          controller.signal,
         );
-        setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
-        setConfirmed(false);
-        setSelectedItemName(null);
+        if (controller.signal.aborted) return;
+
+        setGroupedItemsData(data.groups || []);
+        setItemPagination(data.pagination ?? null);
+        setFloorTotals({
+          entries: data.totalEntries ?? 0,
+          totalWeight: (data.groups || []).reduce((s: number, g: any) => s + (g.totalWeight || 0), 0),
+        });
+        if (resetSelection) {
+          setConfirmed(false);
+          setSelectedItemName(null);
+        }
       } catch (err: any) {
+        if (isAbortError(err)) return; // superseded, not a failure
         console.error("Error fetching grouped entries:", err);
         setGroupedItemsData([]);
+        setItemPagination(null);
       } finally {
-        setLoadingGroupedItems(false);
+        if (!controller.signal.aborted) setLoadingGroupedItems(false);
       }
-    };
+    },
+    [selectedWarehouse, selectedFloor, activeFilters, itemPage, itemPageSize, sortBy, sortOrder],
+  );
 
-    fetchGroupedItems();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWarehouse, selectedFloor, selectedDates]);
+  // Refetch whenever the floor or any server-side filter changes. activeFilters
+  // is part of refreshGroupedItems' identity, so every filter is covered here
+  // without having to restate the list.
+  useEffect(() => {
+    refreshGroupedItems(true);
+  }, [refreshGroupedItems]);
 
   const getGroupedItems = (): GroupedItem[] => {
     return groupedItemsData;
@@ -1372,18 +1797,27 @@ export default function ManagerReview() {
     setDownloadingWarehouse(true);
     
     try {
-      const downloadParams: any = { warehouse: selectedWarehouse, ...getDateRange() };
-      if (floorFilter) downloadParams.floorName = floorFilter;
+      // The export contains exactly what the screen is filtered to, and the
+      // WHOLE of it: `all: true` bypasses paging entirely, so downloading from
+      // page 2 of a 40-page result still yields every matching row.
+      const downloadParams: EntryQueryParams = activeFilters({
+        warehouse: selectedWarehouse,
+        ...(floorFilter ? { floorName: floorFilter } : {}),
+        all: true,
+      });
       const response = await stocktakeEntriesAPI.getEntries(downloadParams);
 
-      // When scoped to a single floor, keep only that floor's rows even if the API
-      // returns more. Defense-in-depth so the sheet matches the floor the manager
-      // just saved rather than the entire warehouse.
-      if (floorFilter && response?.entries) {
-        const target = floorFilter.toUpperCase();
-        response.entries = response.entries.filter((entry: any) =>
-          (entry.floorName || entry.floor_name || "").toUpperCase() === target
-        );
+      // Belt and braces: if the server ever did cap the response, abort rather
+      // than writing a short sheet. Warning and then downloading anyway is
+      // worse than not downloading — the file looks complete once it is open.
+      const reportedTotal = response?.pagination?.total ?? response?.entries?.length ?? 0;
+      if (reportedTotal > (response?.entries?.length ?? 0)) {
+        toast({
+          title: "Export cancelled — incomplete data",
+          description: `The server returned ${response.entries.length} of ${reportedTotal} entries. Narrow the filters and try again; no file was saved.`,
+          variant: "destructive",
+        });
+        return;
       }
 
       if (!response?.entries || response.entries.length === 0) {
@@ -1546,6 +1980,12 @@ export default function ManagerReview() {
 
           const row = worksheet.addRow(dataRow);
 
+          // These three arrive from the API as numbers; the display formats
+          // make them read correctly in Excel while staying summable.
+          row.getCell(9).numFmt = "#,##0.###";  // Quantity (units)
+          row.getCell(10).numFmt = "#,##0.000"; // UOM (kg) — pack size
+          row.getCell(11).numFmt = "#,##0.00";  // Total Weight (kg)
+
           // Borders on every cell
           row.eachCell((cell) => {
             cell.border = {
@@ -1682,6 +2122,279 @@ export default function ManagerReview() {
     },
   };
 
+  /**
+   * Filter controls. Each one sets state that feeds `activeFilters()`, which is
+   * a dependency of the fetchers — so changing any control re-queries the API
+   * immediately. Nothing here filters an already-loaded array.
+   */
+  const renderFilterPanel = (opts: { showSort?: boolean } = {}) => {
+    const chipGroup = (
+      label: string,
+      options: { value: string; count: number }[],
+      selected: string[],
+      setter: React.Dispatch<React.SetStateAction<string[]>>,
+      scroll = false,
+    ) => {
+      if (options.length === 0) return null;
+      return (
+        <div>
+          <div className="mr-filter-group-label">{label}</div>
+          <div className={`mr-filter-chips${scroll ? " mr-filter-chips-scroll" : ""}`}>
+            {options.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className="mr-filter-chip"
+                data-selected={selected.includes(opt.value)}
+                onClick={() => toggleInList(setter, opt.value)}
+              >
+                {opt.value}
+                <span className="mr-filter-chip-count">{opt.count}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    };
+
+    // Only offer hours that belong to the shift(s) in view — the nested
+    // sub-filter should never present an hour that cannot match.
+    const hoursInScope = filterOptions.hours.filter(
+      (h) => shiftFilter.length === 0 || h.shift === "both" || shiftFilter.includes(h.shift as ShiftName),
+    );
+
+    const shiftCount = (name: ShiftName) =>
+      filterOptions.shifts.find((s) => s.value === name)?.count ?? 0;
+
+    /** Toggling a shift clears hour selections that no longer belong to it. */
+    const toggleShift = (name: ShiftName) => {
+      setShiftFilter((prev) => {
+        const next = prev.includes(name) ? prev.filter((s) => s !== name) : [...prev, name];
+        setHoursFilter((hrs) =>
+          hrs.filter((h) => {
+            const opt = filterOptions.hours.find((o) => o.value === h);
+            if (!opt || next.length === 0) return true;
+            return opt.shift === "both" || next.includes(opt.shift as ShiftName);
+          }),
+        );
+        return next;
+      });
+    };
+
+    return (
+      <>
+        {/* Shift is a primary control, not tucked inside the Filters panel:
+            it is the coarsest cut of the working day and the one asked for
+            most often. Hours nest inside it as a sub-filter. */}
+        <div className="mr-shift-bar" role="group" aria-label="Work shift">
+          <span className="mr-shift-label">Shift</span>
+          <button
+            type="button"
+            className="mr-shift-btn"
+            data-selected={shiftFilter.length === 0}
+            onClick={() => { setShiftFilter([]); setHoursFilter([]); }}
+          >
+            Full day
+          </button>
+          {(["morning", "evening"] as ShiftName[]).map((name) => (
+            <button
+              key={name}
+              type="button"
+              className="mr-shift-btn"
+              data-shift={name}
+              data-selected={shiftFilter.includes(name)}
+              onClick={() => toggleShift(name)}
+              title={name === "morning" ? `Entries recorded before ${shiftCutoff}` : `Entries recorded from ${shiftCutoff}`}
+            >
+              {name === "morning" ? "Morning" : "Evening"}
+              <span className="mr-shift-btn-sub">
+                {name === "morning" ? `< ${shiftCutoff}` : `≥ ${shiftCutoff}`}
+              </span>
+              <span className="mr-shift-btn-count">{shiftCount(name)}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* The filter-within-a-filter: the actual clock hours present in the
+            current scope. Rendered only when a shift narrows the day, so the
+            control appears where it is useful rather than always. */}
+        {hoursInScope.length > 0 && (shiftFilter.length > 0 || hoursFilter.length > 0) && (
+          <div className="mr-hour-bar">
+            <span className="mr-hour-label">Recorded at</span>
+            <div className="mr-hour-chips">
+              {hoursInScope.map((h) => (
+                <button
+                  key={h.value}
+                  type="button"
+                  className="mr-hour-chip"
+                  data-selected={hoursFilter.includes(h.value)}
+                  onClick={() => toggleInList(setHoursFilter, h.value)}
+                  title={`${h.count} ${h.count === 1 ? "entry" : "entries"} recorded in the ${h.label} hour`}
+                >
+                  {h.label}
+                  <span className="mr-hour-chip-count">{h.count}</span>
+                </button>
+              ))}
+              {hoursFilter.length > 0 && (
+                <button type="button" className="mr-filter-clear" onClick={() => setHoursFilter([])}>
+                  Clear hours
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="mr-filter-bar">
+          <button
+            type="button"
+            className="mr-filter-toggle"
+            data-active={filtersOpen || activeFilterCount > 0}
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+          >
+            Filters
+            {activeFilterCount > 0 && <span className="mr-filter-count">{activeFilterCount}</span>}
+            <ChevronDown
+              className="mr-download-icon"
+              style={{ transform: filtersOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s ease" }}
+            />
+          </button>
+          <button
+            type="button"
+            className="mr-filter-clear"
+            onClick={clearFilters}
+            disabled={activeFilterCount === 0}
+          >
+            Reset
+          </button>
+        </div>
+
+        {filtersOpen && (
+          <div className="mr-filter-panel">
+            <div>
+              <div className="mr-filter-group-label">Review status</div>
+              <div className="mr-filter-chips">
+                {(["all", "verified", "unverified"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className="mr-filter-chip"
+                    data-selected={verifiedFilter === v}
+                    onClick={() => setVerifiedFilter(v)}
+                  >
+                    {v === "all" ? "All" : v === "verified" ? "Verified" : "Unverified"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {chipGroup("Item type", filterOptions.itemTypes, itemTypeFilter, setItemTypeFilter)}
+            {chipGroup("Stock type", filterOptions.stockTypes, stockTypeFilter, setStockTypeFilter)}
+            {chipGroup("Category", filterOptions.categories, categoryFilter, setCategoryFilter, true)}
+            {chipGroup("Entered by", filterOptions.users, enteredByFilter, setEnteredByFilter, true)}
+
+            {opts.showSort && (
+              <div>
+                <div className="mr-filter-group-label">Sort</div>
+                <div className="mr-filter-sort-row">
+                  <select
+                    className="mr-filter-select"
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    aria-label="Sort by"
+                  >
+                    <option value="createdAt">Date added</option>
+                    <option value="itemName">Item name</option>
+                    <option value="totalWeight">Weight</option>
+                    <option value="totalQuantity">Quantity</option>
+                    <option value="enteredBy">Entered by</option>
+                    <option value="itemType">Item type</option>
+                  </select>
+                  <select
+                    className="mr-filter-select"
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}
+                    aria-label="Sort direction"
+                  >
+                    <option value="desc">Descending</option>
+                    <option value="asc">Ascending</option>
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </>
+    );
+  };
+
+  /**
+   * Page controls driven by the server's pagination envelope.
+   * Renders nothing when everything already fits on one page.
+   */
+  const renderPagination = (meta: PaginationMeta | null, onPage: (p: number) => void, unit: string) => {
+    if (!meta || meta.totalPages <= 1) return null;
+
+    // Window of page numbers around the current page, with ellipses, so a
+    // 40-page result doesn't render 40 buttons on a phone.
+    const pages: (number | "…")[] = [];
+    const { page, totalPages } = meta;
+    const push = (n: number | "…") => pages.push(n);
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) push(i);
+    } else {
+      push(1);
+      if (page > 3) push("…");
+      for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) push(i);
+      if (page < totalPages - 2) push("…");
+      push(totalPages);
+    }
+
+    const first = (meta.page - 1) * meta.pageSize + 1;
+    const last = Math.min(meta.page * meta.pageSize, meta.total);
+
+    return (
+      <div className="mr-pagination">
+        <div className="mr-pagination-info">
+          Showing <strong>{first}–{last}</strong> of <strong>{meta.total}</strong> {unit}
+        </div>
+        <div className="mr-pagination-controls">
+          <button
+            className="mr-page-btn"
+            onClick={() => onPage(meta.page - 1)}
+            disabled={!meta.hasPrevPage}
+            aria-label="Previous page"
+          >
+            ‹
+          </button>
+          {pages.map((p, i) =>
+            p === "…" ? (
+              <span key={`gap-${i}`} className="mr-page-ellipsis">…</span>
+            ) : (
+              <button
+                key={p}
+                className="mr-page-btn"
+                data-current={p === meta.page}
+                onClick={() => onPage(p)}
+                aria-current={p === meta.page ? "page" : undefined}
+              >
+                {p}
+              </button>
+            ),
+          )}
+          <button
+            className="mr-page-btn"
+            onClick={() => onPage(meta.page + 1)}
+            disabled={!meta.hasNextPage}
+            aria-label="Next page"
+          >
+            ›
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <motion.div
       className="mr-page"
@@ -1692,8 +2405,12 @@ export default function ManagerReview() {
       exit="exit"
     >
       {/* ── Dark Topbar (Section 5A) ── */}
+      {/* Height comes from CSS (min-height per breakpoint) rather than a fixed
+          inline 52px, so the bar can grow if its contents wrap — the measured
+          value is what everything below offsets against. */}
       <nav
-        style={{ background: "#111827", height: 52 }}
+        ref={topbarRef}
+        style={{ background: "#111827" }}
         className="mr-topbar"
       >
         {/* Logo */}
@@ -1772,7 +2489,11 @@ export default function ManagerReview() {
 
       {/* C3: Breadcrumb Trail */}
       {(selectedWarehouse) && (
-        <nav style={{ background: "#111827", borderTop: "1px solid rgba(255,255,255,0.06)" }} className="mr-breadcrumb">
+        <nav
+          ref={breadcrumbRef}
+          style={{ background: "#111827", borderTop: "1px solid rgba(255,255,255,0.06)" }}
+          className="mr-breadcrumb"
+        >
           {(() => {
             // On the floor page the crumbs navigate by route (the component
             // remounts per route, so clearing state alone would leave a blank
@@ -1787,7 +2508,7 @@ export default function ManagerReview() {
               {
                 label: "Review",
                 onClick: () => {
-                  if (isFloorPage || isFloorsPage) { navigate("/review"); return; }
+                  if (isFloorPage || isFloorsPage) { navigate(reviewUrl()); return; }
                   setItemDetailsOpen(false);
                   setItemsDrawerOpen(false);
                   setDrawerOpen(false);
@@ -1929,11 +2650,21 @@ export default function ManagerReview() {
             />
           </motion.div>
 
+          {/* Shift + filters on the warehouse picker too. The warehouse cards
+              are already scoped by shift, so without the control here the
+              filter could be carried in but never set or cleared from this
+              page — the numbers would narrow with no visible cause. */}
+          {renderFilterPanel()}
+
           {/* Previous Stocktakes KPI card — shows combined stats for dates NOT currently selected */}
           {(() => {
             const prevDates = availableDates.filter(d => !selectedDates.includes(d));
             if (prevDates.length === 0) return null;
-            const prevEntryCount = Object.values(warehouseStats).filter(s => s.hasEntries).length;
+            // Counts the warehouses in the CURRENT view. warehouseStats is now
+            // scoped to the selected dates, so labelling this as a property of
+            // the *other* dates (which it never measured) would be wrong — the
+            // badge says what it actually counts.
+            const shownWarehouses = Object.values(warehouseStats).filter(s => s.hasEntries).length;
             return (
               <motion.div
                 className="mr-prev-stocktakes"
@@ -1952,7 +2683,7 @@ export default function ManagerReview() {
                       </p>
                     </div>
                     <span style={{ background: "#334155", color: "#94A3B8", fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "3px 10px", whiteSpace: "nowrap", flexShrink: 0 }}>
-                      {prevEntryCount} warehouse{prevEntryCount !== 1 ? "s" : ""}
+                      {shownWarehouses} warehouse{shownWarehouses !== 1 ? "s" : ""} in view
                     </span>
                   </div>
                   <div className="mr-prev-stocktakes-dates">
@@ -1998,7 +2729,9 @@ export default function ManagerReview() {
           <div className={warehouseViewMode === 'grid' ? "mr-warehouse-grid" : "mr-warehouse-list"}>
             {WAREHOUSES.map((warehouse, index) => {
               const whStats = warehouseStats[warehouse];
-              const hasEntries = whStats?.hasEntries ?? true; // default tappable until stats load
+              // Tappable while the (filter-scoped) stats are still loading, so
+              // the row doesn't flicker to disabled on every filter change.
+              const hasEntries = loadingWarehouseStats ? true : Boolean(whStats?.hasEntries);
               const lastDate = whStats?.lastDate ?? null;
               const lastDateStr = lastDate
                 ? (() => {
@@ -2007,6 +2740,14 @@ export default function ManagerReview() {
                     return `${String(d.getDate()).padStart(2,"0")} ${months[d.getMonth()]} ${d.getFullYear()}`;
                   })()
                 : null;
+              // Counts describe the filtered slice, so the card and the floor
+              // list behind it can never disagree.
+              const whEntryCount = whStats?.entryCount ?? 0;
+              const scopeLabel = selectedDates.length === 0
+                ? "in any date"
+                : selectedDates.length === 1
+                  ? "on this date"
+                  : `across ${selectedDates.length} dates`;
 
               return (
                 <motion.div
@@ -2049,14 +2790,25 @@ export default function ManagerReview() {
                         <h3 className={warehouseViewMode === 'list' ? 'mr-wh-name-list' : 'mr-wh-name-grid'}>
                           {warehouse}
                         </h3>
-                        {warehouseViewMode === 'grid' && lastDateStr && (
-                          <p className="mr-wh-last-entry-grid">Last entry: {lastDateStr}</p>
-                        )}
-                        {warehouseViewMode === 'grid' && whStats && !hasEntries && !lastDateStr && (
-                          <p className="mr-wh-no-entries">No entries</p>
-                        )}
-                        {warehouseViewMode === 'list' && lastDateStr && (
-                          <p className="mr-wh-last-entry-list">{lastDateStr}</p>
+                        {/* Every figure below describes the FILTERED slice.
+                            Previously the card showed an all-time last-entry
+                            date that contradicted the active date pills.
+                            While a refetch is in flight the previous filter's
+                            numbers are suppressed rather than left on screen —
+                            a stale count is worse than none, because it looks
+                            like an answer to the filter just applied. */}
+                        {loadingWarehouseStats ? (
+                          <p className="mr-wh-stats-loading">Updating…</p>
+                        ) : hasEntries && lastDateStr ? (
+                          warehouseViewMode === 'grid' ? (
+                            <p className="mr-wh-last-entry-grid">
+                              {whEntryCount} {whEntryCount === 1 ? "entry" : "entries"} · last {lastDateStr}
+                            </p>
+                          ) : (
+                            <p className="mr-wh-last-entry-list">{whEntryCount} · {lastDateStr}</p>
+                          )
+                        ) : (
+                          <p className="mr-wh-no-entries">No entries {scopeLabel}</p>
                         )}
                       </div>
                       {loadingWarehouseName === warehouse ? (
@@ -2134,7 +2886,7 @@ export default function ManagerReview() {
           <div className="mr-main-inner">
             <div className="mr-header mr-floor-page-header" style={{ marginBottom: 12 }}>
               <button
-                onClick={() => { if (!isScrollingRef.current) navigate("/review"); }}
+                onClick={() => { if (!isScrollingRef.current) navigate(reviewUrl()); }}
                 className="mr-drawer-back-btn mr-floor-page-back"
               >
                 <ArrowLeft className="mr-download-icon" />
@@ -2164,6 +2916,11 @@ export default function ManagerReview() {
                 loading={loadingDates}
               />
             </div>
+
+            {/* Filters apply to the floor counts below, which are computed by
+                the database under exactly these filters. */}
+            {renderFilterPanel()}
+
           <div className="mr-drawer-body">
             {loadingFloors ? (
               <div className="mr-floor-loading">
@@ -2172,6 +2929,19 @@ export default function ManagerReview() {
               </div>
             ) : warehouseFloors.length > 0 ? (
               <>
+                {/* States plainly that these numbers are scoped, so a filtered
+                    count is never read as the warehouse total. */}
+                <div className="mr-filter-summary">
+                  <strong>{warehouseFloors.length}</strong> floor{warehouseFloors.length !== 1 ? "s" : ""}
+                  {" · "}
+                  <strong>{warehouseFloors.reduce((s, f) => s + f.itemCount, 0)}</strong> entries
+                  {" · "}
+                  <strong>{warehouseFloors.reduce((s, f) => s + f.totalWeight, 0).toFixed(2)}</strong> kg
+                  {selectedDates.length > 0 && (
+                    <> for {selectedDates.length === 1 ? selectedDates[0] : `${selectedDates.length} selected dates`}</>
+                  )}
+                  {activeFilterCount > 0 && <> · {activeFilterCount} filter{activeFilterCount !== 1 ? "s" : ""} applied</>}
+                </div>
                 <div className="mr-floor-list">
                   {(() => {
                     const maxFloorItemCount = Math.max(...warehouseFloors.map(f => f.itemCount), 1);
@@ -2259,10 +3029,25 @@ export default function ManagerReview() {
                     ) : (
                       <>
                         <Download className="mr-download-icon" />
-                        Download All {selectedWarehouse} Entries
+                        {/* Says what it actually does. The export is scoped to
+                            the active filters, so labelling it "All …
+                            Entries" promised a full warehouse export and
+                            delivered a filtered one. */}
+                        {selectedDates.length > 0 || activeFilterCount > 0
+                          ? `Download ${selectedWarehouse} Entries (filtered)`
+                          : `Download All ${selectedWarehouse} Entries`}
                       </>
                     )}
                   </Button>
+                  {(selectedDates.length > 0 || activeFilterCount > 0) && (
+                    <p className="mr-download-scope-note">
+                      Exports the {warehouseFloors.reduce((s, f) => s + f.itemCount, 0)} entries currently shown
+                      {selectedDates.length > 0 && (
+                        <> for {selectedDates.length === 1 ? selectedDates[0] : `${selectedDates.length} selected dates`}</>
+                      )}
+                      {activeFilterCount > 0 && <> · {activeFilterCount} filter{activeFilterCount !== 1 ? "s" : ""}</>}
+                    </p>
+                  )}
                 </div>
               </>
             ) : (
@@ -2317,6 +3102,9 @@ export default function ManagerReview() {
                   </button>
                 )}
               </div>
+
+              {/* Sort is offered here because this view lists individual items. */}
+              {renderFilterPanel({ showSort: true })}
             </div>
           <div className="mr-drawer-body">
             {loadingGroupedItems ? (
@@ -2325,10 +3113,12 @@ export default function ManagerReview() {
                 <p className="mr-floor-loading-text">Loading items from database...</p>
               </div>
             ) : (() => {
+              // The server already applied the search term and every other
+              // filter, so this list is rendered as received. Re-filtering here
+              // would double-apply the query and hide rows the server matched
+              // on a column the client can't see (remark, authority, category).
               const allItems = getGroupedItems();
-              const filteredItems = itemSearchQuery
-                ? allItems.filter(item => item.description.toLowerCase().includes(itemSearchQuery.toLowerCase()))
-                : allItems;
+              const filteredItems = allItems;
               return allItems.length > 0 ? (
               <div className="mr-items-space">
                 {/* Compact toolbar — Save Floor + Add Item in a single row */}
@@ -2392,10 +3182,32 @@ export default function ManagerReview() {
                   </motion.div>
                 )}
 
+                {/* Scope line — makes it explicit that a page of results is
+                    being shown, not the floor's full contents. */}
+                {itemPagination && (
+                  <div className="mr-filter-summary">
+                    <strong>{itemPagination.total}</strong> item{itemPagination.total !== 1 ? "s" : ""}
+                    {floorTotals ? <> · <strong>{floorTotals.entries}</strong> entries</> : null}
+                    {selectedDates.length > 0 && (
+                      <> for {selectedDates.length === 1 ? selectedDates[0] : `${selectedDates.length} selected dates`}</>
+                    )}
+                    {activeFilterCount > 0 && <> · {activeFilterCount} filter{activeFilterCount !== 1 ? "s" : ""} applied</>}
+                  </div>
+                )}
+
                 {filteredItems.length === 0 ? (
                   <div className="mr-no-results">
                     <Search className="mr-no-results-icon" />
-                    <p className="mr-no-results-text">No items matching "{itemSearchQuery}"</p>
+                    <p className="mr-no-results-text">
+                      {activeFilterCount > 0
+                        ? "No items match the current filters"
+                        : "No items for the selected dates"}
+                    </p>
+                    {activeFilterCount > 0 && (
+                      <button type="button" className="mr-filter-clear" onClick={clearFilters}>
+                        Reset filters
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="mr-items-grid">
@@ -2494,6 +3306,10 @@ export default function ManagerReview() {
                 })()}
                   </div>
                 )}
+
+                {/* Server-driven paging. Changing the page refetches; it never
+                    slices an array already held in memory. */}
+                {renderPagination(itemPagination, setItemPage, "items")}
               </div>
             ) : (
               <div className="mr-empty">
@@ -2516,7 +3332,7 @@ export default function ManagerReview() {
       )}
 
       {/* Add Item Drawer */}
-      <Drawer open={addItemDrawerOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
+      <Drawer open={addItemDrawerOpen} onOpenChange={(open) => {
         setAddItemDrawerOpen(open);
         if (!open) {
           // Reset form when closing
@@ -2826,7 +3642,7 @@ export default function ManagerReview() {
       </Drawer>
 
       {/* Item Details Drawer - Shows entries grouped by username with quantity boxes */}
-      <Drawer open={itemDetailsOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
+      <Drawer open={itemDetailsOpen} onOpenChange={(open) => {
         if (!open && deleteModalOpen) return; // keep open while delete modal is active
         setItemDetailsOpen(open);
         if (!open) {
@@ -2879,6 +3695,47 @@ export default function ManagerReview() {
                     {getItemEntries(selectedItemName).length}
                   </span> entries checked
                 </span>
+              </div>
+            )}
+
+            {/* Time scope, restated inside the drawer. The entries listed below
+                are already filtered, but without saying so a partial list looks
+                like the item's complete history. The shift is switchable here
+                so it can be widened without backing out of the article. */}
+            {selectedItemName && (
+              <div className="mr-details-shift">
+                <span className="mr-details-shift-label">
+                  {shiftFilter.length === 1 || hoursFilter.length > 0 ? "Showing" : "Shift"}
+                </span>
+                {(["morning", "evening"] as ShiftName[]).map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    className="mr-details-shift-btn"
+                    data-shift={name}
+                    data-selected={shiftFilter.includes(name)}
+                    onClick={() => {
+                      setShiftFilter((prev) => (prev.includes(name) ? prev.filter((s) => s !== name) : [...prev, name]));
+                      setHoursFilter([]);
+                    }}
+                  >
+                    {name === "morning" ? `Morning < ${shiftCutoff}` : `Evening ≥ ${shiftCutoff}`}
+                  </button>
+                ))}
+                {(shiftFilter.length > 0 || hoursFilter.length > 0) && (
+                  <button
+                    type="button"
+                    className="mr-details-shift-clear"
+                    onClick={() => { setShiftFilter([]); setHoursFilter([]); }}
+                  >
+                    Full day
+                  </button>
+                )}
+                {hoursFilter.length > 0 && (
+                  <span className="mr-details-shift-hours">
+                    {[...hoursFilter].sort((a, b) => Number(a) - Number(b)).map((h) => `${h.padStart(2, "0")}:00`).join(", ")}
+                  </span>
+                )}
               </div>
             )}
           </DrawerHeader>
@@ -3111,6 +3968,21 @@ export default function ManagerReview() {
                                       <p className="mr-qty-hint">
                                         Long press to edit
                                       </p>
+                                      {/* Recorded time, in the same local zone
+                                          the shift filter uses — so an entry
+                                          shown under "Morning" always reads a
+                                          time before the cutoff. Without this
+                                          there was no way to see the time
+                                          filter having any effect down here. */}
+                                      {entry.createdAt && (
+                                        <div
+                                          className="mr-qty-time"
+                                          data-shift={shiftOfTime(entry.createdAt)}
+                                          title={`Recorded ${formatLocalDateTime(entry.createdAt)}`}
+                                        >
+                                          {formatLocalTime(entry.createdAt)}
+                                        </div>
+                                      )}
                                       {(entry as any).floorName && (
                                         <div
                                           className="mr-qty-floor-link"
@@ -3322,7 +4194,7 @@ export default function ManagerReview() {
       <ColorLegend />
 
       {/* E5: Reassign Entry Drawer (INVENTORY_MANAGER only) */}
-      <Drawer open={reassignDrawerOpen} snapPoints={[0.7, 1]} onOpenChange={(open) => {
+      <Drawer open={reassignDrawerOpen} onOpenChange={(open) => {
         setReassignDrawerOpen(open);
         if (!open) {
           setReassignTarget(null);
@@ -3380,8 +4252,7 @@ export default function ManagerReview() {
                           itemSubcategory: result.subgroup,
                         });
                         if (selectedWarehouse && selectedFloor) {
-                          const data = await stocktakeEntriesAPI.getGroupedEntries(selectedWarehouse, selectedFloor, getDateRange());
-                          setGroupedItemsData(filterGroupsByDates(data.groups || [], selectedDates));
+                          await refreshGroupedItems();
                         }
                         toast({ title: "Entry reassigned", description: `Reassigned to "${result.name}"` });
                         setReassignDrawerOpen(false);

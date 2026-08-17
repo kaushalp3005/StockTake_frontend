@@ -54,10 +54,15 @@
 }
 
 /* ── Topbar ── */
+/* min-height, not a fixed height, so the bar grows rather than clipping if the
+   username/role chip wraps. Its real height is measured at runtime and
+   published as --mr-topbar-h (see ManagerReview.tsx), which is what the
+   breadcrumb and main content offset against. */
 .mr-topbar {
   position: sticky;
   top: 0;
   z-index: 50;
+  min-height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -66,6 +71,7 @@
 
 @media (min-width: 640px) {
   .mr-topbar {
+    min-height: 56px;
     padding: 0 1.25rem;
   }
 }
@@ -130,7 +136,9 @@
    screen size. */
 .mr-breadcrumb {
   position: absolute;
-  top: 52px;
+  /* Sits directly under the topbar at whatever height it actually is. The old
+     hardcoded 52px was already 4px short on >=640px, where the bar is 56px. */
+  top: var(--mr-topbar-h, 52px);
   left: 0;
   right: 0;
   z-index: 40;
@@ -145,20 +153,28 @@
 }
 
 /* ── Main Content ── */
+/* Reserves exactly the space the (out-of-flow) breadcrumb occupies, so the bar
+   can never sit on top of the first thing in the page — which on the floor
+   picker is the Back button, and was being clipped by it.
+   --mr-breadcrumb-h is 0px when no breadcrumb is rendered, so pages without one
+   keep their original spacing. */
 .mr-main {
   width: 100%;
   padding: 0.75rem;
+  padding-top: calc(0.75rem + var(--mr-breadcrumb-h, 0px));
 }
 
 @media (min-width: 640px) {
   .mr-main {
     padding: 1rem;
+    padding-top: calc(1rem + var(--mr-breadcrumb-h, 0px));
   }
 }
 
 @media (min-width: 768px) {
   .mr-main {
     padding: 1.5rem;
+    padding-top: calc(1.5rem + var(--mr-breadcrumb-h, 0px));
   }
 }
 
@@ -487,6 +503,15 @@
   margin-top: 0.125rem;
 }
 
+/* Placeholder while the filter-scoped counts are being refetched. Occupies the
+   same line so the card doesn't change height as filters change. */
+.mr-wh-stats-loading {
+  font-size: 10px;
+  color: hsl(var(--muted-foreground) / 0.7);
+  margin-top: 0.125rem;
+  font-style: italic;
+}
+
 .mr-wh-chevron {
   width: 1rem;
   height: 1rem;
@@ -670,25 +695,13 @@
   align-items: flex-start;
 }
 
+/* Layout only. Appearance is owned by .mr-drawer-back-btn (see the
+   high-visibility Back control further down) so every Back in the review flow
+   looks the same; this used to also set its own muted border/background and
+   the two rules quietly competed on whichever came last in the file. */
 .mr-floor-page-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
   margin: 0 0 0.625rem;
-  padding: 0.375rem 0.625rem;
-  border: 1px solid hsl(var(--border));
-  border-radius: 0.5rem;
-  background: hsl(var(--muted));
-  color: hsl(var(--foreground));
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  touch-action: manipulation;
   min-height: 36px;
-}
-
-.mr-floor-page-back:hover {
-  background: hsl(var(--accent));
 }
 
 /* Toolbar (Save Floor / Add Item): full width on phones, capped so the two
@@ -736,11 +749,42 @@
   min-height: 0;
 }
 
+/* The single scrolling region inside the fixed drawer. min-height:0 is
+   load-bearing: without it this flex child expands to fit its content, pushes
+   the panel taller and no scrollbar is ever produced.
+   overscroll-behavior stops a scroll that reaches the end from chaining to the
+   page underneath, which is what yanked the view back to the top. */
 .mr-drawer-body-compact {
-  flex: 1;
+  flex: 1 1 auto;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 0 0.75rem 0.5rem;
   min-height: 0;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+/* Keep the scrollbar permanently visible so there is always an obvious way to
+   move back up — the reported "slider bar is not available" symptom. */
+.mr-drawer-body-compact::-webkit-scrollbar {
+  width: 10px;
+}
+.mr-drawer-body-compact::-webkit-scrollbar-track {
+  background: #F1F5F9;
+  border-radius: 8px;
+}
+.mr-drawer-body-compact::-webkit-scrollbar-thumb {
+  background: #94A3B8;
+  border-radius: 8px;
+  border: 2px solid #F1F5F9;
+}
+.mr-drawer-body-compact::-webkit-scrollbar-thumb:hover {
+  background: #64748B;
+}
+.mr-drawer-body-compact {
+  scrollbar-width: thin;
+  scrollbar-color: #94A3B8 #F1F5F9;
 }
 
 /* ── Floor Cards ── */
@@ -1359,10 +1403,20 @@
 }
 
 /* ── Item Details Drawer ── */
+/* Fixed-size panel: the header stays put, the body scrolls inside it.
+   The panel's actual size is pinned by .warehouse-entries-drawer-content in
+   global.css with !important (full height as a right-hand panel on desktop,
+   90vh as a bottom sheet under 769px), so no height is set here — declaring
+   one would be silently inert and misleading.
+   What this rule owns is the column layout and clipping: with overflow hidden
+   and min-height 0, the body below becomes the one and only scroll container.
+   That, plus removing vaul's snapPoints, is what stops the panel resizing and
+   jumping to the top mid-read. */
 .mr-details-drawer {
   display: flex;
   flex-direction: column;
-  max-height: 90vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .mr-details-header {
@@ -1377,19 +1431,91 @@
   margin-bottom: 0.25rem;
 }
 
+/* High-visibility Back control.
+   It was a ghost button — no border, no fill, muted text — and disappeared
+   against the white drawer. Now it reads as the primary escape from the panel:
+   bold red text on a light red field with a solid red border. */
 .mr-details-back-btn {
   margin-right: auto;
-  height: 2rem;
+  height: 2.125rem;
+  padding: 0 0.875rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-weight: 700;
+  color: #C0261F;
+  background: #FDECEA;
+  border: 2px solid #C0261F;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(192, 38, 31, 0.18);
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  touch-action: manipulation;
+}
+
+/* Beat the ghost-variant defaults from the shared Button component. */
+.mr-details-back-btn:hover,
+.mr-details-back-btn:focus-visible {
+  background: #C0261F;
+  color: #FFFFFF;
+  box-shadow: 0 2px 6px rgba(192, 38, 31, 0.32);
+}
+
+.mr-details-back-btn:focus-visible {
+  outline: 2px solid #7F1D1D;
+  outline-offset: 2px;
+}
+
+.mr-details-back-btn:active {
+  transform: scale(0.97);
 }
 
 .mr-details-back-icon {
-  width: 0.75rem;
-  height: 0.75rem;
-  margin-right: 0.25rem;
+  width: 0.9375rem;
+  height: 0.9375rem;
+  margin-right: 0.125rem;
+  stroke-width: 2.75;
 }
 
 .mr-details-back-text {
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+/* The page-level Back controls (floor picker / item list headers) get the same
+   treatment so "go back" looks identical everywhere in the review flow. */
+.mr-drawer-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 2.125rem;
+  padding: 0 0.875rem;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  color: #C0261F;
+  background: #FDECEA;
+  border: 2px solid #C0261F;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(192, 38, 31, 0.18);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mr-drawer-back-btn:hover,
+.mr-drawer-back-btn:focus-visible {
+  background: #C0261F;
+  color: #FFFFFF;
+  box-shadow: 0 2px 6px rgba(192, 38, 31, 0.32);
+}
+
+.mr-drawer-back-btn:focus-visible {
+  outline: 2px solid #7F1D1D;
+  outline-offset: 2px;
+}
+
+.mr-drawer-back-btn:active {
+  transform: scale(0.97);
 }
 
 .mr-details-add-btn {
@@ -1958,3 +2084,376 @@
    a fixed light-themed UI; reacting to the phone's dark mode turned qty values
    white on light boxes (unreadable). Light mode is forced globally via
    `color-scheme: light` — see global.css. */
+
+/* ── Server-side filter panel + pagination ─────────────────────────────────
+   Every control here maps to a query parameter; nothing filters in the
+   browser. Styling follows the existing light-only palette (see the note
+   above — no dark-mode media queries). */
+
+.mr-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.mr-filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid #E5E7EB;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #374151;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 32px;
+  touch-action: manipulation;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.mr-filter-toggle:hover { border-color: #185FA5; color: #185FA5; }
+.mr-filter-toggle[data-active="true"] { background: #185FA5; border-color: #185FA5; color: #FFFFFF; }
+
+.mr-filter-count {
+  background: #EF4444;
+  color: #FFFFFF;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  padding: 0.0625rem 0.375rem;
+  line-height: 1.4;
+}
+
+.mr-filter-clear {
+  background: none;
+  border: none;
+  color: #6B7280;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0.25rem;
+  min-height: 32px;
+  touch-action: manipulation;
+}
+.mr-filter-clear:hover { color: #EF4444; }
+.mr-filter-clear:disabled { opacity: 0.4; cursor: default; text-decoration: none; }
+
+.mr-filter-panel {
+  border: 1px solid #E5E7EB;
+  border-radius: 12px;
+  background: #FFFFFF;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.mr-filter-group-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6B7280;
+  margin-bottom: 0.375rem;
+}
+
+.mr-filter-chips { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+
+.mr-filter-chip {
+  padding: 0.25rem 0.625rem;
+  border: 1px solid #E5E7EB;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #374151;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 28px;
+  touch-action: manipulation;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.mr-filter-chip:hover { border-color: #185FA5; color: #185FA5; }
+.mr-filter-chip[data-selected="true"] { background: #185FA5; border-color: #185FA5; color: #FFFFFF; }
+
+.mr-filter-chip-count { opacity: 0.65; font-weight: 400; margin-left: 0.25rem; }
+
+/* Long option lists (users, categories) scroll instead of pushing the list
+   off-screen on a phone. */
+.mr-filter-chips-scroll { max-height: 7.5rem; overflow-y: auto; }
+
+.mr-filter-sort-row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+
+.mr-filter-select {
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: #374151;
+  font-size: 0.75rem;
+  padding: 0.375rem 0.5rem;
+  min-height: 32px;
+}
+
+/* ── Pagination ── */
+.mr-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 0;
+  border-top: 1px solid #E5E7EB;
+  margin-top: 0.5rem;
+}
+
+.mr-pagination-info { font-size: 0.75rem; color: #6B7280; }
+.mr-pagination-info strong { color: #111827; font-weight: 600; }
+
+.mr-pagination-controls { display: flex; align-items: center; gap: 0.25rem; }
+
+.mr-page-btn {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 0.5rem;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: #374151;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.mr-page-btn:hover:not(:disabled) { border-color: #185FA5; color: #185FA5; }
+.mr-page-btn:disabled { opacity: 0.4; cursor: default; }
+.mr-page-btn[data-current="true"] { background: #185FA5; border-color: #185FA5; color: #FFFFFF; }
+
+.mr-page-ellipsis { padding: 0 0.25rem; color: #9CA3AF; font-size: 0.75rem; }
+
+/* Filter state is reflected in the floor header so the counts on screen are
+   never mistaken for unfiltered totals. */
+.mr-filter-summary {
+  font-size: 0.75rem;
+  color: #6B7280;
+  margin-bottom: 0.5rem;
+}
+.mr-filter-summary strong { color: #185FA5; font-weight: 600; }
+
+@media (max-width: 640px) {
+  .mr-pagination { justify-content: center; }
+  .mr-pagination-info { width: 100%; text-align: center; }
+}
+
+/* Sits under the Download button and states exactly what the file will contain,
+   so a filtered export is never mistaken for a full warehouse export. */
+.mr-download-scope-note {
+  margin-top: 0.375rem;
+  font-size: 0.6875rem;
+  color: #6B7280;
+  text-align: center;
+}
+
+/* ── Shift (time-of-day) filter ─────────────────────────────────────────────
+   Promoted to a primary control rather than living inside the Filters panel:
+   it is the coarsest cut of the working day and the most frequently used. */
+
+.mr-shift-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.mr-shift-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6B7280;
+  margin-right: 0.125rem;
+}
+
+.mr-shift-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 34px;
+  padding: 0.25rem 0.75rem;
+  border: 1.5px solid #E5E7EB;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #374151;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.mr-shift-btn:hover { border-color: #185FA5; color: #185FA5; }
+.mr-shift-btn[data-selected="true"] { background: #185FA5; border-color: #185FA5; color: #FFFFFF; }
+
+/* Morning and evening get their own accents so the active shift is readable
+   at a glance without reading the label. */
+.mr-shift-btn[data-shift="morning"][data-selected="true"] { background: #B45309; border-color: #B45309; }
+.mr-shift-btn[data-shift="evening"][data-selected="true"] { background: #3730A3; border-color: #3730A3; }
+
+.mr-shift-btn-sub {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.mr-shift-btn-count {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 999px;
+  padding: 0.0625rem 0.375rem;
+}
+
+.mr-shift-btn[data-selected="true"] .mr-shift-btn-count { background: rgba(255, 255, 255, 0.22); }
+
+/* ── Nested hour sub-filter ── */
+.mr-hour-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  /* Indented and rule-marked so it reads as nested inside the shift above. */
+  margin-left: 0.75rem;
+  border-left: 3px solid #E5E7EB;
+  background: #F8FAFC;
+  border-radius: 0 8px 8px 0;
+}
+
+.mr-hour-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6B7280;
+  white-space: nowrap;
+  padding-top: 0.25rem;
+}
+
+.mr-hour-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3125rem;
+  align-items: center;
+}
+
+.mr-hour-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 26px;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #374151;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.mr-hour-chip:hover { border-color: #185FA5; color: #185FA5; }
+.mr-hour-chip[data-selected="true"] { background: #185FA5; border-color: #185FA5; color: #FFFFFF; }
+
+.mr-hour-chip-count { opacity: 0.6; font-weight: 400; }
+.mr-hour-chip[data-selected="true"] .mr-hour-chip-count { opacity: 0.85; }
+
+@media (max-width: 640px) {
+  .mr-hour-bar { flex-direction: column; gap: 0.375rem; }
+  .mr-hour-label { padding-top: 0; }
+}
+
+/* ── Recorded time on an entry card ─────────────────────────────────────────
+   Rendered in the warehouse's local zone (the same offset the shift filter
+   uses), so a card shown under "Morning" always reads a time before the
+   cutoff. Colour-coded by shift so the split is legible at a glance. */
+.mr-qty-time {
+  display: inline-block;
+  margin: 0 auto 0.125rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.mr-qty-time[data-shift="morning"] { background: #FEF3C7; color: #92400E; }
+.mr-qty-time[data-shift="evening"] { background: #E0E7FF; color: #3730A3; }
+
+/* ── Shift scope inside the article drawer ── */
+.mr-details-shift {
+  display: flex;
+  align-items: center;
+  gap: 0.3125rem;
+  flex-wrap: wrap;
+  margin-top: 0.375rem;
+}
+
+.mr-details-shift-label {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6B7280;
+}
+
+.mr-details-shift-btn {
+  padding: 0.125rem 0.5rem;
+  border: 1px solid #E5E7EB;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #374151;
+  font-size: 0.625rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 24px;
+  touch-action: manipulation;
+}
+
+.mr-details-shift-btn:hover { border-color: #185FA5; color: #185FA5; }
+.mr-details-shift-btn[data-shift="morning"][data-selected="true"] {
+  background: #B45309; border-color: #B45309; color: #FFFFFF;
+}
+.mr-details-shift-btn[data-shift="evening"][data-selected="true"] {
+  background: #3730A3; border-color: #3730A3; color: #FFFFFF;
+}
+
+.mr-details-shift-clear {
+  background: none;
+  border: none;
+  color: #6B7280;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  min-height: 24px;
+  touch-action: manipulation;
+}
+.mr-details-shift-clear:hover { color: #185FA5; }
+
+.mr-details-shift-hours {
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: #185FA5;
+  font-variant-numeric: tabular-nums;
+}

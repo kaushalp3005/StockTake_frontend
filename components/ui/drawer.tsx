@@ -46,15 +46,22 @@ const DrawerContent = React.forwardRef<
       <DrawerPrimitive.Content
         ref={ref}
         className={cn(
-          "fixed inset-x-0 bottom-0 z-50 flex min-h-[75vh] max-h-[85vh] flex-col rounded-t-[10px] border bg-background shadow-lg",
+          // A FIXED window, not a resizable one. `height` (rather than a
+          // min/max pair) keeps the panel the same size no matter how much
+          // content it holds, so the body below owns all the scrolling and the
+          // panel cannot grow, shrink or re-snap under the reader.
+          "fixed inset-x-0 bottom-0 z-50 flex h-[85vh] flex-col overflow-hidden rounded-t-[10px] border bg-background shadow-lg",
           isWarehouseDrawer && "warehouse-entries-drawer-content",
           className,
         )}
         {...props}
       >
         {/* D3: Handle is the ONLY drag target; wrap children in no-drag zone */}
-        <div className="mx-auto mt-4 h-2 w-[100px] rounded-full bg-muted cursor-grab active:cursor-grabbing" style={{ touchAction: "none" }} />
-        <div className="flex flex-col flex-1 min-h-0" data-vaul-no-drag>
+        <div className="mx-auto mt-4 h-2 w-[100px] shrink-0 rounded-full bg-muted cursor-grab active:cursor-grabbing" style={{ touchAction: "none" }} />
+        {/* min-h-0 is what lets a flex child actually scroll instead of
+            stretching its parent — without it the body grows past the panel
+            and the scrollbar never appears. */}
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden" data-vaul-no-drag>
           {children}
         </div>
       </DrawerPrimitive.Content>

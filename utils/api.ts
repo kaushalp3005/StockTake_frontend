@@ -19,6 +19,8 @@ interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "DELETE" | "PUT";
   body?: any;
   headers?: Record<string, string>;
+  /** Lets a caller cancel a request that a newer one has superseded. */
+  signal?: AbortSignal;
 }
 
 export class APIError extends Error {
@@ -29,6 +31,26 @@ export class APIError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * Thrown when a request was deliberately cancelled (a newer filter selection
+ * replaced it). Callers should swallow this rather than surfacing an error —
+ * it means "superseded", not "failed".
+ */
+export class APIAbortError extends Error {
+  constructor() {
+    super("Request superseded");
+    this.name = "APIAbortError";
+  }
+}
+
+export function isAbortError(err: unknown): boolean {
+  return (
+    err instanceof APIAbortError ||
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (err as any)?.name === "AbortError"
+  );
 }
 
 async function apiFetch(
@@ -58,8 +80,15 @@ async function apiFetch(
     method: options.method || "GET",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
+    signal: options.signal,
   });
   } catch (networkError: any) {
+    // An abort is an intentional cancellation, not a failure — surface it as a
+    // distinct type so callers don't render "Unable to connect" when the user
+    // simply changed the filter mid-flight.
+    if (isAbortError(networkError)) {
+      throw new APIAbortError();
+    }
     console.error("Network error:", networkError);
     throw new APIError(0, { message: networkError.message }, "Network error: Unable to connect to server");
   }
@@ -91,6 +120,14 @@ async function apiFetch(
       throw new APIError(response.status, { message: text || "Invalid response format" }, `Server returned ${contentType || "unknown"} instead of JSON`);
     }
   } catch (error) {
+    // Reading the body can be interrupted too, not just the initial fetch — if
+    // the caller aborts while the response is still streaming, response.text()
+    // rejects with an AbortError. Without this branch that surfaced as
+    // "Failed to parse server response" and produced a destructive error toast
+    // for what was simply a superseded request.
+    if (isAbortError(error)) {
+      throw new APIAbortError();
+    }
     // Re-throw APIError, but wrap other errors
     if (error instanceof APIError) {
       throw error;
@@ -251,6 +288,122 @@ export const categorialInvAPI = {
   },
 };
 
+/** The two work shifts, split at the configured cutoff (default 14:00 local). */
+export type ShiftName = "morning" | "evening";
+
+/** Option shapes returned by /stocktake-entries/filter-options. */
+export interface ShiftOption { value: ShiftName; label: string; count: number }
+export interface HourOption { value: string; label: string; count: number; shift: ShiftName | "both" }
+
+/**
+ * Every filter the stocktake-entries endpoints accept.
+ *
+ * Anything that can hold more than one value takes `string | string[]`; arrays
+ * are serialised as a comma-separated list, which the backend splits again.
+ */
+export interface EntryQueryParams {
+  // Location
+  warehouse?: string | string[];
+  floorName?: string | string[];
+  /**
+   * One submission batch. This is the identity behind a dashboard "session"
+   * card — user + warehouse + floor alone does NOT identify a batch, because
+   * the same person counts the same floor on many days.
+   */
+  entryId?: string | string[];
+  // Item classification
+  itemName?: string;
+  itemType?: string | string[];
+  category?: string | string[];
+  subcategory?: string | string[];
+  stockType?: string | string[];
+  // People. enteredBy takes a typed fragment or a multi-select of exact names;
+  // multiple values are OR'd server-side as substring matches.
+  enteredBy?: string | string[];
+  /** Exact username match — use when the caller must not match a longer name. */
+  enteredByExact?: string | string[];
+  enteredByEmail?: string;
+  authority?: string;
+  verifiedBy?: string;
+  // Free text across every human-readable column
+  search?: string;
+  // Review state
+  verified?: boolean;
+  hasRemark?: boolean;
+  status?: string | string[];
+  includeDrafts?: boolean;
+  /**
+   * The exact set of calendar days to include (YYYY-MM-DD).
+   *
+   * This is a SET, not a range. Passing ["2026-08-14","2026-08-17"] matches
+   * those two days only. Collapsing a multi-select into startDate/endDate is
+   * what made deselected days keep appearing in the floor list.
+   */
+  dates?: string[];
+  /**
+   * Work shift, by local wall-clock time of entry.
+   *
+   * Independent of `dates`: dates choose WHICH DAYS, shift chooses WHICH PART
+   * of them. Selecting both shifts is equivalent to selecting neither.
+   */
+  shift?: ShiftName | ShiftName[];
+  /** Boundary between the shifts, "HH:MM" local. Server default is 14:00. */
+  shiftCutoff?: string;
+  /**
+   * The filter-within-a-filter: specific recorded clock hours (0-23, local).
+   * Narrows *within* the selected shift rather than replacing it.
+   */
+  hours?: Array<number | string>;
+  // Genuine ranges (exports, dashboards) — additive with `dates`.
+  startDate?: string;
+  endDate?: string;
+  // Numeric bounds
+  minWeight?: number;
+  maxWeight?: number;
+  minQuantity?: number;
+  maxQuantity?: number;
+  // Sorting + paging.
+  // Paging is opt-in: omit page/pageSize entirely and the API returns every
+  // matching row. `all: true` forces that even when paging params are present,
+  // which is what the Excel exports use so a sheet is never half a result set.
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+  page?: number;
+  pageSize?: number;
+  all?: boolean;
+}
+
+export interface PaginationMeta {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
+}
+
+/** Serialise EntryQueryParams into a query string, dropping empty values. */
+export function buildEntryQuery(params?: EntryQueryParams): string {
+  if (!params) return "";
+  const qs = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    if (Array.isArray(value)) {
+      // An explicitly empty array means "no constraint", not "match nothing".
+      if (value.length === 0) continue;
+      qs.append(key, value.join(","));
+    } else if (typeof value === "boolean") {
+      qs.append(key, value ? "true" : "false");
+    } else {
+      qs.append(key, String(value));
+    }
+  }
+
+  const s = qs.toString();
+  return s ? `?${s}` : "";
+}
+
 // StockTake Entries API
 export const stocktakeEntriesAPI = {
   submitEntries: (entries: any[]) =>
@@ -290,56 +443,50 @@ export const stocktakeEntriesAPI = {
     }),
 
 
-  getEntries: (params?: {
-    warehouse?: string;
-    floorName?: string;
-    itemName?: string;
-    enteredBy?: string;
-    itemType?: string;
-    startDate?: string;
-    endDate?: string;
-    limit?: number;
-  }) => {
-    const queryParams = new URLSearchParams();
-    if (params?.warehouse) queryParams.append("warehouse", params.warehouse);
-    if (params?.floorName) queryParams.append("floorName", params.floorName);
-    if (params?.itemName) queryParams.append("itemName", params.itemName);
-    if (params?.enteredBy) queryParams.append("enteredBy", params.enteredBy);
-    if (params?.itemType) queryParams.append("itemType", params.itemType);
-    if (params?.startDate) queryParams.append("startDate", params.startDate);
-    if (params?.endDate) queryParams.append("endDate", params.endDate);
-    if (params?.limit) queryParams.append("limit", params.limit.toString());
+  getEntries: (params?: EntryQueryParams, signal?: AbortSignal) =>
+    apiFetch(`/stocktake-entries${buildEntryQuery(params)}`, { signal }),
 
-    const queryString = queryParams.toString();
-    return apiFetch(`/stocktake-entries${queryString ? `?${queryString}` : ""}`);
-  },
-
-  // Get recent entries (shorthand for getEntries with limit)
+  // Get recent entries (shorthand for getEntries with a page size)
   getRecentEntries: (limit: number = 10) => {
-    return apiFetch(`/stocktake-entries?limit=${limit}`);
+    return apiFetch(`/stocktake-entries?pageSize=${limit}`);
   },
 
-  getAvailableDates: () => apiFetch("/stocktake-entries/available-dates"),
+  /**
+   * Days that have at least one entry, for the date-pill row.
+   * Accepts the same filters as everything else so the pills can be scoped to
+   * the warehouse being viewed. `dates` is ignored server-side here — the row
+   * must keep offering every selectable day, not just the selected ones.
+   */
+  getAvailableDates: (params?: EntryQueryParams, signal?: AbortSignal) =>
+    apiFetch(`/stocktake-entries/available-dates${buildEntryQuery(params)}`, { signal }),
 
   getGroupedEntries: (
     warehouse: string,
     floorName: string,
-    range?: { startDate?: string; endDate?: string } | string,
-  ) => {
-    const params = new URLSearchParams({
-      warehouse: warehouse,
-      floorName: floorName,
-    });
-    // A bare string is treated as a single-day filter (back-compat); an object
-    // scopes the grouped result to the selected [startDate, endDate] range.
-    if (typeof range === "string") {
-      if (range) params.append("date", range);
-    } else if (range) {
-      if (range.startDate) params.append("startDate", range.startDate);
-      if (range.endDate) params.append("endDate", range.endDate);
-    }
-    return apiFetch(`/stocktake-entries/grouped?${params.toString()}`);
-  },
+    filters?: EntryQueryParams,
+    signal?: AbortSignal,
+  ) =>
+    apiFetch(
+      `/stocktake-entries/grouped${buildEntryQuery({ ...filters, warehouse, floorName })}`,
+      { signal },
+    ),
+
+  /**
+   * Per-floor totals computed by the database.
+   * Replaces fetching every entry for a warehouse and reducing it in the
+   * browser, which both shipped thousands of unused rows and silently
+   * truncated once the old row cap was hit.
+   */
+  getFloorSummary: (params?: EntryQueryParams, signal?: AbortSignal) =>
+    apiFetch(`/stocktake-entries/floor-summary${buildEntryQuery(params)}`, { signal }),
+
+  /** Per-warehouse totals — same idea, one level up. */
+  getWarehouseSummary: (params?: EntryQueryParams, signal?: AbortSignal) =>
+    apiFetch(`/stocktake-entries/warehouse-summary${buildEntryQuery(params)}`, { signal }),
+
+  /** Distinct values per filter dimension, narrowed by the filters already set. */
+  getFilterOptions: (params?: EntryQueryParams, signal?: AbortSignal) =>
+    apiFetch(`/stocktake-entries/filter-options${buildEntryQuery(params)}`, { signal }),
 
   updateEntry: (entryId: string, data: any) =>
     apiFetch(`/stocktake-entries/${entryId}`, {

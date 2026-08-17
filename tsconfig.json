@@ -25,16 +25,22 @@
     "noFallthroughCasesInSwitch": false,
     "strictNullChecks": false,
 
-    /* Path mapping */
-    "baseUrl": ".",
+    /* Path mapping.
+       No "baseUrl": it is deprecated and stops working in TypeScript 7. Since
+       TS 4.1 "paths" resolves relative to this file's own directory, so the
+       mapping below needs no base. This affects the editor and tsc only —
+       Vite resolves "@" itself via resolve.alias in vite.config.ts, so the two
+       must be kept in step.
+       The former "@shared/*" -> "../backend/shared/*" mapping is gone: there is
+       no ../backend directory (the backend lives in ../Stocktake_backend) and
+       nothing imported "@shared". */
     "paths": {
-      "@/*": ["./*"],
-      "@shared/*": ["../backend/shared/*"]
+      "@/*": ["./*"]
     }
   },
+  /* "../backend/**\/*" was also listed here and silently matched nothing. */
   "include": [
-    "**/*",
-    "../backend/**/*"
+    "**/*"
   ],
   "exclude": ["node_modules", "dist"]
 }

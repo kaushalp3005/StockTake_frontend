@@ -302,21 +302,36 @@ export default function ResultsheetView() {
           }
 
           const statusText = item.is_verified ? "Verified" : "Not Verified";
-          const row = [item.group, item.subgroup, item.item_name, uom > 0 ? uom.toFixed(3) : "-", (item.item_type && item.item_type.trim()) ? item.item_type : "-", statusText];
+          // Numeric cells are pushed as numbers, not pre-rounded strings.
+          // .toFixed()/.toString() made Excel store them as text, so SUM,
+          // VLOOKUP and sorting all failed on the exported file. Rounding is
+          // now a display concern handled by numFmt below, and the empty
+          // placeholder is a real blank instead of "-" so the column stays
+          // numeric end to end.
+          const row: (string | number | null)[] = [
+            item.group,
+            item.subgroup,
+            item.item_name,
+            uom > 0 ? uom : null,
+            (item.item_type && item.item_type.trim()) ? item.item_type : "-",
+            statusText,
+          ];
 
           let itemTotalWeight = 0;
           stockData.warehouses.forEach((warehouse) => {
             warehouse.floors.forEach((floor) => {
               const cellData = stockData.data[itemKey]?.[warehouse.name]?.[floor] || { weight: 0, quantity: 0, uom: 0 };
-              row.push(cellData.quantity > 0 ? cellData.quantity.toString() : "-");
-              row.push(cellData.weight > 0 ? cellData.weight.toFixed(2) : "-");
+              row.push(cellData.quantity > 0 ? cellData.quantity : null);
+              row.push(cellData.weight > 0 ? cellData.weight : null);
               itemTotalWeight += cellData.weight || 0;
             });
           });
 
-          row.push(itemTotalWeight > 0 ? itemTotalWeight.toFixed(2) : "-");
+          row.push(itemTotalWeight > 0 ? itemTotalWeight : null);
 
           const dataRow = worksheet.addRow(row);
+          // Formats: 3dp for pack size, whole-ish for units, 2dp for kg.
+          dataRow.getCell(4).numFmt = "#,##0.000";
           dataRow.alignment = { horizontal: "left", vertical: "middle" };
           dataRow.getCell(4).alignment = { horizontal: "center" };
           dataRow.getCell(5).alignment = { horizontal: "center" };
@@ -328,17 +343,20 @@ export default function ResultsheetView() {
           stockData.warehouses.forEach((warehouse) => {
             warehouse.floors.forEach(() => {
               dataRow.getCell(dataCol).alignment = { horizontal: "center" };
+              dataRow.getCell(dataCol).numFmt = "#,##0.###";
               dataRow.getCell(dataCol + 1).alignment = { horizontal: "center" };
+              dataRow.getCell(dataCol + 1).numFmt = "#,##0.00";
               dataCol += 2;
             });
           });
           dataRow.getCell(dataCol).alignment = { horizontal: "center" };
+          dataRow.getCell(dataCol).numFmt = "#,##0.00";
           dataRow.getCell(dataCol).font = { bold: true };
           dataRow.getCell(dataCol).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EFDA" } };
         });
 
         // Add total row
-        const totalRow = ["TOTAL", "", "", "", "", ""];
+        const totalRow: (string | number | null)[] = ["TOTAL", "", "", "", "", ""];
         let grandTotalWeight = 0;
         stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach((floor) => {
@@ -352,11 +370,11 @@ export default function ResultsheetView() {
               totalQuantity += cellData.quantity || 0;
             });
             grandTotalWeight += totalWeight;
-            totalRow.push(totalQuantity > 0 ? totalQuantity.toString() : "-");
-            totalRow.push(totalWeight > 0 ? totalWeight.toFixed(2) : "-");
+            totalRow.push(totalQuantity > 0 ? totalQuantity : null);
+            totalRow.push(totalWeight > 0 ? totalWeight : null);
           });
         });
-        totalRow.push(grandTotalWeight > 0 ? grandTotalWeight.toFixed(2) : "-");
+        totalRow.push(grandTotalWeight > 0 ? grandTotalWeight : null);
 
         const totalRowObj = worksheet.addRow(totalRow);
         totalRowObj.font = { bold: true };
@@ -369,10 +387,13 @@ export default function ResultsheetView() {
         stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach(() => {
             totalRowObj.getCell(totalCol).alignment = { horizontal: "center" };
+            totalRowObj.getCell(totalCol).numFmt = "#,##0.###";
             totalRowObj.getCell(totalCol + 1).alignment = { horizontal: "center" };
+            totalRowObj.getCell(totalCol + 1).numFmt = "#,##0.00";
             totalCol += 2;
           });
         });
+        totalRowObj.getCell(totalCol).numFmt = "#,##0.00";
         totalRowObj.getCell(totalCol).alignment = { horizontal: "center" };
         totalRowObj.getCell(totalCol).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC000" } };
 
@@ -408,11 +429,17 @@ export default function ResultsheetView() {
         worksheet.views = [{ state: "frozen", xSplit: 6, ySplit: 3 }];
       };
 
+      const hasRejection = !!sheetData.rejection && sheetData.rejection.items.length > 0;
+
       // Create Fresh Stock worksheet (green header)
       if (sheetData.freshStock && sheetData.freshStock.items.length > 0) {
         createWorksheet("Fresh Stock", sheetData.freshStock, "FF228B22", "FF92D050");
-      } else {
-        // Fallback to combined data for backwards compatibility (all items assumed fresh)
+      } else if (!hasRejection) {
+        // Only fall back to the combined bucket when the payload was never
+        // split at all (older backend). If a rejection bucket IS present, an
+        // empty fresh bucket genuinely means "no fresh stock" — dumping the
+        // combined data here would have written every off-grade row into the
+        // Fresh Stock sheet AND again into Rejection, double-counting it.
         const fallbackData: StockTypeData = {
           items: sheetData.items,
           warehouses: sheetData.warehouses,
@@ -422,8 +449,8 @@ export default function ResultsheetView() {
       }
 
       // Create Rejection worksheet (red header)
-      if (sheetData.rejection && sheetData.rejection.items.length > 0) {
-        createWorksheet("Rejection", sheetData.rejection, "FFB22222", "FFFF6B6B");
+      if (hasRejection) {
+        createWorksheet("Rejection", sheetData.rejection!, "FFB22222", "FFFF6B6B");
       }
 
       // Save file
@@ -538,9 +565,25 @@ export default function ResultsheetView() {
           colIndex += colspan;
         });
 
+        // Numbers are written as numbers with a display format, not as
+        // pre-rounded strings — otherwise Excel stores the whole grid as text
+        // and neither SUM nor VLOOKUP works on the exported file.
+        const applyNumberFormats = (r: any) => {
+          r.getCell(4).numFmt = "#,##0.000"; // UOM (pack size)
+          let col = 7;
+          stockData.warehouses.forEach((warehouse) => {
+            warehouse.floors.forEach(() => {
+              r.getCell(col).numFmt = "#,##0.###";     // Qty (units)
+              r.getCell(col + 1).numFmt = "#,##0.00";  // Weight (kg)
+              col += 2;
+            });
+          });
+          r.getCell(col).numFmt = "#,##0.00";          // Total weight
+        };
+
         stockData.items.forEach((item) => {
           const itemKey = `${item.item_name?.toUpperCase()}_${item.group?.toUpperCase()}_${item.subgroup?.toUpperCase()}`;
-          const row = [item.group, item.subgroup, item.item_name, "", item.item_type || "", ""];
+          const row: (string | number | null)[] = [item.group, item.subgroup, item.item_name, null, item.item_type || "", ""];
           let totalWeight = 0;
           let uomVal = 0;
           stockData.warehouses.forEach((warehouse) => {
@@ -549,32 +592,39 @@ export default function ResultsheetView() {
               const qty = cell?.quantity || 0;
               const wt = cell?.weight || 0;
               if (cell?.uom) uomVal = cell.uom;
-              row.push(qty > 0 ? String(qty) : "");
-              row.push(wt > 0 ? wt.toFixed(2) : "");
+              row.push(qty > 0 ? qty : null);
+              row.push(wt > 0 ? wt : null);
               totalWeight += wt;
             });
           });
-          row[3] = uomVal > 0 ? uomVal.toFixed(3) : "";
-          row.push(totalWeight > 0 ? totalWeight.toFixed(2) : "");
-          worksheet.addRow(row);
+          row[3] = uomVal > 0 ? uomVal : null;
+          row.push(totalWeight > 0 ? totalWeight : null);
+          applyNumberFormats(worksheet.addRow(row));
         });
 
-        const totalRow = ["", "", "TOTAL", "", "", ""];
+        const totalRow: (string | number | null)[] = ["", "", "TOTAL", null, "", ""];
         let grandTotal = 0;
         stockData.warehouses.forEach((warehouse) => {
           warehouse.floors.forEach((floor) => {
             let floorTotal = 0;
+            // Quantities were previously never totalled here — the Qty column
+            // of the TOTAL row was pushed as a blank string, so every floor's
+            // unit total came out empty in the merged sheet.
+            let floorQty = 0;
             stockData.items.forEach((item) => {
               const itemKey = `${item.item_name?.toUpperCase()}_${item.group?.toUpperCase()}_${item.subgroup?.toUpperCase()}`;
-              floorTotal += stockData.data?.[itemKey]?.[warehouse.name]?.[floor]?.weight || 0;
+              const cell = stockData.data?.[itemKey]?.[warehouse.name]?.[floor];
+              floorTotal += cell?.weight || 0;
+              floorQty += cell?.quantity || 0;
             });
-            totalRow.push("");
-            totalRow.push(floorTotal > 0 ? floorTotal.toFixed(2) : "");
+            totalRow.push(floorQty > 0 ? floorQty : null);
+            totalRow.push(floorTotal > 0 ? floorTotal : null);
             grandTotal += floorTotal;
           });
         });
-        totalRow.push(grandTotal > 0 ? grandTotal.toFixed(2) : "");
+        totalRow.push(grandTotal > 0 ? grandTotal : null);
         const tRow = worksheet.addRow(totalRow);
+        applyNumberFormats(tRow);
         tRow.font = { bold: true };
         tRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: totalHeaderColor } };
 
@@ -584,17 +634,23 @@ export default function ResultsheetView() {
         if (worksheet.getColumn(3)) worksheet.getColumn(3).width = 28;
       };
 
+      const mergedHasRejection =
+        !!mergedSheetData.rejection && mergedSheetData.rejection.items.length > 0;
+
       if (mergedSheetData.freshStock && mergedSheetData.freshStock.items.length > 0) {
         createWorksheet("Fresh Stock", mergedSheetData.freshStock, "FF228B22", "FF92D050");
-      } else if (mergedSheetData.items && mergedSheetData.items.length > 0) {
+      } else if (!mergedHasRejection && mergedSheetData.items && mergedSheetData.items.length > 0) {
+        // Combined-bucket fallback only when nothing was split — otherwise the
+        // off-grade rows would be written into Fresh Stock and into Rejection,
+        // double-counting them across the workbook.
         createWorksheet("Fresh Stock", {
           items: mergedSheetData.items,
           warehouses: mergedSheetData.warehouses,
           data: mergedSheetData.data,
         }, "FF228B22", "FF92D050");
       }
-      if (mergedSheetData.rejection && mergedSheetData.rejection.items.length > 0) {
-        createWorksheet("Rejection", mergedSheetData.rejection, "FFB22222", "FFFF6B6B");
+      if (mergedHasRejection) {
+        createWorksheet("Rejection", mergedSheetData.rejection!, "FFB22222", "FFFF6B6B");
       }
 
       const buffer = await workbook.xlsx.writeBuffer();
