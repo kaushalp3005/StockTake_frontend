@@ -2457,3 +2457,47 @@
   color: #185FA5;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------------------------------------------------------------- *
+ * Upload warehouses (Savla / Rishi)
+ *
+ * These cards are never disabled. They have no counted entries by design, so
+ * the .mr-wh-card-disabled rule above — which sets pointer-events: none —
+ * would otherwise apply permanently and swallow every click on the Upload
+ * Sheet button nested inside them.
+ * ---------------------------------------------------------------- */
+
+.mr-wh-card-upload {
+  border-color: #BFDBFE;
+}
+
+.mr-wh-card-upload:hover {
+  border-color: #BFDBFE;
+  transform: none;
+}
+
+/* The button is a child of the card, so it re-asserts pointer events for
+   itself. Belt and braces: if a future change re-disables these cards, the
+   button keeps working rather than failing silently again. */
+.mr-wh-card-upload .mr-wh-upload-btn {
+  pointer-events: auto;
+}
+
+.mr-wh-snapshot {
+  font-size: 0.7rem;
+  color: #1E40AF;
+  line-height: 1.3;
+  margin-top: 0.1rem;
+}
+
+.mr-wh-no-sheet {
+  font-size: 0.7rem;
+  color: #92400E;
+  line-height: 1.3;
+  margin-top: 0.1rem;
+}
+
+@media (min-width: 640px) {
+  .mr-wh-snapshot,
+  .mr-wh-no-sheet { font-size: 0.75rem; }
+}

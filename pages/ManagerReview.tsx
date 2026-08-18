@@ -34,6 +34,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import SavlaRishiUploadDialog from "@/components/SavlaRishiUploadDialog";
+import { savlaRishiAPI, type SavlaRishiSnapshot } from "@/utils/api";
 import { DatePillSelector, todayStr } from "@/components/DatePillSelector";
 import { ColorLegend } from "@/components/ColorLegend";
 
@@ -111,6 +113,19 @@ interface WarehouseData {
 }
 
 const WAREHOUSES = ["W202", "A185", "F53", "A68", "Savla", "Rishi"];
+
+/**
+ * Savla and Rishi are third-party cold stores. Nobody counts them floor by
+ * floor, so they have no rows in stocktake_entries and never will — their
+ * stock arrives as a monthly workbook instead.
+ *
+ * They must therefore be exempt from the "no entries on this date -> disable
+ * the card" rule. That rule set pointer-events:none on the whole card, and
+ * because the Upload Sheet button lives INSIDE the card it inherited it: the
+ * button rendered, looked live, and silently swallowed every click.
+ */
+const UPLOAD_WAREHOUSES = ["Savla", "Rishi"];
+const isUploadWarehouse = (w: string) => UPLOAD_WAREHOUSES.includes(w);
 
 /*
  * Date filtering is no longer done in the browser.
@@ -316,6 +331,16 @@ export default function ManagerReview() {
   // current date selection excludes.
   const [warehouseStats, setWarehouseStats] = useState<Record<string, { lastDate: string | null; hasEntries: boolean; entryCount: number; totalWeight: number }>>({});
   const [loadingWarehouseStats, setLoadingWarehouseStats] = useState(true);
+  /** Which upload-warehouse card opened the dialog, or null when it is shut. */
+  const [uploadTarget, setUploadTarget] = useState<string | null>(null);
+  /**
+   * Latest stored snapshot per upload warehouse. These cards cannot report
+   * "entries on this date" like the counted warehouses do, so they report the
+   * most recent report_date held instead — otherwise they read as empty even
+   * when a sheet has been uploaded.
+   */
+  const [savlaSnapshots, setSavlaSnapshots] = useState<Record<string, { reportDate: string; rows: number; kgs: number } | null>>({});
+  const [loadingSnapshots, setLoadingSnapshots] = useState(true);
   // D1: Grid/List view toggle — default list on mobile, grid on desktop
   const [warehouseViewMode, setWarehouseViewMode] = useState<'grid' | 'list'>(() => {
     const saved = localStorage.getItem('warehouseViewMode');
@@ -620,6 +645,47 @@ export default function ManagerReview() {
   }, [activeFilters]);
 
   /**
+   * Snapshot status for the upload warehouses.
+   *
+   * Deliberately NOT scoped to the date filter. The date pills select stocktake
+   * COUNT days; a Savla report date is a different axis entirely, and filtering
+   * one by the other would blank these cards on every day nobody happened to
+   * count. The card shows the newest report held, full stop.
+   */
+  const snapshotRequestRef = useRef<AbortController | null>(null);
+  const refreshSnapshots = useCallback(async () => {
+    snapshotRequestRef.current?.abort();
+    const controller = new AbortController();
+    snapshotRequestRef.current = controller;
+    setLoadingSnapshots(true);
+    try {
+      const response = await savlaRishiAPI.reportDates(controller.signal);
+      if (controller.signal.aborted) return;
+      const latest: Record<string, { reportDate: string; rows: number; kgs: number } | null> = {};
+      UPLOAD_WAREHOUSES.forEach((wh) => { latest[wh] = null; });
+      // reportDates arrives newest-first, so the first hit per location wins.
+      for (const snap of (response?.reportDates ?? []) as SavlaRishiSnapshot[]) {
+        for (const loc of snap.locations) {
+          if (!UPLOAD_WAREHOUSES.includes(loc.location)) continue;
+          if (latest[loc.location]) continue;
+          latest[loc.location] = { reportDate: snap.reportDate, rows: loc.rows, kgs: loc.kgs };
+        }
+      }
+      setSavlaSnapshots(latest);
+    } catch (err) {
+      if (isAbortError(err)) return;
+      console.error("Failed to fetch Savla/Rishi snapshots:", err);
+    } finally {
+      if (!controller.signal.aborted) setLoadingSnapshots(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshSnapshots();
+    return () => snapshotRequestRef.current?.abort();
+  }, [refreshSnapshots]);
+
+  /**
    * Keep the filter dropdowns populated from live data.
    *
    * Options are requested with the current date + location scope but WITHOUT
@@ -683,6 +749,19 @@ export default function ManagerReview() {
    * Uses the server's configured offset rather than the browser's, so the time
    * shown always agrees with the shift the row was filtered into.
    */
+  /**
+   * "1990-01-31" -> "31 Jan 1990".
+   * Formats the ISO string directly rather than via new Date(): a bare
+   * YYYY-MM-DD is parsed as UTC midnight and rendering it with local getters
+   * shifts the day backwards in any negative-offset zone.
+   */
+  const formatReportDate = useCallback((iso: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    if (!m) return iso;
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return `${m[3]} ${months[Number(m[2]) - 1]} ${m[1]}`;
+  }, []);
+
   const localParts = useCallback(
     (iso: string) => {
       const shifted = new Date(new Date(iso).getTime() + shiftTzOffset * 60_000);
@@ -2729,9 +2808,18 @@ export default function ManagerReview() {
           <div className={warehouseViewMode === 'grid' ? "mr-warehouse-grid" : "mr-warehouse-list"}>
             {WAREHOUSES.map((warehouse, index) => {
               const whStats = warehouseStats[warehouse];
+              const isUpload = isUploadWarehouse(warehouse);
+              const snapshot = savlaSnapshots[warehouse] ?? null;
               // Tappable while the (filter-scoped) stats are still loading, so
               // the row doesn't flicker to disabled on every filter change.
-              const hasEntries = loadingWarehouseStats ? true : Boolean(whStats?.hasEntries);
+              // Upload warehouses are ALWAYS live: they can never have counted
+              // entries, so the disabled rule would strand them permanently and
+              // its pointer-events:none would eat the Upload button's clicks.
+              const hasEntries = isUpload
+                ? true
+                : loadingWarehouseStats ? true : Boolean(whStats?.hasEntries);
+              // ...but only counted warehouses drill into floors.
+              const isNavigable = !isUpload && hasEntries;
               const lastDate = whStats?.lastDate ?? null;
               const lastDateStr = lastDate
                 ? (() => {
@@ -2761,18 +2849,19 @@ export default function ManagerReview() {
                   }}
                 >
                   <Card
-                    className={`mr-wh-card ${warehouseViewMode === 'list' ? 'mr-wh-card-list' : 'mr-wh-card-grid'} ${hasEntries ? 'mr-wh-card-active' : 'mr-wh-card-disabled'}`}
+                    className={`mr-wh-card ${warehouseViewMode === 'list' ? 'mr-wh-card-list' : 'mr-wh-card-grid'} ${hasEntries ? 'mr-wh-card-active' : 'mr-wh-card-disabled'} ${isUpload ? 'mr-wh-card-upload' : ''}`}
                     onClick={() => {
-                      if (hasEntries && !isScrollingRef.current) {
+                      if (isNavigable && !isScrollingRef.current) {
                         handleWarehouseClick(warehouse);
                       }
                     }}
                     style={{
                       touchAction: hasEntries ? 'manipulation' : 'none',
                       ...(hasEntries ? {} : { pointerEvents: 'none' as const }),
+                      ...(isUpload ? { cursor: 'default' as const } : {}),
                     }}
                     onMouseEnter={(e) => {
-                      if (hasEntries) {
+                      if (isNavigable) {
                         (e.currentTarget as HTMLElement).style.borderColor = '#85B7EB';
                         (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)';
                       }
@@ -2797,7 +2886,20 @@ export default function ManagerReview() {
                             numbers are suppressed rather than left on screen —
                             a stale count is worse than none, because it looks
                             like an answer to the filter just applied. */}
-                        {loadingWarehouseStats ? (
+                        {isUpload ? (
+                          /* Report status, not count status — see savlaSnapshots. */
+                          loadingSnapshots ? (
+                            <p className="mr-wh-stats-loading">Updating…</p>
+                          ) : snapshot ? (
+                            <p className="mr-wh-snapshot">
+                              {warehouseViewMode === 'grid'
+                                ? `${snapshot.rows.toLocaleString("en-IN")} lots · ${snapshot.kgs.toLocaleString("en-IN", { maximumFractionDigits: 0 })} kg · report ${formatReportDate(snapshot.reportDate)}`
+                                : `${snapshot.rows.toLocaleString("en-IN")} · ${formatReportDate(snapshot.reportDate)}`}
+                            </p>
+                          ) : (
+                            <p className="mr-wh-no-sheet">No sheet uploaded yet</p>
+                          )
+                        ) : loadingWarehouseStats ? (
                           <p className="mr-wh-stats-loading">Updating…</p>
                         ) : hasEntries && lastDateStr ? (
                           warehouseViewMode === 'grid' ? (
@@ -2813,26 +2915,25 @@ export default function ManagerReview() {
                       </div>
                       {loadingWarehouseName === warehouse ? (
                         <Loader className="mr-loader-sm mr-wh-chevron-spin" />
-                      ) : (
+                      ) : isUpload ? null : (
                         <ChevronRight className="mr-wh-chevron" />
                       )}
                     </div>
 
-                    {/* Upload Sheet Button for Savla and Rishi — grid mode only */}
-                    {warehouseViewMode === 'grid' && (warehouse === "Savla" || warehouse === "Rishi") && (
+                    {/* Rendered in BOTH grid and list mode. It used to be grid-only,
+                        which hid it entirely on phones — list is the default view
+                        below 640px. */}
+                    {isUpload && (
                       <Button
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (!isScrollingRef.current) {
-                            // Handle upload sheet functionality
-                            alert(`Upload sheet for ${warehouse} - Feature coming soon!`);
-                          }
+                          if (!isScrollingRef.current) setUploadTarget(warehouse);
                         }}
                         className="mr-wh-upload-btn"
                         size="sm"
                       >
                         <Upload className="mr-wh-upload-icon" />
-                        Upload Sheet
+                        {snapshot ? "Upload new sheet" : "Upload Sheet"}
                       </Button>
                     )}
                   </Card>
@@ -4287,6 +4388,14 @@ export default function ManagerReview() {
           </div>
         </DrawerContent>
       </Drawer>
+
+      {/* Mounted at the root, not inside the warehouse grid: a dialog nested in
+          a card would be unmounted by the card's own re-render mid-upload. */}
+      <SavlaRishiUploadDialog
+        warehouse={uploadTarget}
+        onClose={() => setUploadTarget(null)}
+        onUploaded={() => { refreshSnapshots(); }}
+      />
     </motion.div>
   );
 }

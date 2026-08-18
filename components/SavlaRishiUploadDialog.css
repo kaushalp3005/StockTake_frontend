@@ -1,0 +1,273 @@
+/* Savla / Rishi stock sheet upload dialog. */
+
+.srud-dialog {
+  max-width: 40rem;
+  width: calc(100vw - 2rem);
+  max-height: calc(100vh - 4rem);
+  display: flex;
+  flex-direction: column;
+}
+
+.srud-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.05rem;
+}
+
+.srud-title-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.srud-subtitle {
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+/* The dialog can outgrow the viewport once a long error list renders, so the
+   body is the only scrollport and the header/footer stay put. */
+.srud-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.25rem 0.125rem;
+}
+
+/* ---------------- drop zone ---------------- */
+
+.srud-drop {
+  border: 2px dashed #CBD5E1;
+  border-radius: 0.6rem;
+  padding: 1.5rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  background: #F8FAFC;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.srud-drop:hover,
+.srud-drop-active {
+  border-color: #2563eb;
+  background: #EFF6FF;
+}
+
+.srud-drop-filled {
+  border-style: solid;
+  border-color: #2563eb;
+  background: #EFF6FF;
+}
+
+.srud-file-input { display: none; }
+
+.srud-drop-icon {
+  width: 1.6rem;
+  height: 1.6rem;
+  color: #2563eb;
+  margin: 0 auto 0.5rem;
+}
+
+.srud-drop-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: #0F172A;
+  word-break: break-all;
+}
+
+.srud-drop-hint {
+  font-size: 0.75rem;
+  color: #64748B;
+  margin-top: 0.2rem;
+}
+
+/* ---------------- notes ---------------- */
+
+.srud-note {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  font-size: 0.8rem;
+}
+
+.srud-note-grow { flex: 1; min-width: 0; }
+
+.srud-note-icon {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.srud-note-title { font-weight: 600; line-height: 1.35; }
+.srud-note-text  { line-height: 1.4; margin-top: 0.15rem; }
+
+.srud-note-ok    { background: #ECFDF5; border-color: #A7F3D0; color: #065F46; }
+.srud-note-warn  { background: #FFFBEB; border-color: #FDE68A; color: #92400E; }
+.srud-note-error { background: #FEF2F2; border-color: #FECACA; color: #991B1B; }
+.srud-note-info  { background: #EFF6FF; border-color: #BFDBFE; color: #1E40AF; align-items: center; }
+
+.srud-date-input {
+  margin-top: 0.5rem;
+  max-width: 12rem;
+  height: 2rem;
+  font-size: 0.8rem;
+}
+
+/* ---------------- error list ---------------- */
+
+.srud-error-list {
+  margin-top: 0.4rem;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.srud-error-row {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.25rem;
+}
+
+.srud-error-more { opacity: 0.75; font-style: italic; }
+
+/* ---------------- result ---------------- */
+
+.srud-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.srud-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+}
+
+@media (min-width: 640px) {
+  .srud-stats { grid-template-columns: repeat(4, 1fr); }
+}
+
+.srud-stat {
+  border: 1px solid #E2E8F0;
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  background: #FFFFFF;
+}
+
+.srud-stat-bad { border-color: #FECACA; background: #FEF2F2; }
+
+.srud-stat-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #0F172A;
+  font-variant-numeric: tabular-nums;
+}
+
+.srud-stat-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748B;
+}
+
+/* ---------------- per-location table ---------------- */
+
+.srud-loc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.srud-loc-table th,
+.srud-loc-table td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid #E2E8F0;
+}
+
+.srud-loc-table th {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748B;
+  font-weight: 600;
+}
+
+.srud-loc-table td:nth-child(2),
+.srud-loc-table td:nth-child(3),
+.srud-loc-table th:nth-child(2),
+.srud-loc-table th:nth-child(3) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------- warnings ---------------- */
+
+.srud-warnings {
+  border: 1px solid #E2E8F0;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.78rem;
+}
+
+.srud-warnings summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #92400E;
+}
+
+.srud-warnings ul {
+  margin-top: 0.4rem;
+  padding-left: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  color: #475569;
+  line-height: 1.35;
+}
+
+/* ---------------- footer ---------------- */
+
+.srud-footer {
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.srud-submit { background: #2563eb; color: #fff; }
+.srud-submit:hover:not(:disabled) { background: #1d4ed8; }
+
+.srud-btn-icon { width: 0.9rem; height: 0.9rem; margin-right: 0.35rem; }
+
+.srud-spin {
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-right: 0.35rem;
+  animation: srud-spin 0.8s linear infinite;
+}
+
+@keyframes srud-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .srud-spin { animation: none; }
+}

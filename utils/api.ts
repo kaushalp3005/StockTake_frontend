@@ -669,3 +669,140 @@ export const boxesAPI = {
   }> =>
     apiFetch(`/boxes/lookup?box_id=${encodeURIComponent(boxId)}&txn_no=${encodeURIComponent(txnNo)}`),
 };
+
+/* ------------------------------------------------------------------ *
+ * Savla & Rishi cold-storage stock sheets
+ * ------------------------------------------------------------------ */
+
+export interface SavlaRishiUploadResult {
+  success: true;
+  message: string;
+  sheetName: string;
+  fileName: string;
+  reportDate: string;
+  reportDateSource: string | null;
+  locations: string[];
+  totalRows: number;
+  imported: number;
+  replacedPreviousRows: number;
+  duplicatesCollapsed: number;
+  invalid: number;
+  totalKgs: number;
+  byLocation: Record<string, { rows: number; kgs: number }>;
+  uploadedBy: string;
+  errorDetails: { row: number; reason: string }[];
+  warnings: string[];
+  truncatedErrors: number;
+  truncatedWarnings: number;
+}
+
+export interface SavlaRishiSnapshot {
+  reportDate: string;
+  totalRows: number;
+  totalKgs: number;
+  locations: {
+    location: string;
+    rows: number;
+    kgs: number;
+    uploadedBy: string | null;
+    sourceFile: string | null;
+    uploadedAt: string | null;
+  }[];
+}
+
+export const savlaRishiAPI = {
+  /**
+   * Uploads a stock workbook.
+   *
+   * Deliberately does NOT go through apiFetch: that helper JSON.stringify's
+   * every body and pins Content-Type to application/json, which would corrupt
+   * a multipart upload. The boundary header must be left for the browser to
+   * set, so Content-Type is omitted here on purpose.
+   *
+   * `reportDate` is only needed when the workbook has no readable
+   * "Report Date"/"As On Date" cell — the server replies with
+   * needsReportDate:true in that case.
+   */
+  upload: async (
+    file: File,
+    opts: { reportDate?: string; signal?: AbortSignal } = {}
+  ): Promise<SavlaRishiUploadResult> => {
+    const form = new FormData();
+    form.append("sheetFile", file);
+    if (opts.reportDate) form.append("reportDate", opts.reportDate);
+
+    const token = localStorage.getItem("token");
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/savla-rishi/upload`, {
+        method: "POST",
+        headers,
+        body: form,
+        signal: opts.signal,
+      });
+    } catch (networkError: any) {
+      if (isAbortError(networkError)) throw new APIAbortError();
+      throw new APIError(0, { message: networkError.message }, "Network error: Unable to reach the server");
+    }
+
+    const text = await response.text();
+    let data: any;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      throw new APIError(response.status, { message: text }, "Server returned an unreadable response");
+    }
+
+    if (!response.ok) {
+      throw new APIError(response.status, data, data?.error || "Upload failed");
+    }
+    return data as SavlaRishiUploadResult;
+  },
+
+  reportDates: (signal?: AbortSignal): Promise<{ success: boolean; reportDates: SavlaRishiSnapshot[] }> =>
+    apiFetch(`/savla-rishi/report-dates`, { signal }),
+
+  summary: (
+    params: { location?: string; reportDate?: string } = {},
+    signal?: AbortSignal
+  ): Promise<{
+    success: boolean;
+    totals: { rows: number; lots: number; articles: number; kgs: number; latestReportDate: string | null };
+    ageingBuckets: { bucket: string; rows: number; kgs: number }[];
+    byLocation: { location: string; rows: number; kgs: number }[];
+  }> => {
+    const q = new URLSearchParams();
+    if (params.location) q.set("location", params.location);
+    if (params.reportDate) q.set("reportDate", params.reportDate);
+    const qs = q.toString();
+    return apiFetch(`/savla-rishi/summary${qs ? `?${qs}` : ""}`, { signal });
+  },
+
+  entries: (
+    params: {
+      location?: string; reportDate?: string; search?: string;
+      ageingBucket?: string; page?: number; pageSize?: number;
+      sortBy?: string; sortOrder?: "asc" | "desc"; all?: boolean;
+    } = {},
+    signal?: AbortSignal
+  ): Promise<{
+    success: boolean;
+    entries: {
+      id: number; inwardDate: string; lotNo: string; totalInventoryKgs: number;
+      tallyName: string; companyName: string; storageLocation: string;
+      ageingDays: number; ageingBucket: string; reportDate: string;
+      uploadedBy: string | null; sourceFile: string | null; uploadedAt: string | null;
+    }[];
+    pagination: { total: number; page: number; pageSize: number; totalPages: number; paginated: boolean };
+  }> => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+    }
+    const qs = q.toString();
+    return apiFetch(`/savla-rishi/entries${qs ? `?${qs}` : ""}`, { signal });
+  },
+};
