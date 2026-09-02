@@ -432,6 +432,31 @@ export const stocktakeEntriesAPI = {
     return apiFetch(`/stocktake-entries/drafts${queryString ? `?${queryString}` : ""}`);
   },
 
+  /**
+   * The most recent SUBMITTED count for one floor, as exactly ONE batch.
+   *
+   * Use this rather than getEntries({warehouse, floorName}) + "pick the newest
+   * date": when two people each counted that floor on the same day they get a
+   * batch id each, so taking every row on the newest date returns the union of
+   * two independent counts — roughly doubled quantities that still look
+   * plausible. The server resolves a single entry_id instead.
+   *
+   * Rows come back with `sourceEntryDbId`, not `databaseId`, on purpose: they
+   * belong to a historical batch and must never be edited or deleted as if the
+   * caller owned them.
+   */
+  getLatestSubmittedBatch: (
+    params: { warehouse: string; floorName: string; before?: string; excludeEntryId?: string },
+    signal?: AbortSignal,
+  ) => {
+    const qs = new URLSearchParams();
+    qs.append("warehouse", params.warehouse);
+    qs.append("floorName", params.floorName);
+    if (params.before) qs.append("before", params.before);
+    if (params.excludeEntryId) qs.append("excludeEntryId", params.excludeEntryId);
+    return apiFetch(`/stocktake-entries/latest-batch?${qs.toString()}`, { signal });
+  },
+
   finalizeDraftEntries: (params: {
     warehouse: string;
     floorName: string;
@@ -442,13 +467,35 @@ export const stocktakeEntriesAPI = {
       body: params,
     }),
 
+  // Carry forward: what the last count for this floor holds, and the call
+  // that copies it into fresh drafts for the current user. The read never
+  // writes, so the entry screen can offer the load rather than perform it.
+  getPreviousCount: (
+    params: { warehouse: string; floorName: string },
+    signal?: AbortSignal,
+  ) => {
+    const qs = new URLSearchParams();
+    qs.append("warehouse", params.warehouse);
+    qs.append("floorName", params.floorName);
+    return apiFetch(`/stocktake-entries/previous-count?${qs.toString()}`, { signal });
+  },
+
+  seedFromPreviousCount: (params: { warehouse: string; floorName: string }) =>
+    apiFetch("/stocktake-entries/seed-from-previous", {
+      method: "POST",
+      body: params,
+    }),
+
 
   getEntries: (params?: EntryQueryParams, signal?: AbortSignal) =>
     apiFetch(`/stocktake-entries${buildEntryQuery(params)}`, { signal }),
 
-  // Get recent entries (shorthand for getEntries with a page size)
+  // Get recent entries (shorthand for getEntries with a row cap).
+  // Sends `limit`, not `pageSize`: the API reads `limit`, so the old parameter
+  // name was dropped server-side and this returned every non-draft row in the
+  // table to the Dashboard's Recent Activity panel.
   getRecentEntries: (limit: number = 10) => {
-    return apiFetch(`/stocktake-entries?pageSize=${limit}`);
+    return apiFetch(`/stocktake-entries?limit=${limit}`);
   },
 
   /**

@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Loader, LogOut, Package, FileText, Calendar, Warehouse, TrendingUp, BarChart3, Activity, CheckCircle2, Clock, AlertCircle, ChevronRight, Trash2, Download, Users, X, Edit2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { stocktakeEntriesAPI, type EntryQueryParams, type ShiftName, type ShiftOption } from "@/utils/api";
+import { businessDay } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { downloadEntriesAsExcel } from "@/services/excelService";
 import { DatePillSelector, todayStr } from "@/components/DatePillSelector";
@@ -97,7 +98,7 @@ export default function Dashboard() {
     );
     const filteredSessions = entriesSelectedDates.length > 0
       ? allSubmitted.filter(session => {
-          const sessionDate = (session.createdAt || session.submittedAt || "").split("T")[0];
+          const sessionDate = businessDay(session.createdAt || session.submittedAt);
           return entriesSelectedDates.includes(sessionDate);
         })
       : allSubmitted;
@@ -126,16 +127,61 @@ export default function Dashboard() {
   const entriesAvailableDates = useMemo(() => {
     const dateSet = new Set<string>();
     userSessions.forEach(s => {
-      const d = (s.createdAt || s.submittedAt || "").split("T")[0];
+      const d = businessDay(s.createdAt || s.submittedAt);
       if (d) dateSet.add(d);
     });
     return Array.from(dateSet).sort();
   }, [userSessions]);
 
+  /**
+   * Today is only a sensible default if this user counted today.
+   *
+   * DatePillSelector renders a pill only for days that have entries, so a
+   * seeded today with none has no pill, can never be deselected, and leaves
+   * "My Entries" reading "No submitted entries yet" for someone with hundreds
+   * of them. Falling back to their most recent counted day makes the empty
+   * state mean what it says. Runs once, and only ever removes unreachable
+   * dates, so it cannot fight the user's own selection afterwards.
+   */
+  const entriesDatesReconciledRef = useRef(false);
+  useEffect(() => {
+    if (entriesDatesReconciledRef.current || entriesAvailableDates.length === 0) return;
+    entriesDatesReconciledRef.current = true;
+    setEntriesSelectedDates((prev) => {
+      const selectable = new Set(entriesAvailableDates);
+      const reachable = prev.filter((d) => selectable.has(d));
+      // sorted ascending, so the last element is the most recent count
+      return reachable.length > 0
+        ? reachable
+        : [entriesAvailableDates[entriesAvailableDates.length - 1]];
+    });
+  }, [entriesAvailableDates]);
+
 
   // Check for draft entries in DB and show as pending session
   const checkDraftEntries = async (userEmail: string) => {
     try {
+      // An edit session (started from "Edit" on a submitted session) is built
+      // from SUBMITTED rows, so it never has drafts backing it. Both branches
+      // below used to write over or delete currentFloorSession regardless,
+      // which destroyed the isEditing/originalSessionId/originalItemIds handle
+      // the submit path needs — including on plain window focus, so alt-tabbing
+      // mid-edit was enough to lose it, and a half-applied submit could not be
+      // retried. Leave that session strictly alone.
+      const storedRaw = localStorage.getItem("currentFloorSession");
+      if (storedRaw) {
+        try {
+          const stored = JSON.parse(storedRaw);
+          if (stored?.isEditing && stored?.originalSessionId) {
+            setPendingSession(null);
+            console.log("Edit session in progress — leaving currentFloorSession untouched");
+            return;
+          }
+        } catch {
+          // Unparseable session: fall through and let the normal logic replace it.
+        }
+      }
+
       const response = await stocktakeEntriesAPI.getDraftEntries({
         enteredByEmail: userEmail,
       });
@@ -241,7 +287,7 @@ export default function Dashboard() {
               // Carried so the per-session export can reproduce this exact
               // grouping instead of re-querying by user+warehouse+floor.
               entryId: entry.entryId || null,
-              entryDate: entry.entryDate || entry.createdAt?.split("T")[0] || null,
+              entryDate: entry.entryDate || businessDay(entry.createdAt) || null,
               warehouse: entry.warehouse,
               floorName: entry.floorName,
               floor: entry.floorName,
@@ -541,9 +587,7 @@ export default function Dashboard() {
       const verifiedCount = entries.filter((e: any) => e.verified).length;
       const unverifiedCount = entries.length - verifiedCount;
 
-      const dateStr = session.submittedAt
-        ? new Date(session.submittedAt).toISOString().split("T")[0]
-        : new Date(session.createdAt).toISOString().split("T")[0];
+      const dateStr = businessDay(session.submittedAt || session.createdAt);
       const safeWarehouse = session.warehouse.replace(/\s+/g, "_");
       const safeFloor = (session.floorName || "").replace(/\s+/g, "_");
       const filename = `StockTakeEntries_${safeWarehouse}_${safeFloor}_${dateStr}.xlsx`;
@@ -1117,13 +1161,14 @@ export default function Dashboard() {
                     const sessionTime = session.createdAt
                       ? new Date(session.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                       : "";
-                    const todayStr = new Date().toISOString().split("T")[0];
-                    const entryDateStr = session.createdAt
-                      ? new Date(session.createdAt).toISOString().split("T")[0]
-                      : "";
-                    const isToday = todayStr === entryDateStr;
-                    const isFloorManager = user?.role === "FLOOR_MANAGER";
-                    const canEdit = session.status === "SUBMITTED" && (!isFloorManager || isToday);
+                    // Any submitted session stays editable for as long as it exists.
+                    //
+                    // This used to be limited to the current business day for floor managers,
+                    // which meant a miscount found the next morning could not be corrected by
+                    // the person who made it. The backend never enforced the window:
+                    // updateStocktakeEntry gates on ownership and the active-audit lock, never
+                    // on the entry date, so this was a UI restriction only.
+                    const canEdit = session.status === "SUBMITTED";
                     const cardId = `${session.id}-${sessionIndex}`;
 
                     return (
@@ -1266,11 +1311,8 @@ export default function Dashboard() {
     {/* Session Detail Modal */}
 
     {selectedSession && (() => {
-      const todayStr = new Date().toISOString().split("T")[0];
-      const entryDateStr = (selectedSession.createdAt || "").split("T")[0];
-      const isToday = todayStr === entryDateStr;
-      const isFloorManager = user?.role === "FLOOR_MANAGER";
-      const canEdit = selectedSession.status === "SUBMITTED" && (!isFloorManager || isToday);
+      // Same rule as the card above: no date window.
+      const canEdit = selectedSession.status === "SUBMITTED";
       const totalWeight = selectedSession.items?.reduce(
         (sum: number, item: any) => sum + (item.totalWeight || 0), 0
       ) || 0;

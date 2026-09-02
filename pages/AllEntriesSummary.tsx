@@ -14,6 +14,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { DatePillSelector, todayStr } from "@/components/DatePillSelector";
 import { downloadStockCountWorkbook } from "@/services/stockCountExport";
+import { businessDay } from "@/lib/utils";
 
 interface EntryRow {
   id: number;
@@ -415,7 +416,7 @@ export default function AllEntriesSummary() {
       organized[warehouseId].totalItems += 1;
 
       // Group entries by submitter+date for the "sessions" concept
-      const sessionKey = `${entry.enteredBy}-${(entry.createdAt || "").split("T")[0]}`;
+      const sessionKey = `${entry.enteredBy}-${businessDay(entry.createdAt)}`;
       let sess = flr.sessions.find((s: any) => s._key === sessionKey);
       if (!sess) {
         sess = { _key: sessionKey, items: [], submittedAt: entry.createdAt, authority: entry.enteredBy } as any;

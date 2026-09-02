@@ -452,6 +452,11 @@ export default function ManagerReview() {
         }
       } catch (err) {
         console.error("Error fetching available dates:", err);
+        toast({
+          title: "Couldn't load entry dates",
+          description: err instanceof Error ? err.message : "Please try again.",
+          variant: "destructive",
+        });
       } finally {
         setLoadingDates(false);
       }
@@ -636,6 +641,11 @@ export default function ManagerReview() {
       } catch (err) {
         if (isAbortError(err)) return;
         console.error("[D1] Failed to fetch warehouse stats:", err);
+        toast({
+          title: "Couldn't load warehouse totals",
+          description: err instanceof Error ? err.message : "Please try again.",
+          variant: "destructive",
+        });
       } finally {
         if (!controller.signal.aborted) setLoadingWarehouseStats(false);
       }
@@ -725,7 +735,14 @@ export default function ManagerReview() {
         if (res?.shift?.cutoff) setShiftCutoff(res.shift.cutoff);
         if (typeof res?.shift?.tzOffsetMinutes === "number") setShiftTzOffset(res.shift.tzOffsetMinutes);
       } catch (err) {
-        if (!isAbortError(err)) console.error("Failed to load filter options:", err);
+        if (!isAbortError(err)) {
+          console.error("Failed to load filter options:", err);
+          toast({
+            title: "Couldn't load filters",
+            description: err instanceof Error ? err.message : "Please try again.",
+            variant: "destructive",
+          });
+        }
       }
     })();
     return () => controller.abort();
@@ -945,6 +962,11 @@ export default function ManagerReview() {
       if (isAbortError(err)) return; // superseded, not a failure
       console.error("Error loading floors:", err);
       setWarehouseFloors([]);
+      toast({
+        title: "Couldn't load floors",
+        description: err instanceof Error ? err.message : "Please try again.",
+        variant: "destructive",
+      });
     } finally {
       if (!controller.signal.aborted) {
         setLoadingFloors(false);
@@ -1053,35 +1075,37 @@ export default function ManagerReview() {
     setSelectedItemName(itemName);
     setConfirmed(false); // Reset confirmation when changing items
     
-    // Load checked entries from localStorage for this specific item
-    // Use a key that includes warehouse/floor/item for persistence
+    // Cache key for the per-item tick state, shared with the Save Floor and
+    // Excel helpers. Written from the DB below rather than read as an override.
     const storageKey = `checkedEntries_${selectedWarehouse}_${selectedFloor}_${itemName.toUpperCase()}`;
-    const savedCheckedEntries = localStorage.getItem(storageKey);
-    
+
     const currentItemEntries = getItemEntries(itemName);
-    
-    setCheckedEntries((prev) => {
+
+    setCheckedEntries(() => {
       const updated: Record<string, boolean> = {};
 
-      let saved: Record<string, boolean> = {};
-      if (savedCheckedEntries) {
-        try {
-          saved = JSON.parse(savedCheckedEntries);
-        } catch (e) {
-          saved = {};
-        }
-      }
-
-      // DB is the source of truth (check = verify): an entry is ticked if it is
-      // checked/verified in the DB, or has a pending local tick not yet cleared.
+      // The DB is the ONLY source of truth for the tick. It used to be OR'd with
+      // the localStorage copy, which made the tick a one-way latch: once cached
+      // locally, nothing the server said could clear it. That mattered because
+      // the server now drops the sign-off whenever a quantity is recounted — a
+      // local latch would keep showing a manager's approval of a number that no
+      // longer exists. handleEntryCheck already reverts its own optimistic write
+      // when the request fails, so no in-flight tick is lost by trusting the DB.
       currentItemEntries.forEach((entry) => {
-        const dbChecked = entry.verified === true || entry.isChecked === true;
-        updated[entry.id] = dbChecked || saved[entry.id] === true;
+        updated[entry.id] = entry.verified === true || entry.isChecked === true;
       });
+
+      // Re-point the cache at what the DB actually says, so a stale tick cannot
+      // leak back in via the Save Floor / Excel helpers that read this key.
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(updated));
+      } catch (e) {
+        console.warn("Failed to reconcile local tick cache:", e);
+      }
 
       return updated;
     });
-    
+
     setItemDetailsOpen(true);
   };
 

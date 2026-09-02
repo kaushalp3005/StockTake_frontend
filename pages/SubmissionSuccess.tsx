@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { CheckCircle, Package, ArrowRight, Download, Loader } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { downloadEntriesAsExcel } from "@/services/excelService";
+import { businessDay, businessToday } from "@/lib/utils";
 
 interface FloorSession {
   id: string;
@@ -96,9 +97,7 @@ export default function SubmissionSuccess() {
         setIsExporting(true);
         try {
           const entries = buildEntriesFromSession(floorSession);
-          const dateStr = floorSession.submittedAt
-            ? new Date(floorSession.submittedAt).toISOString().split("T")[0]
-            : new Date().toISOString().split("T")[0];
+          const dateStr = businessDay(floorSession.submittedAt) || businessToday();
           const safeWarehouse = (floorSession.warehouse || "Unknown").replace(/\s+/g, "_");
           const safeFloor = (floorSession.floorName || floorSession.floor || "Unknown").replace(/\s+/g, "_");
 
@@ -141,9 +140,7 @@ export default function SubmissionSuccess() {
     setIsExporting(true);
     try {
       const entries = buildEntriesFromSession(floorSession);
-      const dateStr = floorSession.submittedAt
-        ? new Date(floorSession.submittedAt).toISOString().split("T")[0]
-        : new Date().toISOString().split("T")[0];
+      const dateStr = businessDay(floorSession.submittedAt) || businessToday();
       const safeWarehouse = (floorSession.warehouse || "Unknown").replace(/\s+/g, "_");
       const safeFloor = (floorSession.floorName || floorSession.floor || "Unknown").replace(/\s+/g, "_");
 

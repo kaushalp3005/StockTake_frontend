@@ -14,6 +14,7 @@ import {
 import { Loader, Package, ArrowLeft } from "lucide-react";
 import { auditsAPI } from "@/utils/api";
 import { useToast } from "@/hooks/use-toast";
+import { businessToday } from "@/lib/utils";
 
 // Warehouse names used in the system
 const WAREHOUSES = ["W202", "A185", "F53", "A68", "Savla", "Rishi"];
@@ -37,7 +38,7 @@ export default function StartAudit() {
 
   // Set default audit date to today
   useEffect(() => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = businessToday();
     setAuditDate(today);
   }, []);
 

@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { FixedSelect } from "@/components/ui/fixed-select";
-import { Trash2, Plus, ArrowLeft, Package, Loader, X, Check, ChevronDown, ChevronRight, Search, Camera } from "lucide-react";
+import { Trash2, Plus, Minus, ArrowLeft, Package, Loader, X, Check, ChevronDown, ChevronRight, Search, Camera } from "lucide-react";
 import { categorialInvAPI, stocktakeEntriesAPI } from "@/utils/api";
 import BarcodeScanner, { type IMSItemResult } from "@/components/BarcodeScanner";
 import {
@@ -56,9 +56,38 @@ interface AddedItem {
   totalWeight: number; // auto-calculated
 }
 
+/**
+ * One place that turns a DB entry row into the shape the list renders.
+ * Used by both the initial hydration and the carry-forward load, so the two
+ * cannot drift in what they read off an entry.
+ */
+function mapDraftToAddedItem(entry: any, index: number): AddedItem {
+  return {
+    id: `item-${entry.id}-${index}`,
+    databaseId: String(entry.id),
+    entryId: entry.entryId || undefined,
+    stockType: entry.stockType || "Fresh Stock",
+    itemType: entry.itemType || "",
+    category: entry.itemCategory || "",
+    subcategory: entry.itemSubcategory || "",
+    description: entry.itemName || "",
+    packageSize: entry.unitUom || 0,
+    units: entry.totalQuantity || 0,
+    totalWeight: entry.totalWeight || 0,
+  };
+}
+
 // Format UOM for display: always show 3 decimal places
 // If < 1kg: show kg value with 3 decimals + "gm" (e.g., 0.250gm)
 // If >= 1kg: show kg value with 3 decimals + "kg" (e.g., 1.000kg)
+// Units are usually whole packages but can be fractional (a part-filled bag),
+// so only show a decimal when there is one. Sums of decimal units drift in
+// binary floating point (16 + 8.6), so round before deciding.
+function formatUnits(units: number): string {
+  const rounded = Math.round(units * 100) / 100;
+  return rounded % 1 === 0 ? String(rounded) : rounded.toFixed(1);
+}
+
 function formatUOM(uom: number): string {
   if (isNaN(uom) || uom === null || uom === undefined) return "";
   
@@ -135,6 +164,15 @@ export default function AddItem() {
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   // A1: success flash state for Add Article button
   const [saveSuccess, setSaveSuccess] = useState(false);
+  // Carry forward. Populated only when this floor opens with no drafts, so an
+  // in-progress count is never offered a reload of last time's figures.
+  const [previousCount, setPreviousCount] = useState<{
+    available: boolean;
+    sourceDate: string | null;
+    itemCount: number;
+    totalWeight: number;
+  } | null>(null);
+  const [loadingPrevious, setLoadingPrevious] = useState(false);
 
   // Barcode scanner (inline camera, expands under the Scan button)
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -208,19 +246,7 @@ export default function AddItem() {
         });
 
         if (response.entries && response.entries.length > 0) {
-          const dbItems: AddedItem[] = response.entries.map((entry: any, index: number) => ({
-            id: `item-${entry.id}-${index}`,
-            databaseId: String(entry.id),
-            entryId: entry.entryId || undefined,
-            stockType: entry.stockType || "Fresh Stock",
-            itemType: entry.itemType || "",
-            category: entry.itemCategory || "",
-            subcategory: entry.itemSubcategory || "",
-            description: entry.itemName || "",
-            packageSize: entry.unitUom || 0,
-            units: entry.totalQuantity || 0,
-            totalWeight: entry.totalWeight || 0,
-          }));
+          const dbItems: AddedItem[] = response.entries.map(mapDraftToAddedItem);
           setAddedItems(dbItems);
           console.log("Loaded draft entries from database:", dbItems.length);
 
@@ -230,6 +256,19 @@ export default function AddItem() {
           }
         } else {
           console.log("No draft entries found in database for this session");
+          // Nothing in progress, so last count is a useful starting point.
+          // Probe only — the rows are copied when the counter asks for them.
+          try {
+            const prev = await stocktakeEntriesAPI.getPreviousCount({
+              warehouse: parsedSession.warehouse,
+              floorName: parsedSession.floorName || parsedSession.floor,
+            });
+            if (prev?.available) setPreviousCount(prev);
+          } catch (prevErr) {
+            // A floor with no history is the normal case, not an error worth
+            // interrupting the counter for.
+            console.warn("No previous count available:", prevErr);
+          }
         }
       } catch (err) {
         console.error("Failed to load draft entries from DB:", err);
@@ -247,6 +286,46 @@ export default function AddItem() {
 
     loadDraftEntries();
   }, [navigate]);
+
+  /**
+   * Copy last count into this floor's drafts, then hydrate from the DB.
+   *
+   * Deliberately re-reads instead of trusting the seed response: the rows now
+   * carry real database ids, and every downstream edit and delete addresses an
+   * item by that id.
+   */
+  const handleLoadPreviousCount = useCallback(async () => {
+    if (!floorSession || loadingPrevious) return;
+    const warehouse = floorSession.warehouse;
+    const floorName = floorSession.floorName || floorSession.floor;
+    if (!warehouse || !floorName) return;
+
+    setLoadingPrevious(true);
+    setError("");
+    try {
+      const seeded = await stocktakeEntriesAPI.seedFromPreviousCount({ warehouse, floorName });
+      const userStr = localStorage.getItem("user");
+      const user = userStr ? JSON.parse(userStr) : null;
+      const response = await stocktakeEntriesAPI.getDraftEntries({
+        warehouse,
+        floorName,
+        enteredByEmail: user?.email || floorSession.userEmail,
+      });
+      const dbItems: AddedItem[] = (response.entries || []).map(mapDraftToAddedItem);
+      setAddedItems(dbItems);
+      if (dbItems.length > 0 && dbItems[0].itemType) {
+        setItemType(dbItems[0].itemType.toLowerCase() as "pm" | "rm" | "fg" | "");
+      }
+      setPreviousCount(null);
+      console.log(`Carried forward ${seeded?.seeded ?? dbItems.length} items from ${seeded?.sourceDate}`);
+    } catch (err: any) {
+      // 409 means a count is already in progress for this floor — surfacing the
+      // server message is clearer than a generic failure.
+      setError(err?.message || "Could not load the previous count. Please try again.");
+    } finally {
+      setLoadingPrevious(false);
+    }
+  }, [floorSession, loadingPrevious]);
 
   // Handle click outside to close description dropdown
   useEffect(() => {
@@ -747,6 +826,165 @@ export default function AddItem() {
     }
   };
 
+  // ── Quantity editing ────────────────────────────────────────────────────
+  //
+  // Each pill is its own database row, and "+ Add" only ever creates more of
+  // them, so a miscount could once be corrected upward but never down. A row is
+  // now editable in place two ways — the −/+ buttons for a small correction,
+  // and typing the figure for a large one (16 → 3 is one entry, not 13 taps).
+  // Both go through PUT /stocktake-entries/:id, the call ManagerReview already
+  // uses for its quantity edits.
+
+  type PendingQty = { units: number; databaseId: string; packageSize: number; baseline: number };
+
+  /** Unsaved value per row. Self-contained so it can be flushed after unmount. */
+  const pendingQtyRef = useRef<Record<string, PendingQty>>({});
+  const qtyFlushTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  /** Which cell of which pill is open for typing — units or the kg figure. */
+  const [editingCell, setEditingCell] = useState<{ id: string; field: "units" | "weight" } | null>(null);
+  const [editingCellValue, setEditingCellValue] = useState("");
+  /** Escape must not be undone by the blur that follows it. */
+  const skipBlurCommitRef = useRef(false);
+
+  const flushQuantity = async (qtyId: string) => {
+    const pending = pendingQtyRef.current[qtyId];
+    if (!pending) return;
+    delete pendingQtyRef.current[qtyId];
+    clearTimeout(qtyFlushTimers.current[qtyId]);
+    delete qtyFlushTimers.current[qtyId];
+
+    try {
+      await stocktakeEntriesAPI.updateEntry(pending.databaseId, {
+        totalQuantity: pending.units,
+        totalWeight: calculateTotalWeight(pending.packageSize, pending.units),
+      });
+    } catch (err: any) {
+      // Put the row back to what the server still holds, so the total on screen
+      // never claims a figure that was not saved.
+      setAddedItems((prev) =>
+        prev.map((i) =>
+          i.id === qtyId
+            ? { ...i, units: pending.baseline, totalWeight: calculateTotalWeight(i.packageSize, pending.baseline) }
+            : i,
+        ),
+      );
+      setError(err?.message || "Could not update the quantity. Please try again.");
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      // Dispatch anything still waiting rather than dropping it: "Save & Continue"
+      // navigates away, and discarding here would lose an edit the list had
+      // already shown as applied. fetch survives the unmount.
+      Object.keys(pendingQtyRef.current).forEach((id) => { void flushQuantity(id); });
+      Object.values(qtyFlushTimers.current).forEach(clearTimeout);
+    };
+  }, []);
+
+  /** Single commit path for both the buttons and the typed input. */
+  const applyQuantity = (qtyId: string, next: number) => {
+    const row = addedItems.find((i) => i.id === qtyId);
+    if (!row) return;
+    if (!row.databaseId) {
+      setError("This entry has not finished saving yet. Try again in a moment.");
+      return;
+    }
+
+    if (!Number.isFinite(next)) {
+      setError("Please enter a valid quantity (decimals allowed, e.g., 450.25)");
+      return;
+    }
+
+    if (next <= 0) {
+      // Zero means "none of this here". Routed through the same confirmation the
+      // × button uses, so a stray tap or typo cannot drop a count outright.
+      delete pendingQtyRef.current[qtyId];
+      clearTimeout(qtyFlushTimers.current[qtyId]);
+      delete qtyFlushTimers.current[qtyId];
+      handleRemoveItem(qtyId);
+      return;
+    }
+
+    if (next === row.units) return;
+
+    const existing = pendingQtyRef.current[qtyId];
+    pendingQtyRef.current[qtyId] = {
+      units: next,
+      databaseId: row.databaseId,
+      packageSize: row.packageSize,
+      // Baseline is the last server-known value, captured once per burst.
+      baseline: existing ? existing.baseline : row.units,
+    };
+    setError("");
+
+    setAddedItems((prev) =>
+      prev.map((i) =>
+        i.id === qtyId ? { ...i, units: next, totalWeight: calculateTotalWeight(i.packageSize, next) } : i,
+      ),
+    );
+
+    // One request per burst: five quick taps send the settled figure, not five
+    // updates that could land out of order and leave the row on a stale value.
+    clearTimeout(qtyFlushTimers.current[qtyId]);
+    qtyFlushTimers.current[qtyId] = setTimeout(() => { void flushQuantity(qtyId); }, 500);
+  };
+
+  const handleStepQuantity = (qtyId: string, delta: number) => {
+    const row = addedItems.find((i) => i.id === qtyId);
+    if (!row) return;
+    // Step from the unsaved value when there is one, so taps compound.
+    const base = pendingQtyRef.current[qtyId]?.units ?? row.units;
+    // Two decimals: stepping 8.6 must land on 7.6, not 7.600000000000001.
+    applyQuantity(qtyId, Math.round((base + delta) * 100) / 100);
+  };
+
+  const startEditCell = (qtyId: string, field: "units" | "weight", current: number) => {
+    skipBlurCommitRef.current = false;
+    setEditingCell({ id: qtyId, field });
+    setEditingCellValue(field === "weight" ? current.toFixed(2) : String(current));
+  };
+
+  const cancelEditCell = () => {
+    skipBlurCommitRef.current = true;
+    setEditingCell(null);
+    setEditingCellValue("");
+  };
+
+  const commitEditCell = (qtyId: string, field: "units" | "weight") => {
+    if (skipBlurCommitRef.current) { skipBlurCommitRef.current = false; return; }
+    const raw = editingCellValue.trim();
+    setEditingCell(null);
+    setEditingCellValue("");
+    if (raw === "") return;
+
+    const typed = parseFloat(raw);
+    if (!Number.isFinite(typed)) {
+      setError("Please enter a valid quantity (decimals allowed, e.g., 450.25)");
+      return;
+    }
+
+    if (field === "units") {
+      applyQuantity(qtyId, Math.round(typed * 100) / 100);
+      return;
+    }
+
+    // Weight is derived (units × UOM) here and the server recomputes it from
+    // those two, so a typed weight is converted back into units rather than
+    // stored directly. With a UOM of 1 the two are the same number; otherwise
+    // the saved weight can land a rounding step off what was typed, because
+    // units are held to two decimals.
+    const row = addedItems.find((i) => i.id === qtyId);
+    if (!row) return;
+    if (!(row.packageSize > 0)) {
+      setError("Set a UOM (kg per unit) for this item before entering a weight.");
+      return;
+    }
+    applyQuantity(qtyId, Math.round((typed / row.packageSize) * 100) / 100);
+  };
+
+
   const handleRemoveItem = (id: string) => {
     console.log("🗑️ Single item delete clicked for ID:", id);
     console.log("📋 Current addedItems IDs:", addedItems.map(item => item.id));
@@ -1135,6 +1373,43 @@ export default function AddItem() {
                 </div>
               );
             })()}
+
+            {previousCount?.available && addedItems.length === 0 && (
+              <Card className="p-4 sm:p-5 mb-4 border-primary/30 bg-primary/5">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-foreground">
+                      Start from the last count
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      {previousCount.itemCount} item{previousCount.itemCount === 1 ? "" : "s"}
+                      {" · "}
+                      {previousCount.totalWeight.toFixed(2)} kg
+                      {previousCount.sourceDate ? ` · counted ${previousCount.sourceDate}` : ""}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Loads these items so you can adjust what changed. The earlier
+                      count is kept as it is — submitting saves a new set for today.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={handleLoadPreviousCount}
+                    disabled={loadingPrevious}
+                    className="shrink-0 w-full sm:w-auto"
+                  >
+                    {loadingPrevious ? (
+                      <>
+                        <Loader className="w-4 h-4 mr-2 animate-spin" />
+                        Loading…
+                      </>
+                    ) : (
+                      "Load previous stock"
+                    )}
+                  </Button>
+                </div>
+              </Card>
+            )}
 
             <Card className="p-4 sm:p-6 md:p-8 border-border">
               <form id="add-article-form" onSubmit={handleAddItem} className="space-y-6">
@@ -1735,6 +2010,7 @@ export default function AddItem() {
                                       const { itemInfo, quantities } = itemData;
                                       const isAddingQt = addingQuantityTo === itemKey;
                                       const totalWeight = quantities.reduce((sum, qty) => sum + qty.totalWeight, 0);
+                                      const totalUnits = quantities.reduce((sum, qty) => sum + qty.units, 0);
                                       return (
                                         <div key={itemKey} className="bg-white dark:bg-slate-950 border border-border rounded-lg overflow-hidden">
                                           <div className="p-3 bg-gray-50 dark:bg-slate-800 border-b border-border">
@@ -1745,9 +2021,15 @@ export default function AddItem() {
                                               </div>
                                             </div>
                                             <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/50">
-                                              <div>
-                                                <p className="text-xs text-muted-foreground">Total Weight</p>
-                                                <p className="font-bold text-primary text-base">{totalWeight.toFixed(2)} kg</p>
+                                              <div className="flex items-center gap-4 min-w-0">
+                                                <div>
+                                                  <p className="text-xs text-muted-foreground">Units</p>
+                                                  <p className="font-bold text-foreground text-base">{formatUnits(totalUnits)}</p>
+                                                </div>
+                                                <div>
+                                                  <p className="text-xs text-muted-foreground">Total Weight</p>
+                                                  <p className="font-bold text-primary text-base">{totalWeight.toFixed(2)} kg</p>
+                                                </div>
                                               </div>
                                               <div className="flex items-center gap-2">
                                                 {!isAddingQt && (
@@ -1772,8 +2054,81 @@ export default function AddItem() {
                                                   color: itemInfo.stockType === "Off Grade/Rejection" ? "#92400E" : "#1E40AF",
                                                 }}
                                               >
-                                                <span className="font-semibold">{qty.units % 1 === 0 ? qty.units : qty.units.toFixed(1)}×</span>
-                                                <span>{qty.totalWeight.toFixed(2)}kg</span>
+                                                <button
+                                                  onClick={() => handleStepQuantity(qty.id, -1)}
+                                                  className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-black/10 active:bg-black/20 transition-colors touch-manipulation"
+                                                  title="Reduce by 1"
+                                                  aria-label={`Reduce ${itemInfo.description} by 1`}
+                                                >
+                                                  <Minus className="w-3 h-3" />
+                                                </button>
+                                                {editingCell?.id === qty.id && editingCell.field === "units" ? (
+                                                  <input
+                                                    type="number"
+                                                    inputMode="decimal"
+                                                    step="0.01"
+                                                    min="0"
+                                                    value={editingCellValue}
+                                                    autoFocus
+                                                    onFocus={(e) => e.currentTarget.select()}
+                                                    onChange={(e) => setEditingCellValue(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                      if (e.key === "Enter") { e.preventDefault(); commitEditCell(qty.id, "units"); }
+                                                      else if (e.key === "Escape") { e.preventDefault(); cancelEditCell(); }
+                                                    }}
+                                                    onBlur={() => commitEditCell(qty.id, "units")}
+                                                    className="w-16 h-5 px-1 text-xs font-semibold rounded border bg-white text-foreground outline-none focus:ring-1 focus:ring-primary"
+                                                    aria-label={`Set units for ${itemInfo.description}`}
+                                                  />
+                                                ) : (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => startEditCell(qty.id, "units", qty.units)}
+                                                    className="font-semibold whitespace-nowrap underline decoration-dotted underline-offset-2 hover:opacity-70 touch-manipulation"
+                                                    title="Tap to type the unit count"
+                                                    aria-label={`Edit units for ${itemInfo.description}`}
+                                                  >
+                                                    {formatUnits(qty.units)} units
+                                                  </button>
+                                                )}
+                                                <span className="opacity-50">·</span>
+                                                {editingCell?.id === qty.id && editingCell.field === "weight" ? (
+                                                  <input
+                                                    type="number"
+                                                    inputMode="decimal"
+                                                    step="0.01"
+                                                    min="0"
+                                                    value={editingCellValue}
+                                                    autoFocus
+                                                    onFocus={(e) => e.currentTarget.select()}
+                                                    onChange={(e) => setEditingCellValue(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                      if (e.key === "Enter") { e.preventDefault(); commitEditCell(qty.id, "weight"); }
+                                                      else if (e.key === "Escape") { e.preventDefault(); cancelEditCell(); }
+                                                    }}
+                                                    onBlur={() => commitEditCell(qty.id, "weight")}
+                                                    className="w-16 h-5 px-1 text-xs font-semibold rounded border bg-white text-foreground outline-none focus:ring-1 focus:ring-primary"
+                                                    aria-label={`Set weight in kg for ${itemInfo.description}`}
+                                                  />
+                                                ) : (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => startEditCell(qty.id, "weight", qty.totalWeight)}
+                                                    className="whitespace-nowrap underline decoration-dotted underline-offset-2 hover:opacity-70 touch-manipulation"
+                                                    title="Tap to type the weight in kg"
+                                                    aria-label={`Edit weight for ${itemInfo.description}`}
+                                                  >
+                                                    {qty.totalWeight.toFixed(2)} kg
+                                                  </button>
+                                                )}
+                                                <button
+                                                  onClick={() => handleStepQuantity(qty.id, 1)}
+                                                  className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-black/10 active:bg-black/20 transition-colors touch-manipulation"
+                                                  title="Increase by 1"
+                                                  aria-label={`Increase ${itemInfo.description} by 1`}
+                                                >
+                                                  <Plus className="w-3 h-3" />
+                                                </button>
                                                 <button
                                                   onClick={() => handleRemoveItem(qty.id)}
                                                   className="ml-0.5 w-4 h-4 flex items-center justify-center rounded-full hover:bg-black/10 transition-colors touch-manipulation"
@@ -1840,6 +2195,7 @@ export default function AddItem() {
                                       const { itemInfo, quantities } = itemData;
                                       const isAddingQt = addingQuantityTo === itemKey;
                                       const totalWeight = quantities.reduce((sum, qty) => sum + qty.totalWeight, 0);
+                                      const totalUnits = quantities.reduce((sum, qty) => sum + qty.units, 0);
                                       return (
                                         <div key={itemKey} className="bg-white dark:bg-slate-950 border border-border rounded-lg overflow-hidden">
                                           <div className="p-3 bg-gray-50 dark:bg-slate-800 border-b border-border">
@@ -1850,9 +2206,15 @@ export default function AddItem() {
                                               </div>
                                             </div>
                                             <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/50">
-                                              <div>
-                                                <p className="text-xs text-muted-foreground">Total Weight</p>
-                                                <p className="font-bold text-primary text-base">{totalWeight.toFixed(2)} kg</p>
+                                              <div className="flex items-center gap-4 min-w-0">
+                                                <div>
+                                                  <p className="text-xs text-muted-foreground">Units</p>
+                                                  <p className="font-bold text-foreground text-base">{formatUnits(totalUnits)}</p>
+                                                </div>
+                                                <div>
+                                                  <p className="text-xs text-muted-foreground">Total Weight</p>
+                                                  <p className="font-bold text-primary text-base">{totalWeight.toFixed(2)} kg</p>
+                                                </div>
                                               </div>
                                               <div className="flex items-center gap-2">
                                                 {!isAddingQt && (
@@ -1877,8 +2239,81 @@ export default function AddItem() {
                                                   color: itemInfo.stockType === "Off Grade/Rejection" ? "#92400E" : "#1E40AF",
                                                 }}
                                               >
-                                                <span className="font-semibold">{qty.units % 1 === 0 ? qty.units : qty.units.toFixed(1)}×</span>
-                                                <span>{qty.totalWeight.toFixed(2)}kg</span>
+                                                <button
+                                                  onClick={() => handleStepQuantity(qty.id, -1)}
+                                                  className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-black/10 active:bg-black/20 transition-colors touch-manipulation"
+                                                  title="Reduce by 1"
+                                                  aria-label={`Reduce ${itemInfo.description} by 1`}
+                                                >
+                                                  <Minus className="w-3 h-3" />
+                                                </button>
+                                                {editingCell?.id === qty.id && editingCell.field === "units" ? (
+                                                  <input
+                                                    type="number"
+                                                    inputMode="decimal"
+                                                    step="0.01"
+                                                    min="0"
+                                                    value={editingCellValue}
+                                                    autoFocus
+                                                    onFocus={(e) => e.currentTarget.select()}
+                                                    onChange={(e) => setEditingCellValue(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                      if (e.key === "Enter") { e.preventDefault(); commitEditCell(qty.id, "units"); }
+                                                      else if (e.key === "Escape") { e.preventDefault(); cancelEditCell(); }
+                                                    }}
+                                                    onBlur={() => commitEditCell(qty.id, "units")}
+                                                    className="w-16 h-5 px-1 text-xs font-semibold rounded border bg-white text-foreground outline-none focus:ring-1 focus:ring-primary"
+                                                    aria-label={`Set units for ${itemInfo.description}`}
+                                                  />
+                                                ) : (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => startEditCell(qty.id, "units", qty.units)}
+                                                    className="font-semibold whitespace-nowrap underline decoration-dotted underline-offset-2 hover:opacity-70 touch-manipulation"
+                                                    title="Tap to type the unit count"
+                                                    aria-label={`Edit units for ${itemInfo.description}`}
+                                                  >
+                                                    {formatUnits(qty.units)} units
+                                                  </button>
+                                                )}
+                                                <span className="opacity-50">·</span>
+                                                {editingCell?.id === qty.id && editingCell.field === "weight" ? (
+                                                  <input
+                                                    type="number"
+                                                    inputMode="decimal"
+                                                    step="0.01"
+                                                    min="0"
+                                                    value={editingCellValue}
+                                                    autoFocus
+                                                    onFocus={(e) => e.currentTarget.select()}
+                                                    onChange={(e) => setEditingCellValue(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                      if (e.key === "Enter") { e.preventDefault(); commitEditCell(qty.id, "weight"); }
+                                                      else if (e.key === "Escape") { e.preventDefault(); cancelEditCell(); }
+                                                    }}
+                                                    onBlur={() => commitEditCell(qty.id, "weight")}
+                                                    className="w-16 h-5 px-1 text-xs font-semibold rounded border bg-white text-foreground outline-none focus:ring-1 focus:ring-primary"
+                                                    aria-label={`Set weight in kg for ${itemInfo.description}`}
+                                                  />
+                                                ) : (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => startEditCell(qty.id, "weight", qty.totalWeight)}
+                                                    className="whitespace-nowrap underline decoration-dotted underline-offset-2 hover:opacity-70 touch-manipulation"
+                                                    title="Tap to type the weight in kg"
+                                                    aria-label={`Edit weight for ${itemInfo.description}`}
+                                                  >
+                                                    {qty.totalWeight.toFixed(2)} kg
+                                                  </button>
+                                                )}
+                                                <button
+                                                  onClick={() => handleStepQuantity(qty.id, 1)}
+                                                  className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-black/10 active:bg-black/20 transition-colors touch-manipulation"
+                                                  title="Increase by 1"
+                                                  aria-label={`Increase ${itemInfo.description} by 1`}
+                                                >
+                                                  <Plus className="w-3 h-3" />
+                                                </button>
                                                 <button
                                                   onClick={() => handleRemoveItem(qty.id)}
                                                   className="ml-0.5 w-4 h-4 flex items-center justify-center rounded-full hover:bg-black/10 transition-colors touch-manipulation"

@@ -59,6 +59,21 @@ export default function EntriesSummary() {
     setFloorSession(JSON.parse(session));
   }, [navigate]);
 
+  /**
+   * Write the in-progress session back to localStorage mid-submit.
+   * The multi-step edit path has no transaction behind it, so progress that has
+   * already been committed to the database (new row ids, deletes that landed)
+   * must be durable before the next step is attempted — otherwise a retry after
+   * a mid-way failure re-creates rows that already exist.
+   */
+  const persistSession = (session: FloorSession) => {
+    try {
+      localStorage.setItem("currentFloorSession", JSON.stringify(session));
+    } catch (e) {
+      console.error("Failed to persist session mid-submit:", e);
+    }
+  };
+
   if (!floorSession) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-background to-muted/30 flex items-center justify-center">
@@ -125,16 +140,6 @@ export default function EntriesSummary() {
           }
         });
 
-        for (const dbId of itemsToDelete) {
-          try {
-            await stocktakeEntriesAPI.deleteEntry(dbId);
-          } catch (deleteError: any) {
-            if (deleteError?.status !== 404) {
-              console.error(`Failed to delete entry ${dbId}:`, deleteError);
-            }
-          }
-        }
-
         floorSession.items.forEach((item: Item) => {
           if (item.databaseId) {
             itemsToUpdate.push({
@@ -167,6 +172,12 @@ export default function EntriesSummary() {
           }
         });
 
+        // Order matters. This is three separate network calls with no
+        // transaction behind them, so the irreversible step goes LAST:
+        // update (idempotent) -> create (made idempotent below) -> delete.
+        // It used to delete first and only console.error a failure, so an audit
+        // lock landing mid-submit left the removed rows gone and every edit
+        // unapplied, with no way to tell from the UI.
         for (const item of itemsToUpdate) {
           try {
             await stocktakeEntriesAPI.updateEntry(item.databaseId, item);
@@ -193,8 +204,56 @@ export default function EntriesSummary() {
             stock_type: item.stockType || "Fresh Stock",
           }));
           result = await stocktakeEntriesAPI.submitEntries(createEntries);
+
+          // Creates are the one non-idempotent step. Now that deletes run after
+          // them, a delete failure makes the user retry — so stamp the new row
+          // ids back onto the session first. On a retry these items carry a
+          // databaseId and are routed to the update branch instead of being
+          // inserted a second time. insertedIds is positional: the backend maps
+          // entries through Promise.all, which preserves order.
+          const insertedIds: Array<number | string> = result?.insertedIds || [];
+          if (insertedIds.length === itemsToCreate.length) {
+            itemsToCreate.forEach((created: any, i: number) => {
+              const match = floorSession.items.find(
+                (it: Item) => !it.databaseId && it.description === created.description
+                  && it.units === created.units && it.packageSize === created.packageSize
+              );
+              if (match) match.databaseId = String(insertedIds[i]);
+            });
+            persistSession(floorSession);
+          } else {
+            console.warn(
+              `insertedIds length (${insertedIds.length}) != created count (${itemsToCreate.length}); ` +
+              "skipping id write-back, a retry could duplicate these rows"
+            );
+          }
         } else {
           result = { message: "Entries updated successfully" };
+        }
+
+        // Destructive step last, and no longer silent. A 423 (audit started
+        // mid-submit) or 403 must abort so the caller sees it; 404 means the
+        // row is already gone, which is the outcome we wanted anyway.
+        for (let i = 0; i < itemsToDelete.length; i++) {
+          const dbId = itemsToDelete[i];
+          try {
+            await stocktakeEntriesAPI.deleteEntry(dbId);
+          } catch (deleteError: any) {
+            // 404 means the row is already gone — the outcome we wanted.
+            if (deleteError?.status === 404) continue;
+            // Anything else (423 audit lock, 403, network) aborts. Record the
+            // deletes still outstanding so a retry does not re-attempt the ones
+            // that already landed, then surface the error to the caller.
+            floorSession.originalItemIds = [
+              ...itemsToDelete.slice(i),
+              ...floorSession.items
+                .map((it: Item) => it.databaseId)
+                .filter((id): id is string => Boolean(id)),
+            ];
+            persistSession(floorSession);
+            console.error(`Failed to delete entry ${dbId}:`, deleteError);
+            throw deleteError;
+          }
         }
       } else {
         // For new entries: Finalize draft entries (change status from 'draft' to 'submitted')
